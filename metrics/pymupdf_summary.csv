@@ -1,0 +1,6 @@
+document,pages,input_mb,markdown_mb,jsonl_mb,tokens,tokens_per_page,extraction_seconds,pipeline_seconds,pages_per_second,average_cpu_percent,peak_cpu_percent,peak_ram_mb,size_ratio,blank_pages
+benchmark_01_simple_18.pdf,18,0.244,0.024,0.066,5994,333.0,1.911,1.915,9.418,95.04,98.56,409.836,10.245,0
+benchmark_02_mixed_25.pdf,25,6.196,0.025,0.069,7705,308.2,3.633,3.638,6.881,95.08,99.77,465.883,249.911,0
+benchmark_03_medium_268.pdf,268,8.7,0.432,0.797,99358,370.74,21.81,21.841,12.288,94.95,99.08,487.246,20.119,2
+benchmark_04_medhigh_532.pdf,532,27.19,0.956,1.87,224922,422.79,66.968,67.044,7.944,94.77,100.0,766.543,28.429,13
+benchmark_05_large_1109.pdf,1109,66.871,1.644,3.049,395166,356.33,111.572,111.688,9.94,94.84,98.59,882.0,40.67,4

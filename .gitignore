@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Corporate/raw documents
+data/raw/*
+!data/raw/.gitkeep
+
+# Benchmark documents that must not be committed
+data/benchmark/*
+!data/benchmark/.gitkeep
+
+# Generated outputs
+outputs/*
+!outputs/.gitkeep
+
+# Metrics generated during execution
+metrics/*
+!metrics/.gitkeep
+
+# Models and caches
+models/
+.cache/
+huggingface/
+
+# Keep consolidated benchmark reports
+!metrics/pymupdf_summary.csv
+!metrics/pymupdf_summary.md
+EOF

@@ -1,0 +1,18 @@
+services:
+  pymupdf:
+    build:
+      context: .
+      dockerfile: docker/pymupdf/Dockerfile
+
+    volumes:
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./data/raw:/data/raw:ro
+      - ./outputs:/outputs
+      - ./metrics:/metrics
+
+    working_dir: /app
+
+    entrypoint:
+      - python
+      - /app/src/parsers/pymupdf_baseline.py

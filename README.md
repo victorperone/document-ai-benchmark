@@ -69,11 +69,20 @@ The application is designed to support automatic fallback between GPU and CPU.
 
 ## Current Status
 
-PyMuPDF4LLM CPU baseline implemented.
+Completed native CPU baselines:
 
-Current benchmark corpus contains documents ranging from 18 to 1109 pages.
+- PyMuPDF4LLM
+- Docling
+
+Current benchmark corpus contains five documents ranging from 18 to 1109 pages.
+
+Current benchmark profiles use OCR disabled in order to isolate parser and document-layout processing costs.
+
+OCR-enabled benchmarks are required for the final production comparison and will be executed separately.
 
 See:
 
 - `data/benchmark_manifest.md`
 - `metrics/pymupdf_summary.md`
+- `metrics/docling_summary.md`
+- `metrics/parser_comparison.md`

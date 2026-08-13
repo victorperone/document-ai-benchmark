@@ -44,4 +44,8 @@ huggingface/
 # Keep consolidated benchmark reports
 !metrics/pymupdf_summary.csv
 !metrics/pymupdf_summary.md
-EOF
+!metrics/docling_summary.csv
+!metrics/docling_summary.md
+!metrics/parser_comparison.csv
+!metrics/parser_comparison.md
+

@@ -86,3 +86,33 @@ See:
 - `metrics/pymupdf_summary.md`
 - `metrics/docling_summary.md`
 - `metrics/parser_comparison.md`
+
+## Native CPU Benchmark
+
+The initial native-text CPU benchmark has been completed for:
+
+- PyMuPDF4LLM
+- Docling
+- MinerU
+
+The current native benchmark intentionally disables OCR in order to isolate
+parser, layout, table, and document-structure processing costs.
+
+This is not the final production benchmark.
+
+The production-oriented comparison will include OCR-enabled processing for all
+applicable solutions using a common resource-monitoring implementation.
+
+Current reports:
+
+- `metrics/pymupdf_summary.md`
+- `metrics/docling_summary.md`
+- `metrics/mineru_summary.md`
+- `metrics/native_parser_comparison.md`
+
+### Important interpretation note
+
+Structural element counts are parser-specific. For example, one parser may
+classify a visual element as a picture while another may classify it as a
+chart. These counts are therefore diagnostic measurements and are not direct
+quality scores.

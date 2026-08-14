@@ -1,0 +1,6 @@
+document,pages,pymupdf_seconds,docling_seconds,mineru_seconds,docling_vs_pymupdf_x,mineru_vs_pymupdf_x,mineru_vs_docling_x,pymupdf_ram_mb,docling_ram_mb,mineru_ram_mb,pymupdf_tokens,docling_tokens,mineru_tokens,docling_tables,docling_pictures,mineru_tables,mineru_pictures,mineru_charts
+benchmark_01_simple_18.pdf,18,1.915,12.592,45.68,6.58,23.85,3.63,409.836,2173.285,3240.195,5994,5571,5919,4,0,4,0,0
+benchmark_02_mixed_25.pdf,25,3.638,16.851,50.811,4.63,13.97,3.02,465.883,2528.938,4081.547,7705,6919,7474,3,35,3,33,0
+benchmark_03_medium_268.pdf,268,21.841,128.134,540.489,5.87,24.75,4.22,487.246,3136.793,8050.176,99358,153743,115721,6,144,14,79,29
+benchmark_04_medhigh_532.pdf,532,67.044,338.175,1006.218,5.04,15.01,2.98,766.543,2989.105,7769.98,224922,232982,220983,35,368,35,324,28
+benchmark_05_large_1109.pdf,1109,111.688,564.487,2265.978,5.05,20.29,4.01,882.0,3425.934,9631.008,395166,460410,418475,17,317,20,223,113

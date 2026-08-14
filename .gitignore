@@ -49,3 +49,10 @@ huggingface/
 !metrics/parser_comparison.csv
 !metrics/parser_comparison.md
 
+# MinerU consolidated benchmark reports
+!metrics/mineru_summary.csv
+!metrics/mineru_summary.md
+
+# Cross-parser native benchmark reports
+!metrics/native_parser_comparison.csv
+!metrics/native_parser_comparison.md

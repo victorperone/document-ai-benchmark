@@ -43,3 +43,30 @@ services:
     entrypoint:
       - python
       - /app/src/parsers/docling_baseline.py
+
+  mineru:
+    build:
+      context: .
+      dockerfile: docker/mineru/Dockerfile
+
+    environment:
+      MINERU_MODEL_SOURCE: local
+      MINERU_TOOLS_CONFIG_JSON: /models/mineru/mineru.json
+      HF_HOME: /models/mineru/huggingface
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+
+    volumes:
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./data/raw:/data/raw:ro
+      - ./outputs:/outputs
+      - ./metrics:/metrics
+      - ./models/mineru:/models/mineru
+
+    working_dir: /app
+
+    entrypoint:
+      - python
+      - /app/src/parsers/mineru_baseline.py
+

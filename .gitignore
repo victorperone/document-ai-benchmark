@@ -56,3 +56,8 @@ huggingface/
 # Cross-parser native benchmark reports
 !metrics/native_parser_comparison.csv
 !metrics/native_parser_comparison.md
+
+# Benchmark execution logs
+logs/*
+!logs/.gitkeep
+EOF

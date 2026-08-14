@@ -1,0 +1,236 @@
+{
+  "schema_version": 2,
+  "benchmark": {
+    "reference_tokenizer": "o200k_base",
+    "input_directory": "data/raw",
+    "input_glob": "*.pdf",
+    "output_directory": "outputs",
+    "execution_mode": "sequential"
+  },
+  "normalization": {
+    "header_footer_cleanup": true,
+    "minimum_repeated_page_fraction": 0.3,
+    "minimum_repeated_page_count": 3,
+    "short_line_character_threshold": 20,
+    "keep_removed_content_audit": true,
+    "header_candidate_lines": 3,
+    "footer_candidate_lines": 3,
+    "normalize_page_numbers": true,
+    "trim_page_outer_whitespace": true
+  },
+  "parsers": {
+    "pymupdf": {
+      "profiles": {
+        "native": {
+          "ocr_enabled": false,
+          "ocr_mode": "disabled",
+          "ocr_engine": null,
+          "ocr_language": null,
+          "ocr_dpi": null,
+          "layout_module": true,
+          "parser_header": true,
+          "parser_footer": true,
+          "force_text": true,
+          "write_images": false,
+          "embed_images": false,
+          "page_separators": false
+        },
+        "ocr_auto_rapidtess": {
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "rapidtess",
+          "ocr_language": "por",
+          "ocr_dpi": 300,
+          "layout_module": true,
+          "parser_header": true,
+          "parser_footer": true,
+          "force_text": true,
+          "write_images": false,
+          "embed_images": false,
+          "page_separators": false
+        },
+        "ocr_force_rapidtess": {
+          "ocr_enabled": true,
+          "ocr_mode": "forced",
+          "ocr_engine": "rapidtess",
+          "ocr_language": "por",
+          "ocr_dpi": 300,
+          "layout_module": true,
+          "parser_header": true,
+          "parser_footer": true,
+          "force_text": true,
+          "write_images": false,
+          "embed_images": false,
+          "page_separators": false
+        }
+      }
+    },
+    "docling": {
+      "profiles": {
+        "native": {
+          "ocr_enabled": false,
+          "ocr_mode": "disabled",
+          "table_structure": true,
+          "picture_description": false
+        },
+        "ocr_auto": {
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "table_structure": true,
+          "picture_description": false,
+          "remote_services_enabled": false
+        },
+        "ocr_auto_visual": {
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "table_structure": true,
+          "picture_description": true,
+          "picture_description_preset": "smolvlm",
+          "picture_description_prompt": "Describe the image concisely and factually. Include visible text, labels, quantities, relationships, and chart trends when present. Do not speculate.",
+          "generate_picture_images": true,
+          "images_scale": 2.0,
+          "remote_services_enabled": false
+        }
+      }
+    },
+    "mineru": {
+      "profiles": {
+        "txt": {
+          "method": "txt",
+          "ocr_enabled": false
+        },
+        "auto": {
+          "method": "auto",
+          "ocr_enabled": true
+        },
+        "ocr": {
+          "method": "ocr",
+          "ocr_enabled": true
+        }
+      }
+    },
+    "paddleocr": {
+      "profiles": {
+        "lightweight": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": false,
+          "chart_recognition": false,
+          "orientation_classification": false,
+          "document_unwarping": false
+        },
+        "default": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": false,
+          "orientation_classification": false,
+          "document_unwarping": false
+        },
+        "full": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": true,
+          "orientation_classification": true,
+          "document_unwarping": true
+        },
+        "ocr_structured_visual": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": true,
+          "chart_recognition_model": "PP-Chart2Table",
+          "orientation_classification": false,
+          "document_unwarping": false
+        }
+      }
+    }
+  },
+  "suites": {
+    "full_corpus": [
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "docling",
+        "ocr_auto_visual"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "lightweight"
+      ],
+      [
+        "paddleocr",
+        "ocr_structured_visual"
+      ]
+    ],
+    "ocr_primary": [
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "ocr_auto_visual"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "ocr_structured_visual"
+      ]
+    ],
+    "diagnostic_ocr": [
+      [
+        "pymupdf",
+        "ocr_force_rapidtess"
+      ],
+      [
+        "mineru",
+        "ocr"
+      ],
+      [
+        "paddleocr",
+        "full"
+      ]
+    ],
+    "visual_ablation": [
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "docling",
+        "ocr_auto_visual"
+      ],
+      [
+        "paddleocr",
+        "default"
+      ],
+      [
+        "paddleocr",
+        "ocr_structured_visual"
+      ]
+    ]
+  }
+}

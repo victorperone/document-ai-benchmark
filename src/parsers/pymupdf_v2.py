@@ -1,0 +1,1361 @@
+from __future__ import annotations
+
+import argparse
+import contextlib
+import importlib.metadata
+import inspect
+import json
+import platform
+import subprocess
+import warnings
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from time import perf_counter
+from typing import Any
+
+import pymupdf
+import pymupdf4llm
+
+from pymupdf4llm.ocr import (
+    rapidtess_api,
+)
+
+from src.benchmark.artifacts import (
+    finalize_artifacts,
+)
+from src.benchmark.config import (
+    get_normalization_config,
+    get_profile,
+    get_reference_tokenizer,
+)
+from src.benchmark.metrics_writer import (
+    write_json,
+)
+from src.benchmark.paths import (
+    build_output_paths,
+)
+from src.benchmark.resource_monitor import (
+    ResourceMonitor,
+)
+from src.benchmark.source_inventory import (
+    analyze_pdf_source,
+    calculate_sha256,
+)
+
+
+PARSER_NAME = "pymupdf"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "PyMuPDF4LLM benchmark adapter v2."
+        )
+    )
+
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=Path,
+    )
+
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("/outputs"),
+    )
+
+    parser.add_argument(
+        "--profile",
+        default="ocr_auto_rapidtess",
+    )
+
+    return parser.parse_args()
+
+
+class OcrTracker:
+    """
+    Wrap the official RapidTess OCR plugin while tracking
+    which pages actually receive OCR.
+
+    PyMuPDF4LLM may provide additional keyword arguments
+    depending on its internal extraction path. Only arguments
+    supported by the installed OCR plugin are forwarded.
+    """
+
+    def __init__(self) -> None:
+        self.requested_pages: set[int] = set()
+        self.processed_pages: set[int] = set()
+        self.failed_pages: set[int] = set()
+
+        self.extra_kwargs_seen: set[str] = set()
+
+        self.plugin_signature = inspect.signature(
+            rapidtess_api.exec_ocr
+        )
+
+        self.plugin_parameters = set(
+            self.plugin_signature.parameters
+        )
+
+        self.plugin_accepts_var_kwargs = any(
+            parameter.kind
+            == inspect.Parameter.VAR_KEYWORD
+            for parameter
+            in self.plugin_signature.parameters.values()
+        )
+
+    def __call__(
+        self,
+        page: pymupdf.Page,
+        pixmap=None,
+        dpi: int = 300,
+        language: str = "eng",
+        **kwargs,
+    ) -> None:
+        page_number = (
+            page.number + 1
+        )
+
+        self.requested_pages.add(
+            page_number
+        )
+
+        self.extra_kwargs_seen.update(
+            kwargs.keys()
+        )
+
+        call_kwargs = {
+            "pixmap": pixmap,
+            "dpi": dpi,
+            "language": language,
+            **kwargs,
+        }
+
+        if not self.plugin_accepts_var_kwargs:
+            call_kwargs = {
+                key: value
+                for key, value
+                in call_kwargs.items()
+                if key
+                in self.plugin_parameters
+            }
+
+        try:
+            rapidtess_api.exec_ocr(
+                page,
+                **call_kwargs,
+            )
+
+        except Exception:
+            self.failed_pages.add(
+                page_number
+            )
+            raise
+
+        else:
+            self.processed_pages.add(
+                page_number
+            )
+
+        return None
+
+
+def _tesseract_version() -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                "tesseract",
+                "--version",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        first_line = (
+            result.stdout
+            .splitlines()[0]
+            .strip()
+        )
+
+        return first_line or None
+
+    except Exception:
+        return None
+
+
+def load_or_build_inventory(
+    input_path: Path,
+    output_root: Path,
+) -> dict[str, Any]:
+    destination = (
+        output_root
+        / "_source_inventory"
+        / f"{input_path.stem}.json"
+    )
+
+    current_sha = (
+        calculate_sha256(
+            input_path
+        )
+    )
+
+    if destination.is_file():
+        cached = json.loads(
+            destination.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if (
+            cached.get("sha256")
+            == current_sha
+        ):
+            return cached
+
+    inventory = analyze_pdf_source(
+        input_path
+    )
+
+    write_json(
+        destination,
+        inventory,
+    )
+
+    return inventory
+
+
+def align_chunks(
+    chunks: list[dict[str, Any]],
+    page_count: int,
+) -> tuple[
+    list[str],
+    list[dict[str, Any]],
+    set[int],
+]:
+    page_texts = [
+        ""
+        for _ in range(page_count)
+    ]
+
+    native_pages = [
+        {}
+        for _ in range(page_count)
+    ]
+
+    observed_pages: set[int] = set()
+
+    for fallback_page, chunk in enumerate(
+        chunks,
+        start=1,
+    ):
+        metadata = chunk.get(
+            "metadata",
+            {},
+        )
+
+        page_number = fallback_page
+
+        if isinstance(metadata, dict):
+            candidate = metadata.get(
+                "page_number"
+            )
+
+            try:
+                if candidate is not None:
+                    page_number = int(
+                        candidate
+                    )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                page_number = (
+                    fallback_page
+                )
+
+        if not (
+            1
+            <= page_number
+            <= page_count
+        ):
+            continue
+
+        observed_pages.add(
+            page_number
+        )
+
+        page_texts[
+            page_number - 1
+        ] = str(
+            chunk.get(
+                "text",
+                "",
+            )
+        )
+
+        native_pages[
+            page_number - 1
+        ] = {
+            "metadata": (
+                metadata
+                if isinstance(
+                    metadata,
+                    dict,
+                )
+                else {}
+            ),
+
+            "toc_items": (
+                chunk.get(
+                    "toc_items",
+                    [],
+                )
+            ),
+
+            "page_boxes": (
+                chunk.get(
+                    "page_boxes",
+                    [],
+                )
+            ),
+        }
+
+    return (
+        page_texts,
+        native_pages,
+        observed_pages,
+    )
+
+
+def summarize_page_boxes(
+    native_pages: list[
+        dict[str, Any]
+    ],
+) -> dict[str, Any]:
+    total_classes: Counter[str] = (
+        Counter()
+    )
+
+    per_page = []
+
+    for page_number, native in enumerate(
+        native_pages,
+        start=1,
+    ):
+        classes: Counter[str] = (
+            Counter()
+        )
+
+        boxes = native.get(
+            "page_boxes",
+            [],
+        )
+
+        if not isinstance(boxes, list):
+            boxes = []
+
+        for box in boxes:
+            if not isinstance(
+                box,
+                dict,
+            ):
+                continue
+
+            box_class = str(
+                box.get(
+                    "class",
+                    "<missing>",
+                )
+            )
+
+            classes[
+                box_class
+            ] += 1
+
+            total_classes[
+                box_class
+            ] += 1
+
+        per_page.append(
+            {
+                "page_number": (
+                    page_number
+                ),
+
+                "layout_boxes": sum(
+                    classes.values()
+                ),
+
+                "tables_detected": (
+                    classes["table"]
+                ),
+
+                "images_detected": (
+                    classes["picture"]
+                ),
+
+                "headings_detected": (
+                    classes["title"]
+                    + classes[
+                        "section-header"
+                    ]
+                ),
+
+                "lists_detected": (
+                    classes["list-item"]
+                ),
+
+                "formulas_detected": (
+                    classes["formula"]
+                ),
+
+                "captions_detected": (
+                    classes["caption"]
+                ),
+
+                "page_headers_detected": (
+                    classes["page-header"]
+                ),
+
+                "page_footers_detected": (
+                    classes["page-footer"]
+                ),
+
+                "footnotes_detected": (
+                    classes["footnote"]
+                ),
+
+                "text_blocks_detected": (
+                    classes["text"]
+                ),
+
+                "box_class_counts": dict(
+                    sorted(
+                        classes.items()
+                    )
+                ),
+            }
+        )
+
+    summary = {
+        "layout_boxes": sum(
+            total_classes.values()
+        ),
+
+        "tables_detected": (
+            total_classes["table"]
+        ),
+
+        "images_detected": (
+            total_classes["picture"]
+        ),
+
+        "headings_detected": (
+            total_classes["title"]
+            + total_classes[
+                "section-header"
+            ]
+        ),
+
+        "lists_detected": (
+            total_classes["list-item"]
+        ),
+
+        "formulas_detected": (
+            total_classes["formula"]
+        ),
+
+        "captions_detected": (
+            total_classes["caption"]
+        ),
+
+        "page_headers_detected": (
+            total_classes[
+                "page-header"
+            ]
+        ),
+
+        "page_footers_detected": (
+            total_classes[
+                "page-footer"
+            ]
+        ),
+
+        "footnotes_detected": (
+            total_classes["footnote"]
+        ),
+
+        "text_blocks_detected": (
+            total_classes["text"]
+        ),
+
+        "charts_detected": None,
+
+        "box_class_counts": dict(
+            sorted(
+                total_classes.items()
+            )
+        ),
+    }
+
+    return {
+        "summary": summary,
+        "per_page": per_page,
+    }
+
+
+def count_log_lines(
+    path: Path,
+    word: str,
+) -> int:
+    if not path.is_file():
+        return 0
+
+    word = word.casefold()
+
+    return sum(
+        word in line.casefold()
+        for line in path.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()
+    )
+
+
+def main() -> None:
+    args = parse_args()
+
+    input_path = (
+        args.input.resolve()
+    )
+
+    if not input_path.is_file():
+        raise SystemExit(
+            f"Input not found: {input_path}"
+        )
+
+    profile = get_profile(
+        PARSER_NAME,
+        args.profile,
+    )
+
+    normalization_config = (
+        get_normalization_config()
+    )
+
+    tokenizer_name = (
+        get_reference_tokenizer()
+    )
+
+    paths = build_output_paths(
+        args.output_root,
+        PARSER_NAME,
+        input_path.stem,
+        args.profile,
+    )
+
+    inventory = (
+        load_or_build_inventory(
+            input_path,
+            args.output_root,
+        )
+    )
+
+    page_count = int(
+        inventory["pages"]
+    )
+
+    parser_version = (
+        importlib.metadata.version(
+            "pymupdf4llm"
+        )
+    )
+
+    pymupdf_version = (
+        importlib.metadata.version(
+            "pymupdf"
+        )
+    )
+
+    layout_version = (
+        importlib.metadata.version(
+            "pymupdf-layout"
+        )
+    )
+
+    rapidocr_version = (
+        importlib.metadata.version(
+            "rapidocr"
+        )
+    )
+
+    onnx_version = (
+        importlib.metadata.version(
+            "onnxruntime"
+        )
+    )
+
+    print("=" * 72)
+    print("DOCUMENT AI BENCHMARK V2")
+    print("=" * 72)
+    print("Parser:       PyMuPDF4LLM")
+    print(f"Version:      {parser_version}")
+    print(f"Input:        {input_path}")
+    print(f"Profile:      {args.profile}")
+    print(
+        "Layout:       "
+        f"{profile['layout_module']}"
+    )
+    print(
+        "OCR enabled:  "
+        f"{profile['ocr_enabled']}"
+    )
+    print(
+        "OCR mode:     "
+        f"{profile['ocr_mode']}"
+    )
+    print(
+        "OCR engine:   "
+        f"{profile['ocr_engine']}"
+    )
+    print(
+        "OCR language: "
+        f"{profile['ocr_language']}"
+    )
+    print(
+        "OCR DPI:      "
+        f"{profile['ocr_dpi']}"
+    )
+    print(
+        f"Tokenizer:    {tokenizer_name}"
+    )
+    print(
+        f"Output:       {paths.output_dir}"
+    )
+    print("=" * 72)
+
+    ocr_tracker = OcrTracker()
+
+    monitor = ResourceMonitor()
+
+    pipeline_started = perf_counter()
+
+    monitor.start()
+
+    initialization_started = (
+        perf_counter()
+    )
+
+    pymupdf4llm.use_layout(
+        bool(
+            profile[
+                "layout_module"
+            ]
+        )
+    )
+
+    document = pymupdf.open(
+        input_path
+    )
+
+    initialization_seconds = (
+        perf_counter()
+        - initialization_started
+    )
+
+    extraction_started = (
+        perf_counter()
+    )
+
+    captured_warning_messages = []
+
+    try:
+        with paths.run_log.open(
+            "w",
+            encoding="utf-8",
+        ) as log_file:
+            with (
+                contextlib.redirect_stdout(
+                    log_file
+                ),
+                contextlib.redirect_stderr(
+                    log_file
+                ),
+                warnings.catch_warnings(
+                    record=True
+                ) as warning_records,
+            ):
+                warnings.simplefilter(
+                    "always"
+                )
+
+                chunks = (
+                    pymupdf4llm.to_markdown(
+                        document,
+
+                        page_chunks=True,
+
+                        use_ocr=bool(
+                            profile[
+                                "ocr_enabled"
+                            ]
+                        ),
+
+                        force_ocr=(
+                            profile[
+                                "ocr_mode"
+                            ]
+                            == "forced"
+                        ),
+
+                        ocr_function=(
+                            ocr_tracker
+                            if profile[
+                                "ocr_enabled"
+                            ]
+                            else None
+                        ),
+
+                        ocr_language=(
+                            profile.get(
+                                "ocr_language"
+                            )
+                            or "eng"
+                        ),
+
+                        ocr_dpi=int(
+                            profile.get(
+                                "ocr_dpi"
+                            )
+                            or 300
+                        ),
+
+                        header=bool(
+                            profile[
+                                "parser_header"
+                            ]
+                        ),
+
+                        footer=bool(
+                            profile[
+                                "parser_footer"
+                            ]
+                        ),
+
+                        force_text=bool(
+                            profile[
+                                "force_text"
+                            ]
+                        ),
+
+                        write_images=bool(
+                            profile[
+                                "write_images"
+                            ]
+                        ),
+
+                        embed_images=bool(
+                            profile[
+                                "embed_images"
+                            ]
+                        ),
+
+                        page_separators=bool(
+                            profile[
+                                "page_separators"
+                            ]
+                        ),
+
+                        show_progress=False,
+                    )
+                )
+
+                captured_warning_messages = [
+                    str(
+                        record.message
+                    )
+                    for record
+                    in warning_records
+                ]
+
+    finally:
+        document.close()
+
+    extraction_seconds = (
+        perf_counter()
+        - extraction_started
+    )
+
+    if not isinstance(chunks, list):
+        raise RuntimeError(
+            "Expected list from page_chunks=True"
+        )
+
+    (
+        page_texts,
+        native_pages,
+        observed_pages,
+    ) = align_chunks(
+        chunks,
+        page_count,
+    )
+
+    parser_elements = (
+        summarize_page_boxes(
+            native_pages
+        )
+    )
+
+    artifact_result = (
+        finalize_artifacts(
+            paths=paths,
+            document_id=(
+                input_path.stem
+            ),
+            source_file=(
+                input_path.name
+            ),
+            parser_name=PARSER_NAME,
+            profile_name=(
+                args.profile
+            ),
+            page_texts=page_texts,
+            parser_page_elements=(
+                parser_elements[
+                    "per_page"
+                ]
+            ),
+            parser_native_pages=(
+                native_pages
+            ),
+            tokenizer_name=(
+                tokenizer_name
+            ),
+            normalization_config=(
+                normalization_config
+            ),
+        )
+    )
+
+    resources = monitor.stop()
+
+    pipeline_seconds = (
+        perf_counter()
+        - pipeline_started
+    )
+
+    source_summary = dict(
+        inventory
+    )
+
+    source_summary.pop(
+        "per_page",
+        None,
+    )
+
+    source_objective = {
+        "native_text_blocks": (
+            inventory[
+                "native_text"
+            ]["text_blocks"]
+        ),
+
+        "embedded_image_occurrences": (
+            inventory[
+                "images"
+            ][
+                "embedded_image_occurrences"
+            ]
+        ),
+
+        "unique_embedded_image_xrefs": (
+            inventory[
+                "images"
+            ][
+                "unique_embedded_image_xrefs"
+            ]
+        ),
+
+        "drawing_groups": (
+            inventory[
+                "vector_content"
+            ]["drawing_groups"]
+        ),
+
+        "pages_without_native_text": (
+            inventory[
+                "native_text"
+            ][
+                "pages_without_native_text"
+            ]
+        ),
+    }
+
+    input_bytes = (
+        input_path.stat().st_size
+    )
+
+    clean_bytes = (
+        artifact_result[
+            "output"
+        ][
+            "clean_markdown_bytes"
+        ]
+    )
+
+    size_ratio = (
+        round(
+            input_bytes
+            / clean_bytes,
+            6,
+        )
+        if clean_bytes > 0
+        else None
+    )
+
+    pages_processed = len(
+        observed_pages
+    )
+
+    failed_pages = max(
+        page_count
+        - pages_processed,
+        0,
+    )
+
+    log_warning_lines = (
+        count_log_lines(
+            paths.run_log,
+            "warning",
+        )
+    )
+
+    log_error_lines = (
+        count_log_lines(
+            paths.run_log,
+            "error",
+        )
+    )
+
+    metrics = {
+        "benchmark": {
+            "schema_version": 2,
+
+            "timestamp_utc": (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            ),
+
+            "reference_tokenizer": (
+                tokenizer_name
+            ),
+        },
+
+        "run": {
+            "parser": PARSER_NAME,
+
+            "parser_display_name": (
+                "PyMuPDF4LLM"
+            ),
+
+            "profile": (
+                args.profile
+            ),
+
+            "resolved_config": (
+                profile
+            ),
+
+            "versions": {
+                "pymupdf4llm": (
+                    parser_version
+                ),
+
+                "pymupdf": (
+                    pymupdf_version
+                ),
+
+                "pymupdf_layout": (
+                    layout_version
+                ),
+
+                "rapidocr": (
+                    rapidocr_version
+                ),
+
+                "onnxruntime": (
+                    onnx_version
+                ),
+
+                "tesseract": (
+                    _tesseract_version()
+                ),
+            },
+
+            "python_version": (
+                platform.python_version()
+            ),
+
+            "platform": (
+                platform.platform()
+            ),
+        },
+
+        "document": {
+            "id": input_path.stem,
+
+            "file": input_path.name,
+
+            "sha256": (
+                inventory["sha256"]
+            ),
+
+            "pages": page_count,
+
+            "input_size_mb": (
+                inventory[
+                    "file_size_mb"
+                ]
+            ),
+        },
+
+        "source_pdf": (
+            source_summary
+        ),
+
+        "processing": {
+            "initialization_seconds": round(
+                initialization_seconds,
+                6,
+            ),
+
+            "extraction_seconds": round(
+                extraction_seconds,
+                6,
+            ),
+
+            **artifact_result[
+                "timing"
+            ],
+
+            "pipeline_seconds": round(
+                pipeline_seconds,
+                6,
+            ),
+
+            "pages_total": (
+                page_count
+            ),
+
+            "pages_processed": (
+                pages_processed
+            ),
+
+            "failed_pages": (
+                failed_pages
+            ),
+
+            "partial_pages": None,
+
+            "empty_output_pages": (
+                artifact_result[
+                    "empty_output_pages"
+                ]
+            ),
+
+            "extraction_pages_per_second": (
+                round(
+                    pages_processed
+                    / extraction_seconds,
+                    6,
+                )
+                if extraction_seconds > 0
+                else None
+            ),
+
+            "pipeline_pages_per_second": (
+                round(
+                    pages_processed
+                    / pipeline_seconds,
+                    6,
+                )
+                if pipeline_seconds > 0
+                else None
+            ),
+
+            "ocr": {
+                "enabled": bool(
+                    profile[
+                        "ocr_enabled"
+                    ]
+                ),
+
+                "mode": (
+                    profile[
+                        "ocr_mode"
+                    ]
+                ),
+
+                "engine": (
+                    profile[
+                        "ocr_engine"
+                    ]
+                ),
+
+                "language": (
+                    profile[
+                        "ocr_language"
+                    ]
+                ),
+
+                "dpi": (
+                    profile[
+                        "ocr_dpi"
+                    ]
+                ),
+
+                "pages_requested": len(
+                    ocr_tracker
+                    .requested_pages
+                ),
+
+                "pages_processed": len(
+                    ocr_tracker
+                    .processed_pages
+                ),
+
+                "fallback_ocr_pages": None,
+
+                "failed_ocr_pages": len(
+                    ocr_tracker
+                    .failed_pages
+                ),
+
+                "requested_page_numbers": sorted(
+                    ocr_tracker
+                    .requested_pages
+                ),
+
+                "failed_page_numbers": sorted(
+                    ocr_tracker
+                    .failed_pages
+                ),
+
+                "plugin_signature": str(
+                    ocr_tracker
+                    .plugin_signature
+                ),
+
+                "callback_extra_kwargs_observed": sorted(
+                    ocr_tracker
+                    .extra_kwargs_seen
+                ),
+            },
+
+            "warnings_count": len(
+                captured_warning_messages
+            ),
+
+            "warning_messages": (
+                captured_warning_messages
+            ),
+
+            "parser_log_warning_lines": (
+                log_warning_lines
+            ),
+
+            "parser_log_error_lines": (
+                log_error_lines
+            ),
+
+            "errors_count": 0,
+
+            "retry_count": 0,
+        },
+
+        "resources": (
+            resources
+        ),
+
+        "content_elements": {
+            "source_pdf_objective": (
+                source_objective
+            ),
+
+            "parser_output": (
+                parser_elements[
+                    "summary"
+                ]
+            ),
+
+            **artifact_result[
+                "content_elements"
+            ],
+        },
+
+        "heuristics": (
+            artifact_result[
+                "heuristics"
+            ]
+        ),
+
+        "tokens": (
+            artifact_result[
+                "tokens"
+            ]
+        ),
+
+        "normalization": (
+            artifact_result[
+                "normalization"
+            ]
+        ),
+
+        "output": {
+            **artifact_result[
+                "output"
+            ],
+
+            "run_log": str(
+                paths.run_log
+            ),
+
+            "metrics_json": str(
+                paths.metrics_json
+            ),
+
+            "input_to_clean_markdown_size_ratio": (
+                size_ratio
+            ),
+        },
+    }
+
+    # Correctness invariant for the OCR tracker.
+    if not (
+        ocr_tracker.failed_pages
+        <= ocr_tracker.requested_pages
+    ):
+        raise RuntimeError(
+            "Invalid OCR tracker state."
+        )
+
+    write_json(
+        paths.metrics_json,
+        metrics,
+    )
+
+    reference_tokens = (
+        artifact_result[
+            "tokens"
+        ]["reference"]
+    )
+
+    print()
+    print("=" * 72)
+    print("RESULT V2")
+    print("=" * 72)
+
+    print(
+        f"Pages:                 "
+        f"{pages_processed}/{page_count}"
+    )
+
+    print(
+        f"Extraction:            "
+        f"{extraction_seconds:.3f} s"
+    )
+
+    print(
+        f"Pipeline:              "
+        f"{pipeline_seconds:.3f} s"
+    )
+
+    print(
+        f"OCR pages:             "
+        f"{len(ocr_tracker.processed_pages)}"
+    )
+
+    print(
+        f"OCR page numbers:      "
+        f"{sorted(ocr_tracker.processed_pages)}"
+    )
+
+    print(
+        f"Tables detected:       "
+        f"{parser_elements['summary']['tables_detected']}"
+    )
+
+    print(
+        f"Pictures detected:     "
+        f"{parser_elements['summary']['images_detected']}"
+    )
+
+    print(
+        f"Headings detected:     "
+        f"{parser_elements['summary']['headings_detected']}"
+    )
+
+    print(
+        f"Lists detected:        "
+        f"{parser_elements['summary']['lists_detected']}"
+    )
+
+    print(
+        f"Raw tokens:            "
+        f"{reference_tokens['raw_markdown_tokens']}"
+    )
+
+    print(
+        f"Clean tokens:          "
+        f"{reference_tokens['clean_markdown_tokens']}"
+    )
+
+    print(
+        f"Token reduction:       "
+        f"{reference_tokens['token_reduction_percent']:.3f}%"
+    )
+
+    print(
+        f"Removed records:       "
+        f"{artifact_result['normalization']['removed_records']}"
+    )
+
+    print(
+        f"Average CPU:           "
+        f"{resources['average_cpu_system_capacity_percent']}%"
+    )
+
+    print(
+        f"Peak CPU:              "
+        f"{resources['peak_cpu_system_capacity_percent']}%"
+    )
+
+    print(
+        f"CPU time:              "
+        f"{resources['process_cpu_time_seconds']} s"
+    )
+
+    print(
+        f"Average RAM:           "
+        f"{resources['average_rss_mb']} MB"
+    )
+
+    print(
+        f"Peak RAM:              "
+        f"{resources['peak_rss_mb']} MB"
+    )
+
+    print(
+        f"Metrics:               "
+        f"{paths.metrics_json}"
+    )
+
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    main()

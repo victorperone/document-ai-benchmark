@@ -6,6 +6,7 @@ services:
       dockerfile: docker/pymupdf/Dockerfile
 
     volumes:
+      - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./data/raw:/data/raw:ro
@@ -31,6 +32,7 @@ services:
       TOKENIZERS_PARALLELISM: "false"
 
     volumes:
+      - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./data/raw:/data/raw:ro
@@ -57,6 +59,7 @@ services:
       TOKENIZERS_PARALLELISM: "false"
 
     volumes:
+      - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
       - ./data/raw:/data/raw:ro
@@ -70,3 +73,25 @@ services:
       - python
       - /app/src/parsers/mineru_baseline.py
 
+  paddleocr:
+    build:
+      context: .
+      dockerfile: docker/paddleocr/Dockerfile
+
+    environment:
+      HOME: /home/appuser
+
+    volumes:
+      - ./config:/app/config:ro
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./data/raw:/data/raw:ro
+      - ./outputs:/outputs
+      - ./metrics:/metrics
+      - ./models/paddleocr:/home/appuser/.paddlex
+
+    working_dir: /app
+
+    entrypoint:
+      - python
+      - /app/src/parsers/paddleocr_baseline.py

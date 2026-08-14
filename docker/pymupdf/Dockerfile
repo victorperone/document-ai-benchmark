@@ -7,16 +7,35 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-por \
+        libgomp1 \
+        libgl1 \
+        libglib2.0-0 \
+        fonts-noto-core \
+        fonts-noto-cjk \
+        fontconfig \
+    && fc-cache -f \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY docker/pymupdf/requirements.txt /tmp/requirements.txt
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r /tmp/requirements.txt
+    && python -m pip install --no-cache-dir \
+        -r /tmp/requirements.txt
 
 RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" \
-    && python -c "import tiktoken; tiktoken.get_encoding('o200k_base')" \
+    && python -c \
+        "import tiktoken; tiktoken.get_encoding('o200k_base')" \
     && chmod -R a+rX "${TIKTOKEN_CACHE_DIR}"
 
-RUN useradd --create-home --uid 1000 appuser
+RUN useradd \
+    --create-home \
+    --uid 1000 \
+    appuser
 
 USER appuser
 

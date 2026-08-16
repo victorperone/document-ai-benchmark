@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import importlib.metadata
 import inspect
 import json
@@ -21,6 +20,10 @@ from pymupdf4llm.ocr import (
     rapidtess_api,
 )
 
+from src.benchmark.artifact_policy import (
+    ArtifactPolicy,
+    ArtifactSelectionError,
+)
 from src.benchmark.artifacts import (
     finalize_artifacts,
 )
@@ -37,6 +40,10 @@ from src.benchmark.paths import (
 )
 from src.benchmark.resource_monitor import (
     ResourceMonitor,
+)
+from src.benchmark.runtime_io import (
+    add_runtime_arguments,
+    parser_output_context,
 )
 from src.benchmark.source_inventory import (
     analyze_pdf_source,
@@ -71,7 +78,25 @@ def parse_args() -> argparse.Namespace:
         default="ocr_auto_rapidtess",
     )
 
-    return parser.parse_args()
+    add_runtime_arguments(
+        parser
+    )
+
+    args = parser.parse_args()
+
+    try:
+        args.artifact_policy = (
+            ArtifactPolicy.from_cli(
+                args.artifacts
+            )
+        )
+
+    except ArtifactSelectionError as exc:
+        parser.error(
+            str(exc)
+        )
+
+    return args
 
 
 class OcrTracker:
@@ -528,6 +553,10 @@ def count_log_lines(
 def main() -> None:
     args = parse_args()
 
+    artifact_policy: ArtifactPolicy = (
+        args.artifact_policy
+    )
+
     input_path = (
         args.input.resolve()
     )
@@ -555,6 +584,11 @@ def main() -> None:
         PARSER_NAME,
         input_path.stem,
         args.profile,
+    )
+
+    paths.output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     inventory = (
@@ -635,6 +669,18 @@ def main() -> None:
     print(
         f"Output:       {paths.output_dir}"
     )
+
+    print(
+        "Artifacts:    "
+        + ", ".join(
+            artifact_policy.as_list()
+        )
+    )
+
+    print(
+        f"Verbose:      {args.verbose}"
+    )
+
     print("=" * 72)
 
     ocr_tracker = OcrTracker()
@@ -673,21 +719,20 @@ def main() -> None:
     captured_warning_messages = []
 
     try:
-        with paths.run_log.open(
-            "w",
-            encoding="utf-8",
-        ) as log_file:
-            with (
-                contextlib.redirect_stdout(
-                    log_file
-                ),
-                contextlib.redirect_stderr(
-                    log_file
-                ),
-                warnings.catch_warnings(
-                    record=True
-                ) as warning_records,
-            ):
+        with parser_output_context(
+            run_log_path=(
+                paths.run_log
+            ),
+            keep_run_log=(
+                artifact_policy.includes(
+                    "run.log"
+                )
+            ),
+            verbose=args.verbose,
+        ):
+            with warnings.catch_warnings(
+                record=True
+            ) as warning_records:
                 warnings.simplefilter(
                     "always"
                 )
@@ -769,7 +814,7 @@ def main() -> None:
                             ]
                         ),
 
-                        show_progress=False,
+                        show_progress=args.verbose,
                     )
                 )
 
@@ -836,6 +881,9 @@ def main() -> None:
             ),
             normalization_config=(
                 normalization_config
+            ),
+            artifact_policy=(
+                artifact_policy
             ),
         )
     )
@@ -926,19 +974,26 @@ def main() -> None:
         0,
     )
 
-    log_warning_lines = (
-        count_log_lines(
-            paths.run_log,
-            "warning",
+    if artifact_policy.includes(
+        "run.log"
+    ):
+        log_warning_lines = (
+            count_log_lines(
+                paths.run_log,
+                "warning",
+            )
         )
-    )
 
-    log_error_lines = (
-        count_log_lines(
-            paths.run_log,
-            "error",
+        log_error_lines = (
+            count_log_lines(
+                paths.run_log,
+                "error",
+            )
         )
-    )
+
+    else:
+        log_warning_lines = None
+        log_error_lines = None
 
     metrics = {
         "benchmark": {
@@ -964,6 +1019,15 @@ def main() -> None:
 
             "profile": (
                 args.profile
+            ),
+
+            "verbose": (
+                args.verbose
+            ),
+
+            "artifact_selection": (
+                artifact_policy
+                .as_list()
             ),
 
             "resolved_config": (
@@ -1220,12 +1284,24 @@ def main() -> None:
                 "output"
             ],
 
-            "run_log": str(
-                paths.run_log
+            "run_log": (
+                str(
+                    paths.run_log
+                )
+                if artifact_policy.includes(
+                    "run.log"
+                )
+                else None
             ),
 
-            "metrics_json": str(
-                paths.metrics_json
+            "metrics_json": (
+                str(
+                    paths.metrics_json
+                )
+                if artifact_policy.includes(
+                    "metrics.json"
+                )
+                else None
             ),
 
             "input_to_clean_markdown_size_ratio": (
@@ -1243,10 +1319,13 @@ def main() -> None:
             "Invalid OCR tracker state."
         )
 
-    write_json(
-        paths.metrics_json,
-        metrics,
-    )
+    if artifact_policy.includes(
+        "metrics.json"
+    ):
+        write_json(
+            paths.metrics_json,
+            metrics,
+        )
 
     reference_tokens = (
         artifact_result[
@@ -1349,9 +1428,25 @@ def main() -> None:
         f"{resources['peak_rss_mb']} MB"
     )
 
+    if artifact_policy.includes(
+        "metrics.json"
+    ):
+        print(
+            f"Metrics:               "
+            f"{paths.metrics_json}"
+        )
+
+    else:
+        print(
+            "Metrics:               "
+            "<not requested>"
+        )
+
     print(
-        f"Metrics:               "
-        f"{paths.metrics_json}"
+        "Artifacts written:      "
+        + ", ".join(
+            artifact_policy.as_list()
+        )
     )
 
     print("=" * 72)

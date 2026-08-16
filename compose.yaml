@@ -9,7 +9,7 @@ services:
       - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
-      - ./data/raw:/data/raw:ro
+      - ./data:/data:ro
       - ./outputs:/outputs
       - ./metrics:/metrics
 
@@ -35,7 +35,7 @@ services:
       - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
-      - ./data/raw:/data/raw:ro
+      - ./data:/data:ro
       - ./outputs:/outputs
       - ./metrics:/metrics
       - ./models/docling:/home/appuser/.cache
@@ -62,7 +62,7 @@ services:
       - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
-      - ./data/raw:/data/raw:ro
+      - ./data:/data:ro
       - ./outputs:/outputs
       - ./metrics:/metrics
       - ./models/mineru:/models/mineru
@@ -85,7 +85,7 @@ services:
       - ./config:/app/config:ro
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro
-      - ./data/raw:/data/raw:ro
+      - ./data:/data:ro
       - ./outputs:/outputs
       - ./metrics:/metrics
       - ./models/paddleocr:/home/appuser/.paddlex

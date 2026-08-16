@@ -1830,3 +1830,553 @@ Therefore:
 The goal is not only to make the code run.
 
 The goal is to make it possible to explain **exactly why a result was produced**, reproduce it later, and compare it fairly with other Document AI parsers.
+
+
+
+
+
+
+
+
+
+
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from pathlib import Path
+import shutil
+
+PATH = Path("docs/COMMAND_REFERENCE.md")
+BACKUP = Path("docs/COMMAND_REFERENCE.md.before_pymupdf_v2_1")
+
+if not PATH.is_file():
+    raise SystemExit(
+        "ERROR: docs/COMMAND_REFERENCE.md not found. "
+        "Run this script from the repository root."
+    )
+
+text = PATH.read_text(encoding="utf-8")
+replacements: list[tuple[str, str, str]] = []
+
+replacements.append((
+    "Simple-18 final regression",
+    '''Validated result:
+
+```text
+Pages:                 18/18
+OCR pages:             0
+Tables detected:       4
+Pictures detected:     1
+Headings detected:     47
+Lists detected:        42
+Raw tokens:            5886
+Clean tokens:          5670
+Token reduction:       3.670%
+```''',
+    '''Validated stable v2.1 result at the final 150 DPI default:
+
+```text
+Pages:                 18/18
+Extraction:            1.913 s
+Pipeline:              2.124 s
+OCR pages:             0
+OCR page numbers:      []
+Tables detected:       4
+Pictures detected:     1
+Headings detected:     47
+Lists detected:        42
+Raw tokens:            5886
+Clean tokens:          5670
+Token reduction:       3.670%
+Removed records:       18
+Peak RAM:              352.945 MB
+```
+
+This document contains usable native text, so automatic OCR correctly
+selected zero pages even though OCR is enabled in the profile.'''
+))
+
+replacements.append((
+    "Mixed-25 final regression",
+    '''Validated Portuguese-profile result:
+```text
+Pages:                 25/25
+OCR pages:             13
+OCR page numbers:      [1, 3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 17, 18]
+Tables detected:       4
+Pictures detected:     33
+Headings detected:     48
+Lists detected:        115
+Raw tokens:            8867
+Clean tokens:          8635
+Token reduction:       2.616%
+Removed records:       35
+```''',
+    '''Validated stable v2.1 Portuguese-profile result at 150 DPI:
+```text
+Pages:                 25/25
+Extraction:            19.287 s
+Pipeline:              19.496 s
+OCR pages:             13
+OCR page numbers:      [1, 3, 4, 5, 6, 7, 8, 9, 10, 13, 15, 17, 18]
+Tables detected:       4
+Pictures detected:     34
+Headings detected:     48
+Lists detected:        122
+Raw tokens:            8640
+Clean tokens:          8409
+Token reduction:       2.674%
+Removed records:       35
+Peak RAM:              750.398 MB
+```
+
+The page-selection decision remained identical to the previous 300 DPI
+run: 13 pages required OCR. The lower DPI reduced OCR runtime and memory
+cost without changing which pages were selected.'''
+))
+
+anchor_35 = '''---
+# 35. Audit removed content — Simple 18'''
+
+insert_35 = '''---
+
+## PyMuPDF v2.1 runtime controls
+
+The stable adapter supports two runtime-only controls that do not change
+parser quality or document content.
+
+### `--verbose` / `-v`
+
+Shows parser progress in the terminal.
+
+Example:
+
+```bash
+docker compose run --rm \\
+  -e PYTHONPATH=/app \\
+  --entrypoint python \\
+  pymupdf \\
+  /app/src/parsers/pymupdf_v2.py \\
+  --input /data/raw/benchmark_01_simple_18.pdf \\
+  --output-root /outputs \\
+  --profile ocr_auto_rapidtess \\
+  --verbose
+```
+
+`--verbose` changes only terminal/log visibility. Content equivalence was
+validated by comparing generated `document.md` files with and without the
+flag.
+
+### `--artifacts`
+
+Controls which artifacts are persisted.
+
+Default:
+
+```text
+document.md
+run.log
+```
+
+Formal benchmark:
+
+```bash
+--artifacts all
+```
+
+`all` persists:
+
+```text
+raw.md
+document.md
+document.jsonl
+metrics.json
+removed_content.jsonl
+run.log
+```
+
+Individual selections are also supported, for example:
+
+```bash
+--artifacts document.md metrics.json
+```
+
+Artifact selection controls persistence only. Internal calculations required
+for the benchmark are not silently changed by selecting fewer output files.
+
+## Stable PyMuPDF OCR profiles
+
+The configured PyMuPDF profiles are:
+
+```text
+native
+ocr_auto_rapidtess
+ocr_auto_rapidtess_150
+ocr_auto_rapidtess_200
+ocr_auto_rapidtess_300
+ocr_force_rapidtess
+```
+
+Stable recommended profile:
+
+```text
+ocr_auto_rapidtess
+OCR mode:     auto
+OCR engine:   rapidtess
+Language:     por
+OCR DPI:      150
+```
+
+The explicit 150/200/300 profiles remain useful for diagnostic ablations.
+`ocr_force_rapidtess` exists for forced-OCR diagnostics and is not the
+recommended production-style benchmark profile.
+
+## Controlled integration benchmark
+
+The controlled benchmark document is stored at:
+
+```text
+data/benchmark/controlled/benchmark_controlado_v1.pdf
+```
+
+The Compose data mount exposes the repository data tree read-only:
+
+```text
+./data:/data:ro
+```
+
+Therefore all parser containers can access:
+
+```text
+/data/raw
+/data/benchmark
+/data/gold
+```
+
+Canonical PyMuPDF v2.1 controlled run:
+
+```bash
+docker compose run --rm \\
+  -e PYTHONPATH=/app \\
+  --entrypoint python \\
+  pymupdf \\
+  /app/src/parsers/pymupdf_v2.py \\
+  --input /data/benchmark/controlled/benchmark_controlado_v1.pdf \\
+  --output-root /outputs/_final_regression \\
+  --profile ocr_auto_rapidtess \\
+  --artifacts all
+```
+
+Validated result:
+
+```text
+Pages:                 12/12
+Extraction:            7.859 s
+Pipeline:              8.070 s
+OCR pages:             3
+OCR page numbers:      [9, 10, 11]
+Tables detected:       8
+Pictures detected:     0
+Headings detected:     9
+Lists detected:        18
+Raw tokens:            4538
+Clean tokens:          4406
+Token reduction:       2.909%
+Removed records:       11
+Peak RAM:              760.305 MB
+```
+
+The controlled document deliberately mixes native text, tables, formulas,
+repeated headers/footers and raster content. Automatic OCR selected only
+pages 9, 10 and 11.
+
+## DPI diagnostic evaluation
+
+The stable default was selected after evaluating automatic OCR at 150, 200
+and 300 DPI on the same image-only OCR fixture.
+
+```text
+PROFILE                         DPI   EXTRACT    RAM MB       CER       WER
+ocr_auto_rapidtess_150          150     6.771     631.0     7.90%    32.86%
+ocr_auto_rapidtess_200          200     8.108    1011.7     9.87%    34.52%
+ocr_auto_rapidtess_300          300    11.935    2019.9     6.84%    31.90%
+```
+
+The 300 DPI result had the best normalized CER/WER in this fixture, but the
+quality improvement was not proportional to its CPU/RAM cost. 150 DPI was
+therefore selected as the efficiency-oriented default for the first
+cross-parser comparison.
+
+Diagnostic scripts retained in the repository include:
+
+```text
+scripts/evaluate_pymupdf_dpi.py
+scripts/evaluate_pymupdf_orientation.py
+scripts/generate_ocr_regression_fixtures.py
+scripts/probe_image_region_orientation.py
+scripts/probe_tesseract_osd.py
+scripts/validate_header_footer_regression.py
+src/evaluation/ocr_quality.py
+```
+
+## Known orientation limitation
+
+Tesseract OSD successfully detected physically rotated raster regions in
+the controlled tests. For example, the controlled benchmark produced:
+
+```text
+page 9   -> rotate 0
+page 10  -> rotate 90
+page 11  -> rotate 270
+```
+
+However, automatic raster correction was intentionally not integrated into
+the stable PyMuPDF v2.1 adapter. Reinserting a corrected raster while
+preserving its original geometry, resolution and positioning requires
+additional region-aware reconstruction.
+
+```text
+KNOWN LIMITATION
+
+Physically rotated raster images inside hybrid PDF pages can be detected
+with Tesseract OSD, but are not automatically corrected in the stable
+PyMuPDF v2.1 pipeline.
+```
+
+Future improvement:
+
+```text
+region-aware raster orientation correction
+```
+
+This limitation is intentionally carried into the first cross-parser
+comparison so that Docling, MinerU and PaddleOCR can be evaluated on the
+same case before parser-specific engineering is expanded.
+
+---
+# 35. Audit removed content — Simple 18'''
+
+replacements.append((
+    "PyMuPDF v2.1 operational additions",
+    anchor_35,
+    insert_35,
+))
+
+old_profile = '''# 56. Current formal PyMuPDF profile
+
+```text
+profile              = ocr_auto_rapidtess
+layout_module        = true
+ocr_enabled          = true
+ocr_mode             = auto
+ocr_engine           = rapidtess
+ocr_language         = por
+ocr_dpi              = 300
+parser_header        = true
+parser_footer        = true
+force_text           = true
+write_images         = false
+embed_images         = false
+page_separators      = false
+reference tokenizer  = o200k_base
+```
+This is currently frozen as the first Benchmark v2 reference implementation.'''
+
+new_profile = '''# 56. Current formal PyMuPDF profile
+
+```text
+profile              = ocr_auto_rapidtess
+layout_module        = true
+ocr_enabled          = true
+ocr_mode             = auto
+ocr_engine           = rapidtess
+ocr_language         = por
+ocr_dpi              = 150
+parser_header        = true
+parser_footer        = true
+force_text           = true
+write_images         = false
+embed_images         = false
+page_separators      = false
+reference tokenizer  = o200k_base
+```
+
+This profile is frozen as the **PyMuPDF Benchmark v2.1 stable reference
+implementation** for the initial cross-parser comparison.
+
+150 DPI is an efficiency-oriented default selected from a controlled
+150/200/300 DPI ablation. It is not claimed to be globally optimal for every
+future document collection.'''
+
+replacements.append((
+    "Formal PyMuPDF profile",
+    old_profile,
+    new_profile,
+))
+
+old_cost = '''# 64. OCR cost interpretation
+
+Validated PyMuPDF examples:
+
+```text
+Simple:
+18 pages
+0 OCR pages
+~1.9 seconds extraction
+
+Mixed:
+25 pages
+13 OCR pages
+~39.3 seconds extraction
+```
+
+This is why selective OCR is a central benchmark concern.'''
+
+new_cost = '''# 64. OCR cost interpretation
+
+Validated stable PyMuPDF v2.1 examples at the 150 DPI default:
+
+```text
+Simple:
+18 pages
+0 OCR pages
+1.913 seconds extraction
+352.945 MB peak RAM
+
+Mixed:
+25 pages
+13 OCR pages
+19.287 seconds extraction
+750.398 MB peak RAM
+
+Controlled:
+12 pages
+3 OCR pages
+7.859 seconds extraction
+760.305 MB peak RAM
+```
+
+The earlier mixed-document run at 300 DPI took approximately 39 seconds and
+used substantially more memory. This is why both selective OCR and OCR
+resolution are central benchmark concerns.'''
+
+replacements.append((
+    "OCR cost interpretation",
+    old_cost,
+    new_cost,
+))
+
+old_ready = '''## PyMuPDF4LLM
+
+```text
+Benchmark v2 adapter: READY
+```
+
+Validated:
+
+```text
+✓ container
+✓ pinned versions
+✓ Layout
+✓ RapidTess
+✓ Portuguese OCR
+✓ automatic OCR
+✓ Source Inventory
+✓ Common Core v2
+✓ process_tree_v2
+✓ Simple-18
+✓ Mixed-25
+✓ normalization audit
+✓ metrics schema v2
+```'''
+
+new_ready = '''## PyMuPDF4LLM
+
+```text
+Benchmark v2.1 adapter: STABLE / FROZEN
+```
+
+Validated:
+
+```text
+✓ container
+✓ pinned versions
+✓ Layout
+✓ RapidTess
+✓ Portuguese OCR
+✓ automatic selective OCR
+✓ Source Inventory
+✓ Common Core v2
+✓ process_tree_v2
+✓ runtime artifact policy
+✓ --artifacts
+✓ --verbose / progress
+✓ 150 / 200 / 300 DPI diagnostics
+✓ OCR quality diagnostics
+✓ Simple-18 final regression
+✓ Mixed-25 final regression
+✓ controlled 12-page integration benchmark
+✓ normalization audit
+✓ metrics schema v2
+✓ Tesseract OSD orientation detection
+```
+
+Known limitation:
+
+```text
+Physically rotated raster regions inside hybrid pages are detectable with
+OSD but are not automatically corrected in the stable adapter.
+```
+
+Future improvement:
+
+```text
+region-aware raster orientation correction
+```'''
+
+replacements.append((
+    "PyMuPDF readiness",
+    old_ready,
+    new_ready,
+))
+
+errors: list[str] = []
+for label, old, _new in replacements:
+    count = text.count(old)
+    if count != 1:
+        errors.append(f"{label}: expected exactly 1 match, found {count}")
+
+if errors:
+    print("ERROR: COMMAND_REFERENCE.md was NOT modified.")
+    for error in errors:
+        print(" -", error)
+    raise SystemExit(2)
+
+updated = text
+for _label, old, new in replacements:
+    updated = updated.replace(old, new, 1)
+
+required_final_strings = [
+    "ocr_dpi              = 150",
+    "Benchmark v2.1 adapter: STABLE / FROZEN",
+    "benchmark_controlado_v1.pdf",
+    "--artifacts all",
+    "--verbose",
+    "region-aware raster orientation correction",
+    "19.287 seconds extraction",
+]
+
+missing = [value for value in required_final_strings if value not in updated]
+if missing:
+    print("ERROR: final validation failed. File was NOT modified.")
+    for value in missing:
+        print(" - missing:", value)
+    raise SystemExit(3)
+
+shutil.copy2(PATH, BACKUP)
+PATH.write_text(updated, encoding="utf-8")
+
+print("COMMAND_REFERENCE PyMuPDF v2.1 update: OK")
+print("Replacements applied:", len(replacements))
+print("Backup:", BACKUP)
+print("Updated:", PATH)

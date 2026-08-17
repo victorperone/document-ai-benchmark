@@ -238,7 +238,7 @@ def _serialize_item_for_page(
 
     text = getattr(item, "text", None)
 
-    return {
+    payload = {
         "class": type(item).__name__,
         "level": int(level),
         "label": (
@@ -264,6 +264,33 @@ def _serialize_item_for_page(
         ),
         "provenance": provenance,
     }
+
+    # Picture classification is enrichment metadata. Preserve it only when
+    # Docling actually produced a classification, keeping existing profiles'
+    # parser-native contract unchanged when classification is disabled.
+    if type(item).__name__ == "PictureItem":
+        meta = getattr(item, "meta", None)
+        classification = (
+            getattr(meta, "classification", None)
+            if meta is not None
+            else None
+        )
+
+        if classification is not None:
+            if not hasattr(classification, "model_dump"):
+                raise TypeError(
+                    "Picture classification metadata does not expose "
+                    "model_dump(); refusing to serialize unknown schema."
+                )
+
+            payload["picture_classification"] = (
+                classification.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                )
+            )
+
+    return payload
 
 
 def _new_page_summary(

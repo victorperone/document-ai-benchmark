@@ -176,6 +176,28 @@
           "accelerator_device": "cpu",
           "threads": 10,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
+        },
+        "ocr_auto_formula": {
+          "ocr_enabled": true,
+          "ocr_mode": "pdf_aware_layout_regions",
+          "ocr_engine": "rapidocr",
+          "ocr_backend": "torch",
+          "ocr_language": "pt",
+          "ocr_scale": 3.0,
+          "table_structure": true,
+          "table_mode": "accurate",
+          "table_cell_matching": true,
+          "picture_description": false,
+          "picture_classification": false,
+          "chart_extraction": false,
+          "formula_enrichment": true,
+          "code_enrichment": false,
+          "generate_picture_images": false,
+          "images_scale": 1.0,
+          "remote_services_enabled": false,
+          "accelerator_device": "cpu",
+          "threads": 10,
+          "model_artifacts_path": "/home/appuser/.cache/docling/models"
         }
       }
     },

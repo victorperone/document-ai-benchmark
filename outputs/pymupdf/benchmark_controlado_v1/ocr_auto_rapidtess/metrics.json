@@ -1,0 +1,279 @@
+{
+  "benchmark": {
+    "schema_version": 2,
+    "timestamp_utc": "2026-08-17T21:25:50.875761+00:00",
+    "reference_tokenizer": "o200k_base"
+  },
+  "run": {
+    "parser": "pymupdf",
+    "parser_display_name": "PyMuPDF4LLM",
+    "profile": "ocr_auto_rapidtess",
+    "verbose": true,
+    "artifact_selection": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "resolved_config": {
+      "ocr_enabled": true,
+      "ocr_mode": "auto",
+      "ocr_engine": "rapidtess",
+      "ocr_language": "por",
+      "ocr_dpi": 150,
+      "layout_module": true,
+      "parser_header": true,
+      "parser_footer": true,
+      "force_text": true,
+      "write_images": false,
+      "embed_images": false,
+      "page_separators": false
+    },
+    "versions": {
+      "pymupdf4llm": "1.28.2",
+      "pymupdf": "1.28.2",
+      "pymupdf_layout": "1.28.2",
+      "rapidocr": "3.9.2",
+      "onnxruntime": "1.28.0",
+      "tesseract": "tesseract 5.5.0"
+    },
+    "python_version": "3.12.14",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41"
+  },
+  "document": {
+    "id": "benchmark_controlado_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "pages": 12,
+    "input_size_mb": 0.307
+  },
+  "source_pdf": {
+    "inventory_version": "source_inventory_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "file_size_mb": 0.307,
+    "pages": 12,
+    "native_text": {
+      "characters": 11176,
+      "text_blocks": 145,
+      "pages_with_native_text": 12,
+      "pages_without_native_text": 0,
+      "page_coverage_ratio": 1.0
+    },
+    "images": {
+      "image_blocks": 3,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "pages_with_embedded_images": 3
+    },
+    "vector_content": {
+      "drawing_groups": 85,
+      "measurement_complete": true
+    },
+    "inventory_processing_seconds": 0.054,
+    "warnings": []
+  },
+  "processing": {
+    "initialization_seconds": 0.00076,
+    "extraction_seconds": 7.937205,
+    "normalization_seconds": 0.000671,
+    "common_metrics_seconds": 0.206371,
+    "artifact_write_seconds": 0.000932,
+    "pipeline_seconds": 8.147391,
+    "pages_total": 12,
+    "pages_processed": 12,
+    "failed_pages": 0,
+    "partial_pages": null,
+    "empty_output_pages": 0,
+    "extraction_pages_per_second": 1.511867,
+    "pipeline_pages_per_second": 1.472864,
+    "ocr": {
+      "enabled": true,
+      "mode": "auto",
+      "engine": "rapidtess",
+      "language": "por",
+      "dpi": 150,
+      "pages_requested": 3,
+      "pages_processed": 3,
+      "fallback_ocr_pages": null,
+      "failed_ocr_pages": 0,
+      "requested_page_numbers": [
+        9,
+        10,
+        11
+      ],
+      "failed_page_numbers": [],
+      "plugin_signature": "(page, dpi=150, pixmap=None, language='eng', keep_ocr_text=False)",
+      "callback_extra_kwargs_observed": [
+        "keep_ocr_text"
+      ]
+    },
+    "warnings_count": 0,
+    "warning_messages": [],
+    "parser_log_warning_lines": 0,
+    "parser_log_error_lines": 0,
+    "errors_count": 0,
+    "retry_count": 0
+  },
+  "resources": {
+    "monitor_version": "process_tree_v2",
+    "sampling_interval_seconds": 0.1,
+    "logical_cpus": 20,
+    "processes_observed": 1,
+    "wall_time_seconds": 8.147,
+    "process_cpu_time_seconds": 120.41,
+    "average_cpu_percent": 1690.39,
+    "peak_cpu_percent": 1969.1,
+    "average_cpu_system_capacity_percent": 84.52,
+    "peak_cpu_system_capacity_percent": 98.45,
+    "average_rss_mb": 451.081,
+    "peak_rss_mb": 728.961,
+    "disk_read_mb": 59.406,
+    "disk_write_mb": 0.086
+  },
+  "content_elements": {
+    "source_pdf_objective": {
+      "native_text_blocks": 145,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "drawing_groups": 85,
+      "pages_without_native_text": 0
+    },
+    "parser_output": {
+      "layout_boxes": 91,
+      "tables_detected": 8,
+      "images_detected": 0,
+      "headings_detected": 9,
+      "lists_detected": 18,
+      "formulas_detected": 1,
+      "captions_detected": 0,
+      "page_headers_detected": 12,
+      "page_footers_detected": 10,
+      "footnotes_detected": 0,
+      "text_blocks_detected": 33,
+      "charts_detected": null,
+      "box_class_counts": {
+        "formula": 1,
+        "list-item": 18,
+        "page-footer": 10,
+        "page-header": 12,
+        "section-header": 9,
+        "table": 8,
+        "text": 33
+      }
+    },
+    "raw_markdown": {
+      "tables": 8,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 9,
+      "list_items": 18,
+      "code_blocks": 0
+    },
+    "clean_markdown": {
+      "tables": 8,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 9,
+      "list_items": 18,
+      "code_blocks": 0
+    }
+  },
+  "heuristics": {
+    "raw": {
+      "total_characters": 13439,
+      "total_lines": 237,
+      "non_empty_lines": 134,
+      "whitespace_ratio": 0.13498,
+      "non_alphanumeric_ratio": 0.152764,
+      "empty_lines": 103,
+      "empty_pages": 0,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.104478,
+      "repeated_line_ratio": 0.08209,
+      "repeated_unique_lines": 1,
+      "short_line_ratio": 0.052239,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    },
+    "cleaned": {
+      "total_characters": 13142,
+      "total_lines": 215,
+      "non_empty_lines": 123,
+      "whitespace_ratio": 0.133846,
+      "non_alphanumeric_ratio": 0.156217,
+      "empty_lines": 92,
+      "empty_pages": 0,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.03252,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.056911,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    }
+  },
+  "tokens": {
+    "reference": {
+      "tokenizer": "o200k_base",
+      "raw_markdown_tokens": 4538,
+      "clean_markdown_tokens": 4406,
+      "tokens_removed": 132,
+      "token_reduction_percent": 2.909,
+      "estimated_header_footer_record_tokens": 132,
+      "estimated_other_removed_record_tokens": 0,
+      "raw_tokens_per_page": 378.167,
+      "clean_tokens_per_page": 367.167
+    },
+    "deployment": {
+      "model": null,
+      "tokenizer": null,
+      "raw_markdown_tokens": null,
+      "clean_markdown_tokens": null
+    }
+  },
+  "normalization": {
+    "config": {
+      "header_footer_cleanup": true,
+      "minimum_repeated_page_fraction": 0.3,
+      "minimum_repeated_page_count": 3,
+      "short_line_character_threshold": 20,
+      "keep_removed_content_audit": true,
+      "header_candidate_lines": 3,
+      "footer_candidate_lines": 3,
+      "normalize_page_numbers": true,
+      "trim_page_outer_whitespace": true
+    },
+    "removed_records": 11,
+    "header_records_removed": 11,
+    "footer_records_removed": 0
+  },
+  "output": {
+    "selected_artifacts": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "raw_markdown": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/raw.md",
+    "clean_markdown": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/document.md",
+    "document_jsonl": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/document.jsonl",
+    "removed_content_jsonl": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/removed_content.jsonl",
+    "raw_markdown_bytes": 13916,
+    "clean_markdown_bytes": 13597,
+    "document_jsonl_bytes": 48504,
+    "removed_content_jsonl_bytes": 2522,
+    "raw_markdown_mb": 0.013271,
+    "clean_markdown_mb": 0.012967,
+    "document_jsonl_mb": 0.046257,
+    "run_log": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/run.log",
+    "metrics_json": "/outputs/pymupdf/benchmark_controlado_v1/ocr_auto_rapidtess/metrics.json",
+    "input_to_clean_markdown_size_ratio": 23.71148
+  }
+}

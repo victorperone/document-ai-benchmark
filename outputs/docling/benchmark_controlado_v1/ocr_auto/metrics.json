@@ -1,0 +1,312 @@
+{
+  "benchmark": {
+    "schema_version": 2,
+    "timestamp_utc": "2026-08-17T02:19:27.287389+00:00",
+    "reference_tokenizer": "o200k_base"
+  },
+  "run": {
+    "parser": "docling",
+    "parser_display_name": "Docling",
+    "profile": "ocr_auto",
+    "verbose": true,
+    "artifact_selection": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "resolved_config": {
+      "ocr_enabled": true,
+      "ocr_mode": "pdf_aware_layout_regions",
+      "ocr_engine": "rapidocr",
+      "ocr_backend": "torch",
+      "ocr_language": "pt",
+      "ocr_scale": 3.0,
+      "table_structure": true,
+      "table_mode": "accurate",
+      "table_cell_matching": true,
+      "picture_description": false,
+      "picture_classification": false,
+      "chart_extraction": false,
+      "formula_enrichment": false,
+      "code_enrichment": false,
+      "generate_picture_images": false,
+      "images_scale": 1.0,
+      "remote_services_enabled": false,
+      "accelerator_device": "cpu",
+      "threads": 10,
+      "model_artifacts_path": "/home/appuser/.cache/docling/models"
+    },
+    "versions": {
+      "docling": "2.119.0",
+      "docling_core": "2.91.0",
+      "rapidocr": "3.9.2",
+      "torch": "2.13.0+cu130"
+    },
+    "python_version": "3.12.13",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41"
+  },
+  "document": {
+    "id": "benchmark_controlado_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "pages": 12,
+    "input_size_mb": 0.307
+  },
+  "source_pdf": {
+    "inventory_version": "source_inventory_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "file_size_mb": 0.307,
+    "pages": 12,
+    "native_text": {
+      "characters": 11176,
+      "text_blocks": 145,
+      "pages_with_native_text": 12,
+      "pages_without_native_text": 0,
+      "page_coverage_ratio": 1.0
+    },
+    "images": {
+      "image_blocks": 3,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "pages_with_embedded_images": 3
+    },
+    "vector_content": {
+      "drawing_groups": 85,
+      "measurement_complete": true
+    },
+    "inventory_processing_seconds": 0.054,
+    "warnings": []
+  },
+  "processing": {
+    "initialization_seconds": 3.26821,
+    "extraction_seconds": 27.794136,
+    "normalization_seconds": 0.000459,
+    "common_metrics_seconds": 0.169792,
+    "artifact_write_seconds": 0.000927,
+    "pipeline_seconds": 31.312473,
+    "pages_total": 12,
+    "pages_processed": 12,
+    "failed_pages": 0,
+    "partial_pages": null,
+    "empty_output_pages": 1,
+    "extraction_pages_per_second": 0.431746,
+    "pipeline_pages_per_second": 0.383234,
+    "conversion_status": "success",
+    "ocr": {
+      "enabled": true,
+      "mode": "pdf_aware_layout_regions",
+      "engine": "rapidocr",
+      "backend": "torch",
+      "language": "pt",
+      "scale": 3.0,
+      "effective_dpi": 216.0,
+      "pages_requested": null,
+      "pages_processed": null,
+      "fallback_ocr_pages": null,
+      "failed_ocr_pages": null,
+      "requested_page_numbers": null,
+      "failed_page_numbers": null,
+      "tracking_note": "Docling 2.119.0 does not expose a stable per-page OCR callback equivalent to the PyMuPDF adapter. OCR page counts are therefore not inferred."
+    },
+    "warnings_count": 3,
+    "warning_messages": [
+      "This field is deprecated. Use `generate_page_images=True` and call `TableItem.get_image()` to extract table images from page images.",
+      "deprecated",
+      "Using padding='same' with even kernel lengths and odd dilation may require a zero-padded copy of the input be created (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/native/Convolution.cpp:1101.)"
+    ],
+    "parser_log_warning_lines": 0,
+    "parser_log_error_lines": 0,
+    "errors_count": 0,
+    "retry_count": 0
+  },
+  "resources": {
+    "monitor_version": "process_tree_v2",
+    "sampling_interval_seconds": 0.1,
+    "logical_cpus": 20,
+    "processes_observed": 1,
+    "wall_time_seconds": 31.312,
+    "process_cpu_time_seconds": 224.39,
+    "average_cpu_percent": 723.76,
+    "peak_cpu_percent": 1631.4,
+    "average_cpu_system_capacity_percent": 36.19,
+    "peak_cpu_system_capacity_percent": 81.57,
+    "average_rss_mb": 1876.337,
+    "peak_rss_mb": 2999.246,
+    "disk_read_mb": 718.824,
+    "disk_write_mb": 0.102
+  },
+  "content_elements": {
+    "source_pdf_objective": {
+      "native_text_blocks": 145,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "drawing_groups": 85,
+      "pages_without_native_text": 0
+    },
+    "parser_output": {
+      "layout_boxes": 64,
+      "tables_detected": 8,
+      "images_detected": 4,
+      "headings_detected": 13,
+      "lists_detected": 18,
+      "formulas_detected": 0,
+      "captions_detected": 2,
+      "page_headers_detected": 0,
+      "page_footers_detected": 0,
+      "footnotes_detected": 0,
+      "text_blocks_detected": 18,
+      "code_blocks_detected": 1,
+      "charts_detected": null,
+      "box_class_counts": {
+        "caption": 2,
+        "code": 1,
+        "list_item": 18,
+        "picture": 4,
+        "section_header": 13,
+        "table": 8,
+        "text": 18
+      }
+    },
+    "docling_collections": {
+      "texts": 109,
+      "tables": 8,
+      "pictures": 4,
+      "key_value_items": 0,
+      "groups": 4,
+      "pages": 12
+    },
+    "raw_markdown": {
+      "tables": 8,
+      "image_references": 0,
+      "image_placeholders": 4,
+      "headings": 13,
+      "list_items": 19,
+      "code_blocks": 1
+    },
+    "clean_markdown": {
+      "tables": 8,
+      "image_references": 0,
+      "image_placeholders": 4,
+      "headings": 13,
+      "list_items": 19,
+      "code_blocks": 1
+    }
+  },
+  "heuristics": {
+    "raw": {
+      "total_characters": 13552,
+      "total_lines": 157,
+      "non_empty_lines": 108,
+      "whitespace_ratio": 0.251328,
+      "non_alphanumeric_ratio": 0.112972,
+      "empty_lines": 49,
+      "empty_pages": 1,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.074074,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.083333,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    },
+    "cleaned": {
+      "total_characters": 13552,
+      "total_lines": 157,
+      "non_empty_lines": 108,
+      "whitespace_ratio": 0.251328,
+      "non_alphanumeric_ratio": 0.112972,
+      "empty_lines": 49,
+      "empty_pages": 1,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.074074,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.083333,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    }
+  },
+  "tokens": {
+    "reference": {
+      "tokenizer": "o200k_base",
+      "raw_markdown_tokens": 3730,
+      "clean_markdown_tokens": 3730,
+      "tokens_removed": 0,
+      "token_reduction_percent": 0.0,
+      "estimated_header_footer_record_tokens": 0,
+      "estimated_other_removed_record_tokens": 0,
+      "raw_tokens_per_page": 310.833,
+      "clean_tokens_per_page": 310.833
+    },
+    "deployment": {
+      "model": null,
+      "tokenizer": null,
+      "raw_markdown_tokens": null,
+      "clean_markdown_tokens": null
+    }
+  },
+  "normalization": {
+    "config": {
+      "header_footer_cleanup": true,
+      "minimum_repeated_page_fraction": 0.3,
+      "minimum_repeated_page_count": 3,
+      "short_line_character_threshold": 20,
+      "keep_removed_content_audit": true,
+      "header_candidate_lines": 3,
+      "footer_candidate_lines": 3,
+      "normalize_page_numbers": true,
+      "trim_page_outer_whitespace": true
+    },
+    "removed_records": 0,
+    "header_records_removed": 0,
+    "footer_records_removed": 0
+  },
+  "output": {
+    "selected_artifacts": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "raw_markdown": "/outputs/docling/benchmark_controlado_v1/ocr_auto/raw.md",
+    "clean_markdown": "/outputs/docling/benchmark_controlado_v1/ocr_auto/document.md",
+    "document_jsonl": "/outputs/docling/benchmark_controlado_v1/ocr_auto/document.jsonl",
+    "removed_content_jsonl": "/outputs/docling/benchmark_controlado_v1/ocr_auto/removed_content.jsonl",
+    "raw_markdown_bytes": 13897,
+    "clean_markdown_bytes": 13897,
+    "document_jsonl_bytes": 66868,
+    "removed_content_jsonl_bytes": 0,
+    "raw_markdown_mb": 0.013253,
+    "clean_markdown_mb": 0.013253,
+    "document_jsonl_mb": 0.06377,
+    "run_log": "/outputs/docling/benchmark_controlado_v1/ocr_auto/run.log",
+    "metrics_json": "/outputs/docling/benchmark_controlado_v1/ocr_auto/metrics.json",
+    "input_to_clean_markdown_size_ratio": 23.199611
+  },
+  "docling_native": {
+    "conversion_status": "success",
+    "accelerator": {
+      "device_requested": "cpu",
+      "device_resolved": "cpu",
+      "threads": 10,
+      "cuda_available": false,
+      "torch_compile_enabled": false
+    },
+    "collections": {
+      "texts": 109,
+      "tables": 8,
+      "pictures": 4,
+      "key_value_items": 0,
+      "groups": 4,
+      "pages": 12
+    }
+  }
+}

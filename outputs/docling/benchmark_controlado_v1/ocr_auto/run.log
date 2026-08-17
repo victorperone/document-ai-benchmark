@@ -1,0 +1,9 @@
+[32m[INFO] 2026-08-17 02:18:56,246 [RapidOCR] base.py:23: Using engine_name: torch[0m
+[32m[INFO] 2026-08-17 02:18:56,251 [RapidOCR] device_config.py:57: Using CPU device[0m
+[32m[INFO] 2026-08-17 02:18:56,251 [RapidOCR] main.py:50: Using /home/appuser/.cache/docling/models/RapidOcr/PP-OCRv6_det_small.pth[0m
+[32m[INFO] 2026-08-17 02:18:56,366 [RapidOCR] base.py:23: Using engine_name: torch[0m
+[32m[INFO] 2026-08-17 02:18:56,366 [RapidOCR] device_config.py:57: Using CPU device[0m
+[32m[INFO] 2026-08-17 02:18:56,366 [RapidOCR] main.py:50: Using /home/appuser/.cache/docling/models/RapidOcr/ch_ptocr_mobile_v2.0_cls_mobile.pth[0m
+[32m[INFO] 2026-08-17 02:18:56,425 [RapidOCR] base.py:23: Using engine_name: torch[0m
+[32m[INFO] 2026-08-17 02:18:56,425 [RapidOCR] device_config.py:57: Using CPU device[0m
+[32m[INFO] 2026-08-17 02:18:56,425 [RapidOCR] main.py:50: Using /home/appuser/.cache/docling/models/RapidOcr/PP-OCRv6_rec_small.pth[0m

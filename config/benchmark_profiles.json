@@ -257,6 +257,17 @@
           "orientation_classification": false,
           "document_unwarping": false
         },
+        "mvp_structured": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": false,
+          "document_orientation_classification": true,
+          "textline_orientation": true,
+          "document_unwarping": false,
+          "region_detection": true,
+          "seal_recognition": false
+        },
         "full": {
           "ocr_enabled": true,
           "table_recognition": true,

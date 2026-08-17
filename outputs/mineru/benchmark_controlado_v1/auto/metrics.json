@@ -1,0 +1,281 @@
+{
+  "benchmark": {
+    "schema_version": 2,
+    "timestamp_utc": "2026-08-17T21:20:34.104688+00:00",
+    "reference_tokenizer": "o200k_base"
+  },
+  "run": {
+    "parser": "mineru",
+    "parser_display_name": "MinerU",
+    "profile": "auto",
+    "verbose": true,
+    "artifact_selection": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "resolved_config": {
+      "method": "auto",
+      "ocr_enabled": true,
+      "backend": "pipeline",
+      "threads": null
+    },
+    "versions": {
+      "mineru": "3.4.4",
+      "torch": "2.9.1+cpu",
+      "tiktoken": "0.13.0"
+    },
+    "python_version": "3.12.14",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41"
+  },
+  "document": {
+    "id": "benchmark_controlado_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "pages": 12,
+    "input_size_mb": 0.307
+  },
+  "source_pdf": {
+    "inventory_version": "source_inventory_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "file_size_mb": 0.307,
+    "pages": 12,
+    "native_text": {
+      "characters": 11176,
+      "text_blocks": 145,
+      "pages_with_native_text": 12,
+      "pages_without_native_text": 0,
+      "page_coverage_ratio": 1.0
+    },
+    "images": {
+      "image_blocks": 3,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "pages_with_embedded_images": 3
+    },
+    "vector_content": {
+      "drawing_groups": 85,
+      "measurement_complete": true
+    },
+    "inventory_processing_seconds": 0.054,
+    "warnings": []
+  },
+  "processing": {
+    "initialization_seconds": null,
+    "extraction_seconds": 46.549269,
+    "normalization_seconds": 0.000644,
+    "common_metrics_seconds": 0.17572,
+    "artifact_write_seconds": 0.000902,
+    "pipeline_seconds": 46.729507,
+    "pages_total": 12,
+    "pages_processed": 12,
+    "failed_pages": 0,
+    "partial_pages": null,
+    "empty_output_pages": 1,
+    "extraction_pages_per_second": 0.257791,
+    "pipeline_pages_per_second": 0.256797,
+    "conversion_status": "success",
+    "ocr": {
+      "enabled": true,
+      "mode": "auto",
+      "engine": null,
+      "backend": "pipeline",
+      "language": null,
+      "scale": null,
+      "effective_dpi": null,
+      "pages_requested": null,
+      "pages_processed": null,
+      "fallback_ocr_pages": null,
+      "failed_ocr_pages": null,
+      "requested_page_numbers": null,
+      "failed_page_numbers": null,
+      "tracking_note": "MinerU 3.4.4 auto mode does not expose a stable per-page OCR callback in this adapter. OCR page counts are therefore not inferred."
+    },
+    "warnings_count": 0,
+    "warning_messages": [],
+    "parser_log_warning_lines": 0,
+    "parser_log_error_lines": 0,
+    "errors_count": 0,
+    "retry_count": 0
+  },
+  "resources": {
+    "monitor_version": "process_tree_v2",
+    "sampling_interval_seconds": 0.1,
+    "logical_cpus": 20,
+    "processes_observed": 7,
+    "wall_time_seconds": 46.729,
+    "process_cpu_time_seconds": 377.9,
+    "average_cpu_percent": 807.02,
+    "peak_cpu_percent": 2044.0,
+    "average_cpu_system_capacity_percent": 40.35,
+    "peak_cpu_system_capacity_percent": 100.0,
+    "average_rss_mb": 2110.202,
+    "peak_rss_mb": 3240.027,
+    "disk_read_mb": 4365.191,
+    "disk_write_mb": 16.273
+  },
+  "content_elements": {
+    "source_pdf_objective": {
+      "native_text_blocks": 145,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "drawing_groups": 85,
+      "pages_without_native_text": 0
+    },
+    "parser_output": {
+      "layout_boxes": null,
+      "tables_detected": 8,
+      "images_detected": 0,
+      "headings_detected": null,
+      "lists_detected": null,
+      "formulas_detected": 4,
+      "captions_detected": 1,
+      "page_headers_detected": 12,
+      "page_footers_detected": 12,
+      "footnotes_detected": null,
+      "text_blocks_detected": 47,
+      "code_blocks_detected": 1,
+      "charts_detected": null,
+      "box_class_counts": {
+        "code": 1,
+        "equation": 4,
+        "footer": 12,
+        "header": 12,
+        "page_number": 12,
+        "table": 8,
+        "text": 47
+      }
+    },
+    "raw_markdown": {
+      "tables": 0,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 0,
+      "list_items": 16,
+      "code_blocks": 1
+    },
+    "clean_markdown": {
+      "tables": 0,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 0,
+      "list_items": 16,
+      "code_blocks": 1
+    }
+  },
+  "heuristics": {
+    "raw": {
+      "total_characters": 19837,
+      "total_lines": 212,
+      "non_empty_lines": 116,
+      "whitespace_ratio": 0.122599,
+      "non_alphanumeric_ratio": 0.141907,
+      "empty_lines": 96,
+      "empty_pages": 0,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.25,
+      "repeated_line_ratio": 0.189655,
+      "repeated_unique_lines": 2,
+      "short_line_ratio": 0.258621,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    },
+    "cleaned": {
+      "total_characters": 19215,
+      "total_lines": 144,
+      "non_empty_lines": 82,
+      "whitespace_ratio": 0.120167,
+      "non_alphanumeric_ratio": 0.1465,
+      "empty_lines": 62,
+      "empty_pages": 1,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.109756,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.219512,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    }
+  },
+  "tokens": {
+    "reference": {
+      "tokenizer": "o200k_base",
+      "raw_markdown_tokens": 6307,
+      "clean_markdown_tokens": 6085,
+      "tokens_removed": 222,
+      "token_reduction_percent": 3.52,
+      "estimated_header_footer_record_tokens": 188,
+      "estimated_other_removed_record_tokens": 0,
+      "raw_tokens_per_page": 525.583,
+      "clean_tokens_per_page": 507.083
+    },
+    "deployment": {
+      "model": null,
+      "tokenizer": null,
+      "raw_markdown_tokens": null,
+      "clean_markdown_tokens": null
+    }
+  },
+  "normalization": {
+    "config": {
+      "header_footer_cleanup": true,
+      "minimum_repeated_page_fraction": 0.3,
+      "minimum_repeated_page_count": 3,
+      "short_line_character_threshold": 20,
+      "keep_removed_content_audit": true,
+      "header_candidate_lines": 3,
+      "footer_candidate_lines": 3,
+      "normalize_page_numbers": true,
+      "trim_page_outer_whitespace": true
+    },
+    "removed_records": 34,
+    "header_records_removed": 11,
+    "footer_records_removed": 23
+  },
+  "output": {
+    "selected_artifacts": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "raw_markdown": "/outputs/mineru/benchmark_controlado_v1/auto/raw.md",
+    "clean_markdown": "/outputs/mineru/benchmark_controlado_v1/auto/document.md",
+    "document_jsonl": "/outputs/mineru/benchmark_controlado_v1/auto/document.jsonl",
+    "removed_content_jsonl": "/outputs/mineru/benchmark_controlado_v1/auto/removed_content.jsonl",
+    "raw_markdown_bytes": 20256,
+    "clean_markdown_bytes": 19590,
+    "document_jsonl_bytes": 73971,
+    "removed_content_jsonl_bytes": 7244,
+    "raw_markdown_mb": 0.019318,
+    "clean_markdown_mb": 0.018682,
+    "document_jsonl_mb": 0.070544,
+    "run_log": "/outputs/mineru/benchmark_controlado_v1/auto/run.log",
+    "metrics_json": "/outputs/mineru/benchmark_controlado_v1/auto/metrics.json",
+    "input_to_clean_markdown_size_ratio": 16.457631
+  },
+  "mineru_native": {
+    "backend": "pipeline",
+    "method": "auto",
+    "native_content_items": 96,
+    "native_markdown_bytes": 19549,
+    "content_type_counts": {
+      "code": 1,
+      "equation": 4,
+      "footer": 12,
+      "header": 12,
+      "page_number": 12,
+      "table": 8,
+      "text": 47
+    },
+    "intermediate_assets_persisted": false
+  }
+}

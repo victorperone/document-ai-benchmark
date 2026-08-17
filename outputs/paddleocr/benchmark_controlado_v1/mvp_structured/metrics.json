@@ -1,0 +1,319 @@
+{
+  "benchmark": {
+    "schema_version": 2,
+    "timestamp_utc": "2026-08-17T22:30:30.185369+00:00",
+    "reference_tokenizer": "o200k_base"
+  },
+  "run": {
+    "parser": "paddleocr",
+    "parser_display_name": "PaddleOCR / PPStructureV3",
+    "profile": "mvp_structured",
+    "verbose": true,
+    "artifact_selection": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "resolved_config": {
+      "ocr_enabled": true,
+      "table_recognition": true,
+      "formula_recognition": true,
+      "chart_recognition": false,
+      "document_orientation_classification": true,
+      "textline_orientation": true,
+      "document_unwarping": false,
+      "region_detection": true,
+      "seal_recognition": false,
+      "backend": "PPStructureV3",
+      "model_root": "/home/appuser/.paddlex/official_models",
+      "models": {
+        "layout": "PP-DocLayout_plus-L",
+        "region": "PP-DocBlockLayout",
+        "doc_orientation": "PP-LCNet_x1_0_doc_ori",
+        "text_detection": "PP-OCRv5_server_det",
+        "textline_orientation": "PP-LCNet_x1_0_textline_ori",
+        "text_recognition": "PP-OCRv5_server_rec",
+        "table_classification": "PP-LCNet_x1_0_table_cls",
+        "wired_table_structure": "SLANeXt_wired",
+        "wireless_table_structure": "SLANet_plus",
+        "wired_table_cells": "RT-DETR-L_wired_table_cell_det",
+        "wireless_table_cells": "RT-DETR-L_wireless_table_cell_det",
+        "table_orientation": "PP-LCNet_x1_0_doc_ori",
+        "formula": "PP-FormulaNet_plus-L"
+      }
+    },
+    "versions": {
+      "paddleocr": "3.7.0",
+      "paddlepaddle": "3.2.0",
+      "paddlex": "3.7.2",
+      "tiktoken": "0.13.0"
+    },
+    "python_version": "3.12.14",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41"
+  },
+  "document": {
+    "id": "benchmark_controlado_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "pages": 12,
+    "input_size_mb": 0.307
+  },
+  "source_pdf": {
+    "inventory_version": "source_inventory_v1",
+    "file": "benchmark_controlado_v1.pdf",
+    "sha256": "8089a3e142f9e8bcc5b92e5b2cc5313ff9be41ef5f2947aae69984ee07a749f7",
+    "file_size_mb": 0.307,
+    "pages": 12,
+    "native_text": {
+      "characters": 11176,
+      "text_blocks": 145,
+      "pages_with_native_text": 12,
+      "pages_without_native_text": 0,
+      "page_coverage_ratio": 1.0
+    },
+    "images": {
+      "image_blocks": 3,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "pages_with_embedded_images": 3
+    },
+    "vector_content": {
+      "drawing_groups": 85,
+      "measurement_complete": true
+    },
+    "inventory_processing_seconds": 0.054,
+    "warnings": []
+  },
+  "processing": {
+    "initialization_seconds": 11.73335,
+    "extraction_seconds": 104.358192,
+    "normalization_seconds": 0.000747,
+    "common_metrics_seconds": 0.184452,
+    "artifact_write_seconds": 0.000628,
+    "pipeline_seconds": 116.281342,
+    "pages_total": 12,
+    "pages_processed": 12,
+    "failed_pages": 0,
+    "partial_pages": null,
+    "empty_output_pages": 0,
+    "extraction_pages_per_second": 0.114989,
+    "pipeline_pages_per_second": 0.103198,
+    "conversion_status": "success",
+    "ocr": {
+      "enabled": true,
+      "mode": "structured_document",
+      "engine": "PP-OCRv5_server",
+      "backend": "PPStructureV3",
+      "language": null,
+      "scale": null,
+      "effective_dpi": null,
+      "pages_requested": 12,
+      "pages_processed": 12,
+      "fallback_ocr_pages": null,
+      "failed_ocr_pages": null,
+      "requested_page_numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "failed_page_numbers": null,
+      "tracking_note": "PPStructureV3 returned an overall_ocr_res object for each returned page. Explicit per-page OCR failure callbacks are not inferred."
+    },
+    "warnings_count": 2,
+    "warning_messages": [
+      "/usr/local/lib/python3.12/site-packages/paddle/utils/cpp_extension/extension_utils.py:718: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md",
+      "warnings.warn(warning_message)"
+    ],
+    "parser_log_warning_lines": 2,
+    "parser_log_error_lines": 0,
+    "errors_count": 0,
+    "retry_count": 0
+  },
+  "resources": {
+    "monitor_version": "process_tree_v2",
+    "sampling_interval_seconds": 0.1,
+    "logical_cpus": 20,
+    "processes_observed": 2,
+    "wall_time_seconds": 116.281,
+    "process_cpu_time_seconds": 1038.51,
+    "average_cpu_percent": 908.69,
+    "peak_cpu_percent": 1159.7,
+    "average_cpu_system_capacity_percent": 45.43,
+    "peak_cpu_system_capacity_percent": 57.98,
+    "average_rss_mb": 4549.49,
+    "peak_rss_mb": 6204.168,
+    "disk_read_mb": 2216.645,
+    "disk_write_mb": 0.07
+  },
+  "content_elements": {
+    "source_pdf_objective": {
+      "native_text_blocks": 145,
+      "embedded_image_occurrences": 3,
+      "unique_embedded_image_xrefs": 3,
+      "drawing_groups": 85,
+      "pages_without_native_text": 0
+    },
+    "parser_output": {
+      "layout_boxes": 97,
+      "tables_detected": 8,
+      "images_detected": null,
+      "headings_detected": null,
+      "lists_detected": null,
+      "formulas_detected": 5,
+      "captions_detected": null,
+      "page_headers_detected": null,
+      "page_footers_detected": null,
+      "footnotes_detected": null,
+      "text_blocks_detected": null,
+      "code_blocks_detected": null,
+      "charts_detected": null,
+      "box_class_counts": null
+    },
+    "raw_markdown": {
+      "tables": 0,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 7,
+      "list_items": 12,
+      "code_blocks": 0
+    },
+    "clean_markdown": {
+      "tables": 0,
+      "image_references": 0,
+      "image_placeholders": 0,
+      "headings": 7,
+      "list_items": 12,
+      "code_blocks": 0
+    }
+  },
+  "heuristics": {
+    "raw": {
+      "total_characters": 14401,
+      "total_lines": 168,
+      "non_empty_lines": 66,
+      "whitespace_ratio": 0.108326,
+      "non_alphanumeric_ratio": 0.161239,
+      "empty_lines": 102,
+      "empty_pages": 0,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.030303,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.030303,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    },
+    "cleaned": {
+      "total_characters": 14398,
+      "total_lines": 165,
+      "non_empty_lines": 66,
+      "whitespace_ratio": 0.10814,
+      "non_alphanumeric_ratio": 0.161272,
+      "empty_lines": 99,
+      "empty_pages": 0,
+      "replacement_character_ratio": 0.0,
+      "control_character_ratio": 0.0,
+      "duplicate_line_ratio": 0.030303,
+      "repeated_line_ratio": 0.0,
+      "repeated_unique_lines": 0,
+      "short_line_ratio": 0.030303,
+      "short_line_character_threshold": 20,
+      "line_end_hyphenation_count": 0
+    }
+  },
+  "tokens": {
+    "reference": {
+      "tokenizer": "o200k_base",
+      "raw_markdown_tokens": 4666,
+      "clean_markdown_tokens": 4666,
+      "tokens_removed": 0,
+      "token_reduction_percent": 0.0,
+      "estimated_header_footer_record_tokens": 0,
+      "estimated_other_removed_record_tokens": 0,
+      "raw_tokens_per_page": 388.833,
+      "clean_tokens_per_page": 388.833
+    },
+    "deployment": {
+      "model": null,
+      "tokenizer": null,
+      "raw_markdown_tokens": null,
+      "clean_markdown_tokens": null
+    }
+  },
+  "normalization": {
+    "config": {
+      "header_footer_cleanup": true,
+      "minimum_repeated_page_fraction": 0.3,
+      "minimum_repeated_page_count": 3,
+      "short_line_character_threshold": 20,
+      "keep_removed_content_audit": true,
+      "header_candidate_lines": 3,
+      "footer_candidate_lines": 3,
+      "normalize_page_numbers": true,
+      "trim_page_outer_whitespace": true
+    },
+    "removed_records": 0,
+    "header_records_removed": 0,
+    "footer_records_removed": 0
+  },
+  "output": {
+    "selected_artifacts": [
+      "raw.md",
+      "document.md",
+      "document.jsonl",
+      "metrics.json",
+      "removed_content.jsonl",
+      "run.log"
+    ],
+    "raw_markdown": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/raw.md",
+    "clean_markdown": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/document.md",
+    "document_jsonl": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/document.jsonl",
+    "removed_content_jsonl": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/removed_content.jsonl",
+    "raw_markdown_bytes": 14706,
+    "clean_markdown_bytes": 14703,
+    "document_jsonl_bytes": 35429,
+    "removed_content_jsonl_bytes": 0,
+    "raw_markdown_mb": 0.014025,
+    "clean_markdown_mb": 0.014022,
+    "document_jsonl_mb": 0.033788,
+    "run_log": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/run.log",
+    "metrics_json": "/outputs/paddleocr/benchmark_controlado_v1/mvp_structured/metrics.json",
+    "input_to_clean_markdown_size_ratio": 21.927838
+  },
+  "paddleocr_native": {
+    "backend": "PPStructureV3",
+    "native_page_results": 12,
+    "native_page_markdown_bytes": 14693,
+    "ocr_texts": 542,
+    "tables": 8,
+    "formulas": 5,
+    "layout_blocks": 97,
+    "document_angle_counts": {
+      "0": 10,
+      "90": 1,
+      "270": 1
+    },
+    "textline_orientation_counts": {
+      "0": 520,
+      "1": 8
+    },
+    "region_detection": true,
+    "chart_recognition": false,
+    "document_unwarping": false,
+    "seal_recognition": false,
+    "intermediate_assets_persisted": false
+  }
+}

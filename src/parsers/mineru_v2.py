@@ -1,0 +1,1292 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+from pathlib import Path
+from time import perf_counter
+import json
+import os
+import subprocess
+import tempfile
+from datetime import datetime, timezone
+from importlib import metadata
+import platform
+
+from collections import Counter
+from typing import Any
+
+from src.benchmark.artifact_policy import ArtifactPolicy
+from src.benchmark.artifacts import finalize_artifacts
+from src.benchmark.config import (
+    get_normalization_config,
+    get_profile,
+    get_reference_tokenizer,
+)
+from src.benchmark.paths import build_output_paths
+from src.benchmark.metrics_writer import write_json
+from src.benchmark.resource_monitor import ResourceMonitor
+from src.benchmark.runtime_io import add_runtime_arguments
+
+
+PARSER_NAME = "mineru"
+PARSER_DISPLAY_NAME = "MinerU"
+
+
+def _calculate_sha256(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as file:
+        for block in iter(
+            lambda: file.read(
+                1024 * 1024
+            ),
+            b"",
+        ):
+            digest.update(block)
+
+    return digest.hexdigest()
+
+
+def _load_cached_inventory(
+    input_path: Path,
+    output_root: Path,
+) -> dict[str, Any]:
+    inventory_path = (
+        output_root
+        / "_source_inventory"
+        / f"{input_path.stem}.json"
+    )
+
+    if not inventory_path.is_file():
+        raise FileNotFoundError(
+            "Cached Source Inventory not found: "
+            f"{inventory_path}"
+        )
+
+    inventory = json.loads(
+        inventory_path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    if not isinstance(
+        inventory,
+        dict,
+    ):
+        raise TypeError(
+            "Cached Source Inventory must "
+            "be a JSON object."
+        )
+
+    expected_file = input_path.name
+
+    if inventory.get("file") != expected_file:
+        raise ValueError(
+            "Source Inventory file mismatch: "
+            f"expected {expected_file!r}, "
+            f"got {inventory.get('file')!r}."
+        )
+
+    actual_sha256 = _calculate_sha256(
+        input_path
+    )
+
+    cached_sha256 = inventory.get(
+        "sha256"
+    )
+
+    if cached_sha256 != actual_sha256:
+        raise ValueError(
+            "Source Inventory SHA256 mismatch: "
+            f"cached={cached_sha256!r}, "
+            f"actual={actual_sha256!r}."
+        )
+
+    return inventory
+
+
+def _package_version(
+    package_name: str,
+) -> str | None:
+    try:
+        return metadata.version(
+            package_name
+        )
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="MinerU benchmark adapter v2.",
+    )
+
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=Path,
+    )
+
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("/outputs"),
+    )
+
+    parser.add_argument(
+        "--profile",
+        default="auto",
+    )
+
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help=(
+            "Optional thread-count override. "
+            "If omitted, the MinerU/runtime default is preserved."
+        ),
+    )
+
+    add_runtime_arguments(parser)
+
+    args = parser.parse_args()
+
+    args.artifact_policy = ArtifactPolicy.from_cli(
+        args.artifacts
+    )
+
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+
+    input_path = args.input.resolve()
+
+    if not input_path.is_file():
+        raise SystemExit(
+            f"Input not found: {input_path}"
+        )
+
+    profile = get_profile(
+        PARSER_NAME,
+        args.profile,
+    )
+
+    normalization_config = (
+        get_normalization_config()
+    )
+
+    tokenizer_name = (
+        get_reference_tokenizer()
+    )
+
+    paths = build_output_paths(
+        args.output_root,
+        PARSER_NAME,
+        input_path.stem,
+        args.profile,
+        create=False,
+    )
+    inventory = _load_cached_inventory(
+        input_path,
+        args.output_root,
+    )
+
+    method = str(
+        profile.get(
+            "method",
+            "auto",
+        )
+    )
+
+    print("=" * 72)
+    print("DOCUMENT AI BENCHMARK V2")
+    print("=" * 72)
+    print(f"Parser:       {PARSER_DISPLAY_NAME}")
+    print(f"Input:        {input_path}")
+    print(f"Profile:      {args.profile}")
+    print("Backend:      pipeline")
+    print(f"Method:       {method}")
+    print(
+        "Threads:      "
+        + (
+            str(args.threads)
+            if args.threads is not None
+            else "MinerU default"
+        )
+    )
+    print(f"Tokenizer:    {tokenizer_name}")
+    print(
+        "Native temp:  ephemeral"
+    )
+    print("=" * 72)
+
+    monitor = ResourceMonitor()
+
+    pipeline_started = perf_counter()
+    monitor.start()
+
+    try:
+        extraction_started = perf_counter()
+
+        native_result = run_mineru_native(
+            input_path=input_path,
+            method=method,
+            threads=args.threads,
+            verbose=args.verbose,
+        )
+
+        extraction_seconds = (
+            perf_counter()
+            - extraction_started
+        )
+
+        content_list = (
+            native_result["content_list"]
+        )
+
+        middle = native_result["middle"]
+
+        page_count = get_mineru_page_count(
+            middle,
+            content_list,
+        )
+
+        (
+            page_texts,
+            parser_page_elements,
+            parser_native_pages,
+        ) = build_mineru_page_contract(
+            content_list,
+            page_count,
+        )
+
+        artifact_result = finalize_artifacts(
+            paths=paths,
+            document_id=input_path.stem,
+            source_file=input_path.name,
+            parser_name=PARSER_NAME,
+            profile_name=args.profile,
+            page_texts=page_texts,
+            parser_page_elements=(
+                parser_page_elements
+            ),
+            parser_native_pages=(
+                parser_native_pages
+            ),
+            tokenizer_name=tokenizer_name,
+            normalization_config=(
+                normalization_config
+            ),
+            artifact_policy=(
+                args.artifact_policy
+            ),
+        )
+
+        if args.artifact_policy.includes(
+            "run.log"
+        ):
+            paths.run_log.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            paths.run_log.write_text(
+                native_result["log_text"],
+                encoding="utf-8",
+            )
+
+    except Exception:
+        monitor.stop()
+        raise
+
+    resources = monitor.stop()
+
+    pipeline_seconds = (
+        perf_counter()
+        - pipeline_started
+    )
+
+    # -----------------------------------------------------------------
+    # Benchmark metrics v2
+    # -----------------------------------------------------------------
+
+    type_counts = Counter(
+        str(
+            item.get(
+                "type",
+                "unknown",
+            )
+        )
+        for item in content_list
+    )
+
+    observed_pages = {
+        item["page_idx"]
+        for item in content_list
+        if isinstance(
+            item.get("page_idx"),
+            int,
+        )
+    }
+
+    pages_processed = len(
+        observed_pages
+    )
+
+    failed_pages = max(
+        page_count
+        - pages_processed,
+        0,
+    )
+
+    source_summary = dict(
+        inventory
+    )
+
+    source_summary.pop(
+        "per_page",
+        None,
+    )
+
+    source_objective = {
+        "native_text_blocks": (
+            inventory[
+                "native_text"
+            ]["text_blocks"]
+        ),
+        "embedded_image_occurrences": (
+            inventory[
+                "images"
+            ][
+                "embedded_image_occurrences"
+            ]
+        ),
+        "unique_embedded_image_xrefs": (
+            inventory[
+                "images"
+            ][
+                "unique_embedded_image_xrefs"
+            ]
+        ),
+        "drawing_groups": (
+            inventory[
+                "vector_content"
+            ]["drawing_groups"]
+        ),
+        "pages_without_native_text": (
+            inventory[
+                "native_text"
+            ][
+                "pages_without_native_text"
+            ]
+        ),
+    }
+
+    warning_messages = [
+        line.strip()
+        for line
+        in native_result[
+            "log_text"
+        ].splitlines()
+        if "warning" in line.lower()
+    ]
+
+    parser_log_error_lines = sum(
+        "error" in line.lower()
+        for line
+        in native_result[
+            "log_text"
+        ].splitlines()
+    )
+
+    table_captions = sum(
+        bool(
+            _text_list(
+                item.get(
+                    "table_caption"
+                )
+            )
+        )
+        for item in content_list
+        if item.get("type")
+        == "table"
+    )
+
+    parser_output = {
+        "layout_boxes": None,
+        "tables_detected": (
+            type_counts.get(
+                "table",
+                0,
+            )
+        ),
+        "images_detected": (
+            type_counts.get(
+                "image",
+                0,
+            )
+        ),
+        "headings_detected": None,
+        "lists_detected": None,
+        "formulas_detected": (
+            type_counts.get(
+                "equation",
+                0,
+            )
+        ),
+        "captions_detected": (
+            table_captions
+        ),
+        "page_headers_detected": (
+            type_counts.get(
+                "header",
+                0,
+            )
+        ),
+        "page_footers_detected": (
+            type_counts.get(
+                "footer",
+                0,
+            )
+        ),
+        "footnotes_detected": None,
+        "text_blocks_detected": (
+            type_counts.get(
+                "text",
+                0,
+            )
+        ),
+        "code_blocks_detected": (
+            type_counts.get(
+                "code",
+                0,
+            )
+        ),
+        "charts_detected": None,
+        "box_class_counts": dict(
+            sorted(
+                type_counts.items()
+            )
+        ),
+    }
+
+    input_bytes = (
+        input_path.stat().st_size
+    )
+
+    clean_bytes = (
+        artifact_result[
+            "output"
+        ][
+            "clean_markdown_bytes"
+        ]
+    )
+
+    size_ratio = (
+        round(
+            input_bytes
+            / clean_bytes,
+            6,
+        )
+        if clean_bytes
+        else None
+    )
+
+    resolved_config = dict(
+        profile
+    )
+
+    resolved_config[
+        "backend"
+    ] = "pipeline"
+
+    resolved_config[
+        "threads"
+    ] = args.threads
+
+    output_metrics = dict(
+        artifact_result[
+            "output"
+        ]
+    )
+
+    output_metrics[
+        "run_log"
+    ] = (
+        str(
+            paths.run_log
+        )
+        if args.artifact_policy.includes(
+            "run.log"
+        )
+        else None
+    )
+
+    output_metrics[
+        "metrics_json"
+    ] = (
+        str(
+            paths.metrics_json
+        )
+        if args.artifact_policy.includes(
+            "metrics.json"
+        )
+        else None
+    )
+
+    output_metrics[
+        "input_to_clean_markdown_size_ratio"
+    ] = size_ratio
+
+    native_markdown_bytes = len(
+        native_result[
+            "native_markdown"
+        ].encode(
+            "utf-8"
+        )
+    )
+
+    metrics = {
+        "benchmark": {
+            "schema_version": 2,
+            "timestamp_utc": (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            ),
+            "reference_tokenizer": (
+                tokenizer_name
+            ),
+        },
+
+        "run": {
+            "parser": PARSER_NAME,
+            "parser_display_name": (
+                PARSER_DISPLAY_NAME
+            ),
+            "profile": args.profile,
+            "verbose": args.verbose,
+            "artifact_selection": (
+                args.artifact_policy
+                .as_list()
+            ),
+            "resolved_config": (
+                resolved_config
+            ),
+            "versions": {
+                "mineru": (
+                    _package_version(
+                        "mineru"
+                    )
+                ),
+                "torch": (
+                    _package_version(
+                        "torch"
+                    )
+                ),
+                "tiktoken": (
+                    _package_version(
+                        "tiktoken"
+                    )
+                ),
+            },
+            "python_version": (
+                platform.python_version()
+            ),
+            "platform": (
+                platform.platform()
+            ),
+        },
+
+        "document": {
+            "id": input_path.stem,
+            "file": input_path.name,
+            "sha256": (
+                inventory["sha256"]
+            ),
+            "pages": page_count,
+            "input_size_mb": (
+                inventory[
+                    "file_size_mb"
+                ]
+            ),
+        },
+
+        "source_pdf": (
+            source_summary
+        ),
+
+        "processing": {
+            "initialization_seconds": None,
+            "extraction_seconds": round(
+                extraction_seconds,
+                6,
+            ),
+            "normalization_seconds": (
+                artifact_result[
+                    "timing"
+                ][
+                    "normalization_seconds"
+                ]
+            ),
+            "common_metrics_seconds": (
+                artifact_result[
+                    "timing"
+                ][
+                    "common_metrics_seconds"
+                ]
+            ),
+            "artifact_write_seconds": (
+                artifact_result[
+                    "timing"
+                ][
+                    "artifact_write_seconds"
+                ]
+            ),
+            "pipeline_seconds": round(
+                pipeline_seconds,
+                6,
+            ),
+            "pages_total": (
+                page_count
+            ),
+            "pages_processed": (
+                pages_processed
+            ),
+            "failed_pages": (
+                failed_pages
+            ),
+            "partial_pages": None,
+            "empty_output_pages": (
+                artifact_result[
+                    "empty_output_pages"
+                ]
+            ),
+            "extraction_pages_per_second": (
+                round(
+                    page_count
+                    / extraction_seconds,
+                    6,
+                )
+                if extraction_seconds
+                else None
+            ),
+            "pipeline_pages_per_second": (
+                round(
+                    page_count
+                    / pipeline_seconds,
+                    6,
+                )
+                if pipeline_seconds
+                else None
+            ),
+            "conversion_status": (
+                "success"
+            ),
+            "ocr": {
+                "enabled": bool(
+                    profile.get(
+                        "ocr_enabled",
+                        True,
+                    )
+                ),
+                "mode": method,
+                "engine": None,
+                "backend": (
+                    "pipeline"
+                ),
+                "language": None,
+                "scale": None,
+                "effective_dpi": None,
+                "pages_requested": None,
+                "pages_processed": None,
+                "fallback_ocr_pages": None,
+                "failed_ocr_pages": None,
+                "requested_page_numbers": None,
+                "failed_page_numbers": None,
+                "tracking_note": (
+                    "MinerU 3.4.4 auto mode "
+                    "does not expose a stable "
+                    "per-page OCR callback in "
+                    "this adapter. OCR page "
+                    "counts are therefore not "
+                    "inferred."
+                ),
+            },
+            "warnings_count": len(
+                warning_messages
+            ),
+            "warning_messages": (
+                warning_messages
+            ),
+            "parser_log_warning_lines": (
+                len(
+                    warning_messages
+                )
+            ),
+            "parser_log_error_lines": (
+                parser_log_error_lines
+            ),
+            "errors_count": 0,
+            "retry_count": 0,
+        },
+
+        "resources": resources,
+
+        "content_elements": {
+            "source_pdf_objective": (
+                source_objective
+            ),
+            "parser_output": (
+                parser_output
+            ),
+            "raw_markdown": (
+                artifact_result[
+                    "content_elements"
+                ][
+                    "raw_markdown"
+                ]
+            ),
+            "clean_markdown": (
+                artifact_result[
+                    "content_elements"
+                ][
+                    "clean_markdown"
+                ]
+            ),
+        },
+
+        "heuristics": (
+            artifact_result[
+                "heuristics"
+            ]
+        ),
+
+        "tokens": (
+            artifact_result[
+                "tokens"
+            ]
+        ),
+
+        "normalization": (
+            artifact_result[
+                "normalization"
+            ]
+        ),
+
+        "output": (
+            output_metrics
+        ),
+
+        "mineru_native": {
+            "backend": (
+                "pipeline"
+            ),
+            "method": method,
+            "native_content_items": (
+                len(
+                    content_list
+                )
+            ),
+            "native_markdown_bytes": (
+                native_markdown_bytes
+            ),
+            "content_type_counts": dict(
+                sorted(
+                    type_counts.items()
+                )
+            ),
+            "intermediate_assets_persisted": (
+                False
+            ),
+        },
+    }
+
+    if args.artifact_policy.includes(
+        "metrics.json"
+    ):
+        write_json(
+            paths.metrics_json,
+            metrics,
+        )
+
+    print()
+    print("=" * 72)
+    print("MINERU V2 ARTIFACT RESULT")
+    print("=" * 72)
+
+    print(
+        f"Pages:                 "
+        f"{len(page_texts)}/{page_count}"
+    )
+
+    print(
+        "Empty pages:           "
+        f"{artifact_result['empty_output_pages']}"
+    )
+
+    print(
+        "Native content items:  "
+        f"{len(content_list)}"
+    )
+
+    print(
+        "Native Markdown bytes: "
+        f"{len(native_result['native_markdown'].encode('utf-8'))}"
+    )
+
+    print(
+        "Image refs in pages:   "
+        f"{sum('images/' in text for text in page_texts)}"
+    )
+
+    print(
+        "Intermediate assets:   "
+        "temporary / discarded"
+    )
+
+    print(
+        f"Pipeline:              "
+        f"{pipeline_seconds:.3f} s"
+    )
+
+    print(
+        f"Average CPU:           "
+        f"{resources['average_cpu_percent']:.2f}%"
+    )
+
+    print(
+        f"Peak CPU:              "
+        f"{resources['peak_cpu_percent']:.2f}%"
+    )
+
+    print(
+        f"Average RAM:           "
+        f"{resources['average_rss_mb']:.3f} MB"
+    )
+
+    print(
+        f"Peak RAM:              "
+        f"{resources['peak_rss_mb']:.3f} MB"
+    )
+
+    print(
+        f"Output:                "
+        f"{paths.output_dir}"
+    )
+
+    print("=" * 72)
+
+
+def _text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    return [
+        str(item).strip()
+        for item in value
+        if str(item).strip()
+    ]
+
+
+def render_mineru_item(
+    item: dict[str, Any],
+) -> str:
+    item_type = str(
+        item.get("type", "unknown")
+    )
+
+    if item_type in {
+        "text",
+        "header",
+        "footer",
+        "page_number",
+        "equation",
+    }:
+        return str(
+            item.get("text", "")
+        ).strip()
+
+    if item_type == "code":
+        blocks: list[str] = []
+
+        blocks.extend(
+            _text_list(
+                item.get("code_caption")
+            )
+        )
+
+        code_body = str(
+            item.get("code_body", "")
+        ).strip()
+
+        if code_body:
+            blocks.append(
+                "```\n"
+                + code_body
+                + "\n```"
+            )
+
+        blocks.extend(
+            _text_list(
+                item.get("code_footnote")
+            )
+        )
+
+        return "\n\n".join(blocks)
+
+    if item_type == "table":
+        blocks = []
+
+        blocks.extend(
+            _text_list(
+                item.get("table_caption")
+            )
+        )
+
+        table_body = str(
+            item.get("table_body", "")
+        ).strip()
+
+        if table_body:
+            blocks.append(table_body)
+
+        blocks.extend(
+            _text_list(
+                item.get("table_footnote")
+            )
+        )
+
+        return "\n\n".join(blocks)
+
+    # Fail-safe for future MinerU item types:
+    # preserve an exposed textual field when one exists,
+    # but never invent textual content.
+    fallback_text = item.get("text")
+
+    if isinstance(fallback_text, str):
+        return fallback_text.strip()
+
+    return ""
+
+
+def build_mineru_page_contract(
+    content_list: list[dict[str, Any]],
+    page_count: int,
+) -> tuple[
+    list[str],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    if page_count < 1:
+        raise ValueError(
+            "MinerU page_count must be >= 1."
+        )
+
+    grouped: list[
+        list[dict[str, Any]]
+    ] = [
+        []
+        for _ in range(page_count)
+    ]
+
+    for index, item in enumerate(
+        content_list
+    ):
+        if not isinstance(item, dict):
+            raise TypeError(
+                "MinerU content_list item "
+                f"{index} is not a dictionary."
+            )
+
+        page_idx = item.get("page_idx")
+
+        if not isinstance(page_idx, int):
+            raise ValueError(
+                "MinerU content_list item "
+                f"{index} has invalid page_idx: "
+                f"{page_idx!r}"
+            )
+
+        if not 0 <= page_idx < page_count:
+            raise ValueError(
+                "MinerU content_list item "
+                f"{index} has out-of-range "
+                f"page_idx={page_idx}; "
+                f"page_count={page_count}."
+            )
+
+        grouped[page_idx].append(item)
+
+    page_texts: list[str] = []
+    parser_page_elements: list[
+        dict[str, Any]
+    ] = []
+    parser_native_pages: list[
+        dict[str, Any]
+    ] = []
+
+    for page_idx, items in enumerate(
+        grouped
+    ):
+        blocks: list[str] = []
+
+        for item in items:
+            rendered = render_mineru_item(
+                item
+            )
+
+            if rendered:
+                blocks.append(rendered)
+
+        page_texts.append(
+            "\n\n".join(blocks).strip()
+        )
+
+        type_counts = Counter(
+            str(
+                item.get(
+                    "type",
+                    "unknown",
+                )
+            )
+            for item in items
+        )
+
+        parser_page_elements.append(
+            {
+                "items": len(items),
+                "type_counts": dict(
+                    sorted(
+                        type_counts.items()
+                    )
+                ),
+            }
+        )
+
+        parser_native_pages.append(
+            {
+                "page_idx": page_idx,
+                "items": items,
+            }
+        )
+
+    return (
+        page_texts,
+        parser_page_elements,
+        parser_native_pages,
+    )
+
+def find_mineru_output(
+    root: Path,
+    exact_name: str,
+) -> Path:
+    matches = list(
+        root.rglob(exact_name)
+    )
+
+    if not matches:
+        raise FileNotFoundError(
+            "MinerU native output not found: "
+            f"{exact_name}"
+        )
+
+    if len(matches) > 1:
+        raise RuntimeError(
+            "Multiple MinerU native outputs found "
+            f"for {exact_name}: {matches}"
+        )
+
+    return matches[0]
+
+
+def get_mineru_page_count(
+    middle: dict[str, Any],
+    content_list: list[dict[str, Any]],
+) -> int:
+    pdf_info = middle.get("pdf_info")
+
+    if isinstance(pdf_info, list) and pdf_info:
+        return len(pdf_info)
+
+    page_indexes = [
+        item.get("page_idx")
+        for item in content_list
+        if isinstance(
+            item.get("page_idx"),
+            int,
+        )
+    ]
+
+    if page_indexes:
+        return max(page_indexes) + 1
+
+    raise ValueError(
+        "Unable to determine MinerU page count."
+    )
+
+
+def run_mineru_native(
+    *,
+    input_path: Path,
+    method: str,
+    threads: int | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    if method not in {
+        "txt",
+        "auto",
+        "ocr",
+    }:
+        raise ValueError(
+            f"Unsupported MinerU method: {method}"
+        )
+
+    environment = os.environ.copy()
+
+    if threads is not None:
+        thread_value = str(threads)
+
+        environment[
+            "MINERU_INTRA_OP_NUM_THREADS"
+        ] = thread_value
+
+        environment[
+            "OMP_NUM_THREADS"
+        ] = thread_value
+
+        environment[
+            "MKL_NUM_THREADS"
+        ] = thread_value
+
+    with tempfile.TemporaryDirectory(
+        prefix="mineru_v2_",
+    ) as temporary_directory:
+        native_root = Path(
+            temporary_directory
+        )
+
+        command = [
+            "mineru",
+            "-p",
+            str(input_path),
+            "-o",
+            str(native_root),
+            "-b",
+            "pipeline",
+            "-m",
+            method,
+        ]
+
+        process = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=environment,
+            text=True,
+            check=False,
+        )
+
+        log_text = (
+            process.stdout or ""
+        )
+
+        if verbose and log_text:
+            print(
+                log_text,
+                end=(
+                    ""
+                    if log_text.endswith("\n")
+                    else "\n"
+                ),
+            )
+
+        if process.returncode != 0:
+            log_tail = "\n".join(
+                log_text.splitlines()[-80:]
+            )
+
+            raise RuntimeError(
+                "MinerU exited with code "
+                f"{process.returncode}.\n\n"
+                f"{log_tail}"
+            )
+
+        document_id = input_path.stem
+
+        markdown_path = find_mineru_output(
+            native_root,
+            f"{document_id}.md",
+        )
+
+        content_list_path = (
+            find_mineru_output(
+                native_root,
+                f"{document_id}_content_list.json",
+            )
+        )
+
+        middle_path = find_mineru_output(
+            native_root,
+            f"{document_id}_middle.json",
+        )
+
+        native_markdown = (
+            markdown_path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+        )
+
+        content_list = json.loads(
+            content_list_path.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        middle = json.loads(
+            middle_path.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        if not isinstance(
+            content_list,
+            list,
+        ):
+            raise TypeError(
+                "MinerU content_list must "
+                "be a list."
+            )
+
+        if not isinstance(
+            middle,
+            dict,
+        ):
+            raise TypeError(
+                "MinerU middle output must "
+                "be a dictionary."
+            )
+
+        return {
+            "command": command,
+            "returncode": (
+                process.returncode
+            ),
+            "native_markdown": (
+                native_markdown
+            ),
+            "content_list": (
+                content_list
+            ),
+            "middle": middle,
+            "log_text": log_text,
+        }
+
+if __name__ == "__main__":
+    main()

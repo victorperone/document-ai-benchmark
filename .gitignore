@@ -61,3 +61,6 @@ huggingface/
 logs/*
 !logs/.gitkeep
 EOF
+
+# Ignore files downloaded
+*:Zone.Identifier

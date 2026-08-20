@@ -6,6 +6,8 @@ import json
 import subprocess
 import sys
 import time
+import os
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,11 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "benchmark_profiles.json"
 LOGS_DIR = ROOT / "logs"
 
-# (parser, profile) pairs present in config but not yet supported by v2 adapters.
-_KNOWN_UNSUPPORTED: set[tuple[str, str]] = {
-    ("docling", "ocr_auto_visual"),         # picture_description rejected by v2
-    ("paddleocr", "ocr_structured_visual"), # does not satisfy v2 contract
-}
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -110,11 +107,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Continue to the next job instead of aborting on first failure.",
     )
-    p.add_argument(
+    execution_mode = p.add_mutually_exclusive_group()
+
+    execution_mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the full job plan without executing.",
+        help=(
+            "Print the full job plan "
+            "without executing."
+        ),
     )
+
+    execution_mode.add_argument(
+        "--preflight",
+        action="store_true",
+        help=(
+            "Validate the batch environment "
+            "without running document inference."
+        ),
+    )
+
     p.add_argument(
         "--compose-override",
         metavar="FILE",
@@ -178,12 +190,6 @@ def validate_batch(jobs_spec: list[tuple[str, str]], config: dict) -> None:
     if errors:
         raise SystemExit("Validation errors:\n" + "\n".join(f"  - {e}" for e in errors))
 
-    unsupported = [(p, pr) for p, pr in jobs_spec if (p, pr) in _KNOWN_UNSUPPORTED]
-    if unsupported:
-        print("WARNING: the following jobs are not yet supported by the v2 adapters:")
-        for parser_name, profile_name in unsupported:
-            print(f"  - {parser_name}/{profile_name}")
-        print("  They will likely fail with the current v2 adapters. Use individual validated parser/profile pairs instead.\n")
 
 
 # ── Phase 3: Build source inventories ────────────────────────────────────────
@@ -444,6 +450,425 @@ def run_summary_scripts() -> None:
         subprocess.run([sys.executable, str(script_path)], cwd=str(ROOT))
 
 
+def run_parser_preflight(
+    compose_base: list[str],
+    parser_name: str,
+    profile_name: str,
+) -> dict:
+    cmd = compose_base + [
+        "run",
+        "--rm",
+        "-T",
+        "--no-deps",
+        "-e", "PYTHONPATH=/app",
+        "--entrypoint", "python",
+        parser_name,
+        "/app/scripts/parser_preflight.py",
+        "--parser", parser_name,
+        "--profile", profile_name,
+    ]
+
+    result = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+
+    preflight_json: dict | None = None
+    for line in reversed((result.stdout or "").splitlines()):
+        if line.startswith("PREFLIGHT_JSON="):
+            try:
+                preflight_json = json.loads(
+                    line[len("PREFLIGHT_JSON="):]
+                )
+            except json.JSONDecodeError:
+                pass
+            break
+
+    if preflight_json is None:
+        tail = "\n".join(
+            (result.stdout + "\n" + result.stderr)
+            .splitlines()[-20:]
+        )
+        return {
+            "schema_version": 1,
+            "parser": parser_name,
+            "profile": profile_name,
+            "ok": False,
+            "checks": [
+                {
+                    "name": "parser preflight protocol",
+                    "status": "fail",
+                    "detail": tail.strip() or "No PREFLIGHT_JSON= line found",
+                }
+            ],
+        }
+
+    return preflight_json
+
+
+def build_compose_base(
+    compose_override: str | None,
+) -> list[str]:
+    compose_base: list[str] = [
+        "docker",
+        "compose",
+    ]
+
+    if compose_override:
+        compose_base += [
+            "-f",
+            "compose.yaml",
+            "-f",
+            compose_override,
+        ]
+
+    return compose_base
+
+
+def nearest_existing_parent(
+    path: Path,
+) -> Path:
+    current = path.resolve()
+
+    while (
+        not current.exists()
+        and current != current.parent
+    ):
+        current = current.parent
+
+    return current
+
+
+_PREFLIGHT_STATUS_LABEL: dict[str, str] = {
+    "pass": "OK  ",
+    "warn": "WARN",
+    "fail": "FAIL",
+}
+
+
+def run_preflight(
+    jobs_spec: list[
+        tuple[str, str]
+    ],
+    docs: list[Path],
+    input_dir: Path,
+    output_root: Path,
+    compose_base: list[str],
+    compose_override: str | None,
+) -> bool:
+    failures = 0
+    warnings_count = 0
+
+    def report(
+        ok: bool,
+        label: str,
+        detail: str | None = None,
+    ) -> None:
+        nonlocal failures
+
+        if ok:
+            status = "OK"
+        else:
+            status = "FAIL"
+            failures += 1
+
+        print(
+            f"  [{status:<4}] {label}"
+        )
+
+        if detail:
+            for line in detail.splitlines():
+                print(
+                    f"         {line}"
+                )
+
+    print()
+    print(
+        "PREFLIGHT — infrastructure"
+    )
+    print(
+        "-" * 72
+    )
+
+    # --------------------------------------------------
+    # Benchmark configuration
+    # --------------------------------------------------
+
+    report(
+        CONFIG_PATH.is_file(),
+        "benchmark configuration",
+        str(CONFIG_PATH),
+    )
+
+    # --------------------------------------------------
+    # Input
+    # --------------------------------------------------
+
+    report(
+        input_dir.is_dir(),
+        "input directory",
+        str(input_dir),
+    )
+
+    report(
+        bool(docs),
+        "PDF discovery",
+        f"{len(docs)} PDF(s)",
+    )
+
+    # --------------------------------------------------
+    # Output
+    # --------------------------------------------------
+
+    writable_parent = (
+        nearest_existing_parent(
+            output_root
+        )
+    )
+
+    output_writable = (
+        writable_parent.is_dir()
+        and os.access(
+            writable_parent,
+            os.W_OK,
+        )
+    )
+
+    report(
+        output_writable,
+        "output path writable",
+        str(writable_parent),
+    )
+
+    # --------------------------------------------------
+    # Required project files
+    # --------------------------------------------------
+
+    inventory_script = (
+        ROOT
+        / "scripts"
+        / "build_source_inventory.py"
+    )
+
+    report(
+        inventory_script.is_file(),
+        "source inventory script",
+        str(inventory_script),
+    )
+
+    parsers = sorted(
+        {
+            parser_name
+            for parser_name, _
+            in jobs_spec
+        }
+    )
+
+    for parser_name in parsers:
+        adapter = (
+            ROOT
+            / "src"
+            / "parsers"
+            / f"{parser_name}_v2.py"
+        )
+
+        report(
+            adapter.is_file(),
+            (
+                f"adapter "
+                f"{parser_name}_v2.py"
+            ),
+            str(adapter),
+        )
+
+    # --------------------------------------------------
+    # Compose override
+    # --------------------------------------------------
+
+    if compose_override:
+        override_path = Path(
+            compose_override
+        )
+
+        if not override_path.is_absolute():
+            override_path = (
+                ROOT
+                / override_path
+            )
+
+        report(
+            override_path.is_file(),
+            "compose override",
+            str(override_path),
+        )
+
+    # --------------------------------------------------
+    # Docker CLI
+    # --------------------------------------------------
+
+    docker_path = shutil.which(
+        "docker"
+    )
+
+    report(
+        docker_path is not None,
+        "Docker CLI",
+        docker_path,
+    )
+
+    if docker_path is None:
+        print()
+        print(
+            f"Preflight result: FAIL "
+            f"({failures} failure(s))"
+        )
+        return False
+
+    # --------------------------------------------------
+    # Docker daemon
+    # --------------------------------------------------
+
+    docker_info = subprocess.run(
+        [
+            "docker",
+            "info",
+            "--format",
+            "{{.ServerVersion}}",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+
+    docker_detail = (
+        docker_info.stdout.strip()
+        if docker_info.returncode == 0
+        else docker_info.stderr.strip()
+    )
+
+    report(
+        docker_info.returncode == 0,
+        "Docker daemon",
+        docker_detail or None,
+    )
+
+    # --------------------------------------------------
+    # Docker Compose configuration
+    # --------------------------------------------------
+
+    compose_result = subprocess.run(
+        compose_base
+        + [
+            "config",
+            "--services",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+
+    if compose_result.returncode != 0:
+        report(
+            False,
+            "Docker Compose configuration",
+            (
+                compose_result.stderr.strip()
+                or compose_result.stdout.strip()
+            ),
+        )
+
+    else:
+        report(
+            True,
+            "Docker Compose configuration",
+        )
+
+        services = {
+            line.strip()
+            for line
+            in compose_result.stdout.splitlines()
+            if line.strip()
+        }
+
+        required_services = (
+            set(parsers)
+            | {
+                "pymupdf",
+            }
+        )
+
+        for service in sorted(
+            required_services
+        ):
+            report(
+                service in services,
+                f"Compose service: {service}",
+            )
+
+    # --------------------------------------------------
+    # Parser / profile
+    # --------------------------------------------------
+
+    print()
+    print("PREFLIGHT — parser/profile")
+    print("-" * 72)
+
+    seen: set[tuple[str, str]] = set()
+    ordered_pairs: list[tuple[str, str]] = []
+    for pair in jobs_spec:
+        if pair not in seen:
+            seen.add(pair)
+            ordered_pairs.append(pair)
+
+    for parser_name, profile_name in ordered_pairs:
+        print()
+        print(f"{parser_name}/{profile_name}")
+
+        result = run_parser_preflight(
+            compose_base,
+            parser_name,
+            profile_name,
+        )
+
+        for check in result.get("checks", []):
+            status = check.get("status", "fail")
+            label = _PREFLIGHT_STATUS_LABEL.get(
+                status,
+                status.upper()[:4],
+            )
+            detail = check.get("detail")
+            print(f"  [{label}] {check['name']}")
+            if detail:
+                for line in str(detail).splitlines():
+                    print(f"         {line}")
+            if status == "fail":
+                failures += 1
+            elif status == "warn":
+                warnings_count += 1
+
+    print()
+
+    if failures == 0:
+        suffix = (
+            f" ({warnings_count} warning(s))"
+            if warnings_count
+            else ""
+        )
+        print(f"Preflight result: PASS{suffix}")
+    else:
+        parts = [f"{failures} failure(s)"]
+        if warnings_count:
+            parts.append(f"{warnings_count} warning(s)")
+        print(
+            "Preflight result: FAIL "
+            f"({', '.join(parts)})"
+        )
+
+    return failures == 0
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -489,6 +914,8 @@ def main() -> None:
         print(f"Overlay:    {args.compose_override}")
     print("=" * 72)
 
+    compose_base = build_compose_base(args.compose_override)
+
     if args.dry_run:
         print("\nDRY RUN — run plan:\n")
         for n, rec in enumerate(plan, 1):
@@ -503,16 +930,23 @@ def main() -> None:
         print()
         return
 
+    if args.preflight:
+        ok = run_preflight(
+            jobs_spec,
+            docs,
+            input_dir,
+            output_root,
+            compose_base,
+            args.compose_override,
+        )
+        sys.exit(0 if ok else 1)
+
     LOGS_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOGS_DIR / f"batch_{ts}.log"
     results_path = LOGS_DIR / f"batch_{ts}_results.jsonl"
     print(f"Master log: {log_path.relative_to(ROOT)}")
     print(f"Results:    {results_path.relative_to(ROOT)}\n")
-
-    compose_base: list[str] = ["docker", "compose"]
-    if args.compose_override:
-        compose_base += ["-f", "compose.yaml", "-f", args.compose_override]
 
     with log_path.open("w", encoding="utf-8") as lf:
 

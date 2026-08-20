@@ -5,6 +5,7 @@ import importlib.metadata
 import inspect
 import json
 import platform
+import shutil
 import subprocess
 import warnings
 from collections import Counter
@@ -37,6 +38,10 @@ from src.benchmark.metrics_writer import (
 )
 from src.benchmark.paths import (
     build_output_paths,
+)
+from src.benchmark.preflight import (
+    make_check,
+    make_result,
 )
 from src.benchmark.resource_monitor import (
     ResourceMonitor,
@@ -548,6 +553,259 @@ def count_log_lines(
             errors="replace",
         ).splitlines()
     )
+
+
+_PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
+    {
+        "layout_module",
+        "ocr_enabled",
+        "ocr_mode",
+        "ocr_engine",
+        "ocr_language",
+        "ocr_dpi",
+        "parser_header",
+        "parser_footer",
+        "force_text",
+        "write_images",
+        "embed_images",
+        "page_separators",
+    }
+)
+
+_TO_MARKDOWN_ARGS: frozenset[str] = frozenset(
+    {
+        "page_chunks",
+        "use_ocr",
+        "force_ocr",
+        "ocr_function",
+        "ocr_language",
+        "ocr_dpi",
+        "header",
+        "footer",
+        "force_text",
+        "write_images",
+        "embed_images",
+        "page_separators",
+        "show_progress",
+    }
+)
+
+
+def preflight_profile(
+    profile_name: str,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def _pkg(name: str) -> str | None:
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+
+    # --------------------------------------------------
+    # Profile configuration
+    # --------------------------------------------------
+
+    try:
+        profile = get_profile(PARSER_NAME, profile_name)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile configuration",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        return make_result(PARSER_NAME, profile_name, checks)
+
+    checks.append(
+        make_check("profile configuration", "pass", profile_name)
+    )
+
+    # --------------------------------------------------
+    # Profile keys
+    # --------------------------------------------------
+
+    missing_keys = sorted(_PYMUPDF_PROFILE_KEYS - set(profile))
+    unknown_keys = sorted(set(profile) - _PYMUPDF_PROFILE_KEYS)
+    key_errors: list[str] = []
+    if missing_keys:
+        key_errors.append("missing: " + ", ".join(missing_keys))
+    if unknown_keys:
+        key_errors.append("unknown: " + ", ".join(unknown_keys))
+
+    if key_errors:
+        checks.append(
+            make_check("profile keys", "fail", "; ".join(key_errors))
+        )
+    else:
+        checks.append(make_check("profile keys", "pass"))
+
+    # --------------------------------------------------
+    # OCR coherence
+    # --------------------------------------------------
+
+    ocr_enabled = bool(profile.get("ocr_enabled"))
+    ocr_mode = str(profile.get("ocr_mode", ""))
+    valid_ocr_modes = {"disabled", "auto", "forced"}
+
+    if ocr_mode not in valid_ocr_modes:
+        checks.append(
+            make_check(
+                "ocr_mode",
+                "fail",
+                f"must be one of {sorted(valid_ocr_modes)}, got {ocr_mode!r}",
+            )
+        )
+    else:
+        checks.append(make_check("ocr_mode", "pass", ocr_mode))
+
+    if not ocr_enabled and ocr_mode != "disabled":
+        checks.append(
+            make_check(
+                "ocr coherence",
+                "fail",
+                f"ocr_enabled=False but ocr_mode={ocr_mode!r} (expected 'disabled')",
+            )
+        )
+    elif ocr_enabled:
+        ocr_engine = str(profile.get("ocr_engine", ""))
+        ocr_language = str(profile.get("ocr_language", ""))
+        ocr_dpi = profile.get("ocr_dpi", 0)
+        coherence_errors: list[str] = []
+        if not ocr_engine:
+            coherence_errors.append("ocr_engine is empty")
+        if not ocr_language:
+            coherence_errors.append("ocr_language is empty")
+        if not isinstance(ocr_dpi, int) or ocr_dpi <= 0:
+            coherence_errors.append(
+                f"ocr_dpi must be int > 0, got {ocr_dpi!r}"
+            )
+        if coherence_errors:
+            checks.append(
+                make_check(
+                    "ocr coherence",
+                    "fail",
+                    "; ".join(coherence_errors),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "ocr coherence",
+                    "pass",
+                    f"engine={ocr_engine} language={ocr_language} dpi={ocr_dpi}",
+                )
+            )
+
+    # --------------------------------------------------
+    # Required packages
+    # --------------------------------------------------
+
+    for pkg in ("pymupdf", "pymupdf4llm", "pymupdf-layout"):
+        ver = _pkg(pkg)
+        checks.append(
+            make_check(
+                pkg,
+                "pass" if ver is not None else "fail",
+                ver or "not installed",
+            )
+        )
+
+    if ocr_enabled:
+        for pkg in ("rapidocr", "onnxruntime"):
+            ver = _pkg(pkg)
+            checks.append(
+                make_check(
+                    pkg,
+                    "pass" if ver is not None else "fail",
+                    ver or "not installed",
+                )
+            )
+
+        try:
+            is_callable = callable(rapidtess_api.exec_ocr)
+            checks.append(
+                make_check(
+                    "rapidtess_api.exec_ocr",
+                    "pass" if is_callable else "fail",
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                make_check(
+                    "rapidtess_api.exec_ocr",
+                    "fail",
+                    f"{type(exc).__name__}: {exc}",
+                )
+            )
+
+    # --------------------------------------------------
+    # pymupdf4llm.to_markdown API
+    # --------------------------------------------------
+
+    try:
+        signature = inspect.signature(pymupdf4llm.to_markdown)
+        parameters = signature.parameters
+
+        has_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+
+        if has_var_kwargs:
+            api_status = "pass"
+            api_detail = (
+                "to_markdown exposes **kwargs; "
+                "keyword arguments are accepted "
+                "through the public wrapper"
+            )
+        else:
+            missing_args = sorted(
+                _TO_MARKDOWN_ARGS - set(parameters)
+            )
+            if missing_args:
+                api_status = "fail"
+                api_detail = (
+                    "missing args: " + ", ".join(missing_args)
+                )
+            else:
+                api_status = "pass"
+                api_detail = (
+                    f"{len(_TO_MARKDOWN_ARGS)} argument(s) validated"
+                )
+
+        checks.append(
+            make_check(
+                "pymupdf4llm.to_markdown API",
+                api_status,
+                api_detail,
+            )
+        )
+
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "pymupdf4llm.to_markdown API",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    # --------------------------------------------------
+    # Tesseract binary (optional — warn if absent)
+    # --------------------------------------------------
+
+    tess_path = shutil.which("tesseract")
+    checks.append(
+        make_check(
+            "tesseract binary",
+            "pass" if tess_path else "warn",
+            tess_path or "not found in PATH",
+        )
+    )
+
+    return make_result(PARSER_NAME, profile_name, checks)
 
 
 def main() -> None:

@@ -44,6 +44,7 @@ from src.benchmark.config import (
 )
 from src.benchmark.metrics_writer import write_json
 from src.benchmark.paths import build_output_paths
+from src.benchmark.preflight import make_check, make_result
 from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import (
     add_runtime_arguments,
@@ -588,12 +589,14 @@ def count_log_lines(
 
 def _resolve_profile_runtime(
     profile: dict[str, Any],
-    args: argparse.Namespace,
+    device_override: str | None = None,
+    threads_override: int | None = None,
+    model_artifacts_override: Path | None = None,
 ) -> dict[str, Any]:
     resolved = dict(profile)
 
     requested_device = (
-        args.device
+        device_override
         or str(
             resolved.get(
                 "accelerator_device",
@@ -602,8 +605,8 @@ def _resolve_profile_runtime(
         )
     )
     threads = (
-        args.threads
-        if args.threads is not None
+        threads_override
+        if threads_override is not None
         else int(
             resolved.get(
                 "threads",
@@ -618,8 +621,8 @@ def _resolve_profile_runtime(
         )
 
     model_artifacts_path = (
-        args.model_artifacts_path
-        if args.model_artifacts_path is not None
+        model_artifacts_override
+        if model_artifacts_override is not None
         else Path(
             resolved.get(
                 "model_artifacts_path",
@@ -806,6 +809,246 @@ def _build_pipeline_options(
     return options
 
 
+def preflight_profile(
+    profile_name: str,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    # --------------------------------------------------
+    # Profile configuration
+    # --------------------------------------------------
+
+    try:
+        raw_profile = get_profile(PARSER_NAME, profile_name)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile configuration",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        return make_result(PARSER_NAME, profile_name, checks)
+
+    checks.append(
+        make_check("profile configuration", "pass", profile_name)
+    )
+
+    # --------------------------------------------------
+    # Runtime resolution (no CLI overrides)
+    # --------------------------------------------------
+
+    try:
+        profile = _resolve_profile_runtime(raw_profile)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile resolution",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        return make_result(PARSER_NAME, profile_name, checks)
+
+    # --------------------------------------------------
+    # Threads
+    # --------------------------------------------------
+
+    threads = int(profile.get("threads", 0))
+    checks.append(
+        make_check(
+            "threads",
+            "pass" if threads > 0 else "fail",
+            str(threads),
+        )
+    )
+
+    # --------------------------------------------------
+    # Accelerator device
+    # --------------------------------------------------
+
+    device = str(profile.get("accelerator_device", ""))
+    valid_devices = {"cpu", "cuda", "auto"}
+    if device in valid_devices:
+        checks.append(make_check("accelerator_device", "pass", device))
+    else:
+        checks.append(
+            make_check(
+                "accelerator_device",
+                "fail",
+                f"must be one of {sorted(valid_devices)}, got {device!r}",
+            )
+        )
+
+    # --------------------------------------------------
+    # Model artifacts path
+    # --------------------------------------------------
+
+    artifacts_path = Path(
+        profile.get("model_artifacts_path", "")
+    )
+    checks.append(
+        make_check(
+            "model artifacts path",
+            "pass" if artifacts_path.is_dir() else "fail",
+            str(artifacts_path),
+        )
+    )
+
+    # --------------------------------------------------
+    # OCR
+    # --------------------------------------------------
+
+    ocr_enabled = bool(
+        profile.get(
+            "ocr_enabled",
+            False,
+        )
+    )
+
+    ocr_mode = str(
+        profile.get(
+            "ocr_mode",
+            "disabled",
+        )
+    )
+
+    if not ocr_enabled:
+        if ocr_mode != "disabled":
+            checks.append(
+                make_check(
+                    "ocr_mode",
+                    "fail",
+                    (
+                        "ocr_enabled is false "
+                        f"but ocr_mode={ocr_mode!r}"
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "ocr_mode",
+                    "pass",
+                    "disabled",
+                )
+            )
+
+    else:
+        if ocr_mode == "disabled":
+            checks.append(
+                make_check(
+                    "ocr_mode",
+                    "fail",
+                    (
+                        "ocr_enabled is true "
+                        "but ocr_mode is disabled"
+                    ),
+                )
+            )
+        else:
+            try:
+                _resolve_ocr_mode(
+                    ocr_mode
+                )
+            except Exception as exc:
+                checks.append(
+                    make_check(
+                        "ocr_mode",
+                        "fail",
+                        (
+                            f"{type(exc).__name__}: "
+                            f"{exc}"
+                        ),
+                    )
+                )
+            else:
+                checks.append(
+                    make_check(
+                        "ocr_mode",
+                        "pass",
+                        ocr_mode,
+                    )
+                )
+
+    if ocr_enabled:
+        ocr_engine = str(profile.get("ocr_engine", ""))
+        if ocr_engine != "rapidocr":
+            checks.append(
+                make_check(
+                    "ocr_engine",
+                    "fail",
+                    f"only 'rapidocr' is supported, got {ocr_engine!r}",
+                )
+            )
+        else:
+            checks.append(make_check("ocr_engine", "pass", ocr_engine))
+
+        ocr_backend = str(profile.get("ocr_backend", ""))
+        checks.append(
+            make_check(
+                "ocr_backend",
+                "pass" if ocr_backend else "fail",
+                ocr_backend or "empty",
+            )
+        )
+
+    # --------------------------------------------------
+    # Table mode
+    # --------------------------------------------------
+
+    table_mode_str = str(profile.get("table_mode", "accurate"))
+    try:
+        _resolve_table_mode(table_mode_str)
+        checks.append(make_check("table_mode", "pass", table_mode_str))
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "table_mode",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    # --------------------------------------------------
+    # CUDA
+    # --------------------------------------------------
+
+    if device == "cuda":
+        cuda_ok = torch.cuda.is_available()
+        checks.append(
+            make_check(
+                "CUDA availability",
+                "pass" if cuda_ok else "fail",
+                "available" if cuda_ok else "torch.cuda.is_available() returned False",
+            )
+        )
+    elif device == "auto":
+        resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
+        checks.append(
+            make_check(
+                "CUDA availability",
+                "pass",
+                f"auto → {resolved_device}",
+            )
+        )
+
+    # --------------------------------------------------
+    # picture_description (not yet supported)
+    # --------------------------------------------------
+
+    if bool(profile.get("picture_description", False)):
+        checks.append(
+            make_check(
+                "picture description",
+                "fail",
+                "picture description is not supported by docling_v2 yet",
+            )
+        )
+
+    return make_result(PARSER_NAME, profile_name, checks)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -825,7 +1068,9 @@ def main() -> None:
             PARSER_NAME,
             args.profile,
         ),
-        args,
+        device_override=args.device,
+        threads_override=args.threads,
+        model_artifacts_override=args.model_artifacts_path,
     )
 
     normalization_config = (

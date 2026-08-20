@@ -246,16 +246,22 @@
           "table_recognition": true,
           "formula_recognition": false,
           "chart_recognition": false,
-          "orientation_classification": false,
-          "document_unwarping": false
+          "document_orientation_classification": false,
+          "textline_orientation": false,
+          "document_unwarping": false,
+          "region_detection": true,
+          "seal_recognition": false
         },
         "default": {
           "ocr_enabled": true,
           "table_recognition": true,
           "formula_recognition": true,
           "chart_recognition": false,
-          "orientation_classification": false,
-          "document_unwarping": false
+          "document_orientation_classification": false,
+          "textline_orientation": false,
+          "document_unwarping": false,
+          "region_detection": true,
+          "seal_recognition": false
         },
         "mvp_structured": {
           "ocr_enabled": true,
@@ -273,17 +279,22 @@
           "table_recognition": true,
           "formula_recognition": true,
           "chart_recognition": true,
-          "orientation_classification": true,
-          "document_unwarping": true
+          "document_orientation_classification": true,
+          "textline_orientation": true,
+          "document_unwarping": true,
+          "region_detection": true,
+          "seal_recognition": false
         },
         "ocr_structured_visual": {
           "ocr_enabled": true,
           "table_recognition": true,
           "formula_recognition": true,
           "chart_recognition": true,
-          "chart_recognition_model": "PP-Chart2Table",
-          "orientation_classification": false,
-          "document_unwarping": false
+          "document_orientation_classification": false,
+          "textline_orientation": false,
+          "document_unwarping": false,
+          "region_detection": true,
+          "seal_recognition": false
         }
       }
     }

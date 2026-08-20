@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from time import perf_counter
 import json
+import shutil
 import os
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ from src.benchmark.config import (
 )
 from src.benchmark.paths import build_output_paths
 from src.benchmark.metrics_writer import write_json
+from src.benchmark.preflight import make_check, make_result
 from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import add_runtime_arguments
 
@@ -159,6 +161,183 @@ def parse_args() -> argparse.Namespace:
     )
 
     return args
+
+
+_MINERU_VALID_METHODS: frozenset[str] = frozenset(
+    {"txt", "auto", "ocr"}
+)
+
+
+def preflight_profile(
+    profile_name: str,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def _pkg(name: str) -> str | None:
+        try:
+            return metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return None
+
+    # --------------------------------------------------
+    # Profile configuration
+    # --------------------------------------------------
+
+    try:
+        profile = get_profile(PARSER_NAME, profile_name)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile configuration",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        return make_result(PARSER_NAME, profile_name, checks)
+
+    checks.append(
+        make_check("profile configuration", "pass", profile_name)
+    )
+
+    # --------------------------------------------------
+    # Method
+    # --------------------------------------------------
+
+    method = str(profile.get("method", ""))
+    method_ok = method in _MINERU_VALID_METHODS
+    checks.append(
+        make_check(
+            "method",
+            "pass" if method_ok else "fail",
+            method if method_ok else (
+                f"{method!r} — must be one of "
+                f"{sorted(_MINERU_VALID_METHODS)}"
+            ),
+        )
+    )
+
+    # --------------------------------------------------
+    # OCR coherence
+    # --------------------------------------------------
+
+    ocr_enabled = bool(profile.get("ocr_enabled", True))
+    if method == "txt" and ocr_enabled:
+        checks.append(
+            make_check(
+                "ocr coherence",
+                "warn",
+                "method=txt but ocr_enabled=True",
+            )
+        )
+    elif method in {"auto", "ocr"} and not ocr_enabled:
+        checks.append(
+            make_check(
+                "ocr coherence",
+                "warn",
+                f"method={method} but ocr_enabled=False",
+            )
+        )
+
+    # --------------------------------------------------
+    # MinerU CLI
+    # --------------------------------------------------
+
+    mineru_path = shutil.which("mineru")
+    checks.append(
+        make_check(
+            "mineru CLI",
+            "pass" if mineru_path is not None else "fail",
+            mineru_path or "not found in PATH",
+        )
+    )
+
+    # --------------------------------------------------
+    # Packages
+    # --------------------------------------------------
+
+    for pkg in ("mineru", "torch"):
+        ver = _pkg(pkg)
+        checks.append(
+            make_check(
+                pkg,
+                "pass" if ver is not None else "fail",
+                ver or "not installed",
+            )
+        )
+
+    # --------------------------------------------------
+    # Environment variables
+    # --------------------------------------------------
+
+    model_source = os.environ.get("MINERU_MODEL_SOURCE")
+    checks.append(
+        make_check(
+            "MINERU_MODEL_SOURCE",
+            "pass" if model_source == "local" else "fail",
+            model_source or "not set",
+        )
+    )
+
+    config_path_str = os.environ.get("MINERU_TOOLS_CONFIG_JSON")
+    if config_path_str:
+        config_path = Path(config_path_str)
+        config_ok = False
+        config_detail: str
+        try:
+            config_text = config_path.read_text(encoding="utf-8")
+            json.loads(config_text)
+            config_ok = True
+            config_detail = str(config_path)
+        except FileNotFoundError:
+            config_detail = f"not found: {config_path}"
+        except json.JSONDecodeError as exc:
+            config_detail = f"invalid JSON: {exc}"
+        checks.append(
+            make_check(
+                "MINERU_TOOLS_CONFIG_JSON",
+                "pass" if config_ok else "fail",
+                config_detail,
+            )
+        )
+    else:
+        checks.append(
+            make_check(
+                "MINERU_TOOLS_CONFIG_JSON",
+                "fail",
+                "not set",
+            )
+        )
+
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        hf_path = Path(hf_home)
+        checks.append(
+            make_check(
+                "HF_HOME",
+                "pass" if hf_path.exists() else "warn",
+                hf_home
+                + ("" if hf_path.exists() else " (does not exist yet)"),
+            )
+        )
+    else:
+        checks.append(
+            make_check("HF_HOME", "warn", "not set")
+        )
+
+    # --------------------------------------------------
+    # /models/mineru
+    # --------------------------------------------------
+
+    models_root = Path("/models/mineru")
+    checks.append(
+        make_check(
+            "/models/mineru",
+            "pass" if models_root.is_dir() else "fail",
+            str(models_root),
+        )
+    )
+
+    return make_result(PARSER_NAME, profile_name, checks)
 
 
 def main() -> None:

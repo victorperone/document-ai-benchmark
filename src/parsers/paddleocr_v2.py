@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import platform
 from collections import Counter
@@ -22,6 +23,7 @@ from src.benchmark.config import (
 )
 from src.benchmark.metrics_writer import write_json
 from src.benchmark.paths import build_output_paths
+from src.benchmark.preflight import make_check, make_result
 from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import (
     add_runtime_arguments,
@@ -32,6 +34,18 @@ from src.benchmark.runtime_io import (
 PARSER_NAME = "paddleocr"
 PARSER_DISPLAY_NAME = "PaddleOCR / PPStructureV3"
 
+PROFILE_BOOL_KEYS = (
+    "ocr_enabled",
+    "table_recognition",
+    "formula_recognition",
+    "chart_recognition",
+    "document_orientation_classification",
+    "textline_orientation",
+    "document_unwarping",
+    "region_detection",
+    "seal_recognition",
+)
+
 DEFAULT_MODEL_ROOT = Path(
     "/home/appuser/.paddlex/official_models"
 )
@@ -41,6 +55,7 @@ MODEL_NAMES = {
     "layout": "PP-DocLayout_plus-L",
     "region": "PP-DocBlockLayout",
     "doc_orientation": "PP-LCNet_x1_0_doc_ori",
+    "doc_unwarping": "UVDoc",
     "text_detection": "PP-OCRv5_server_det",
     "textline_orientation": "PP-LCNet_x1_0_textline_ori",
     "text_recognition": "PP-OCRv5_server_rec",
@@ -51,8 +66,10 @@ MODEL_NAMES = {
     "wireless_table_cells": "RT-DETR-L_wireless_table_cell_det",
     "table_orientation": "PP-LCNet_x1_0_doc_ori",
     "formula": "PP-FormulaNet_plus-L",
+    "chart": "PP-Chart2Table",
+    "seal_detection": "PP-OCRv4_server_seal_det",
+    "seal_recognition": "PP-OCRv5_server_rec",
 }
-
 
 
 def _calculate_sha256(
@@ -179,19 +196,97 @@ def parse_args() -> argparse.Namespace:
 
     return args
 
+def required_model_keys(
+    profile: dict[str, Any],
+) -> set[str]:
+    keys = {
+        "layout",
+        "text_detection",
+        "text_recognition",
+    }
+
+    if profile["region_detection"]:
+        keys.add(
+            "region"
+        )
+
+    if profile[
+        "document_orientation_classification"
+    ]:
+        keys.add(
+            "doc_orientation"
+        )
+
+    if profile[
+        "document_unwarping"
+    ]:
+        keys.add(
+            "doc_unwarping"
+        )
+
+    if profile[
+        "textline_orientation"
+    ]:
+        keys.add(
+            "textline_orientation"
+        )
+
+    if profile[
+        "table_recognition"
+    ]:
+        keys.update(
+            {
+                "table_classification",
+                "wired_table_structure",
+                "wireless_table_structure",
+                "wired_table_cells",
+                "wireless_table_cells",
+                "table_orientation",
+            }
+        )
+
+    if profile[
+        "formula_recognition"
+    ]:
+        keys.add(
+            "formula"
+        )
+
+    if profile[
+        "chart_recognition"
+    ]:
+        keys.add(
+            "chart"
+        )
+
+    if profile[
+        "seal_recognition"
+    ]:
+        keys.update(
+            {
+                "seal_detection",
+                "seal_recognition",
+            }
+        )
+
+    return keys
 
 def resolve_model_paths(
     model_root: Path,
     profile: dict[str, Any],
 ) -> dict[str, Path]:
-    skip_keys: set[str] = set()
-    if not profile.get("formula_recognition"):
-        skip_keys.add("formula")
+    required_keys = required_model_keys(
+        profile
+    )
 
     paths = {
-        key: model_root / model_name
-        for key, model_name in MODEL_NAMES.items()
-        if key not in skip_keys
+        key: (
+            model_root
+            / MODEL_NAMES[key]
+        )
+        for key in sorted(
+            required_keys
+        )
     }
 
     missing = [
@@ -218,35 +313,171 @@ def resolve_model_paths(
 def validate_profile(
     profile: dict[str, Any],
 ) -> None:
-    required = {
-        "ocr_enabled": True,
-        "table_recognition": True,
-        "formula_recognition": True,
-        "chart_recognition": False,
-        "document_orientation_classification": True,
-        "textline_orientation": True,
-        "document_unwarping": False,
-        "region_detection": True,
-        "seal_recognition": False,
-    }
+    errors: list[str] = []
 
-    mismatches = []
+    expected_keys = set(
+        PROFILE_BOOL_KEYS
+    )
+    actual_keys = set(
+        profile
+    )
 
-    for key, expected in required.items():
-        actual = profile.get(key)
+    missing_keys = sorted(
+        expected_keys - actual_keys
+    )
+    unknown_keys = sorted(
+        actual_keys - expected_keys
+    )
 
-        if actual is not expected:
-            mismatches.append(
-                f"{key}: expected {expected!r}, "
-                f"got {actual!r}"
+    if missing_keys:
+        errors.append(
+            "missing keys: "
+            + ", ".join(
+                missing_keys
+            )
+        )
+
+    if unknown_keys:
+        errors.append(
+            "unknown keys: "
+            + ", ".join(
+                unknown_keys
+            )
+        )
+
+    for key in PROFILE_BOOL_KEYS:
+        if key not in profile:
+            continue
+
+        value = profile[key]
+
+        if type(value) is not bool:
+            errors.append(
+                f"{key} must be bool, "
+                f"got {type(value).__name__}"
             )
 
-    if mismatches:
-        raise ValueError(
-            "Profile does not match the validated "
-            "PaddleOCR MVP configuration:\n  - "
-            + "\n  - ".join(mismatches)
+    if (
+        "ocr_enabled" in profile
+        and profile["ocr_enabled"] is not True
+    ):
+        errors.append(
+            "ocr_enabled must be true for "
+            "the PPStructureV3 adapter"
         )
+
+    if errors:
+        raise ValueError(
+            "Invalid PaddleOCR profile:\n  - "
+            + "\n  - ".join(
+                errors
+            )
+        )
+
+
+def build_pipeline_kwargs(
+    model_paths: dict[str, Path],
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "layout_detection_model_dir": str(
+            model_paths["layout"]
+        ),
+        "text_detection_model_dir": str(
+            model_paths[
+                "text_detection"
+            ]
+        ),
+        "text_recognition_model_dir": str(
+            model_paths[
+                "text_recognition"
+            ]
+        ),
+        "use_doc_orientation_classify": profile[
+            "document_orientation_classification"
+        ],
+        "use_doc_unwarping": profile[
+            "document_unwarping"
+        ],
+        "use_textline_orientation": profile[
+            "textline_orientation"
+        ],
+        "use_seal_recognition": profile[
+            "seal_recognition"
+        ],
+        "use_table_recognition": profile[
+            "table_recognition"
+        ],
+        "use_formula_recognition": profile[
+            "formula_recognition"
+        ],
+        "use_chart_recognition": profile[
+            "chart_recognition"
+        ],
+        "use_region_detection": profile[
+            "region_detection"
+        ],
+    }
+
+    optional_model_args = {
+        "region": (
+            "region_detection_model_dir"
+        ),
+        "doc_orientation": (
+            "doc_orientation_classify_model_dir"
+        ),
+        "doc_unwarping": (
+            "doc_unwarping_model_dir"
+        ),
+        "textline_orientation": (
+            "textline_orientation_model_dir"
+        ),
+        "table_classification": (
+            "table_classification_model_dir"
+        ),
+        "wired_table_structure": (
+            "wired_table_structure_recognition_model_dir"
+        ),
+        "wireless_table_structure": (
+            "wireless_table_structure_recognition_model_dir"
+        ),
+        "wired_table_cells": (
+            "wired_table_cells_detection_model_dir"
+        ),
+        "wireless_table_cells": (
+            "wireless_table_cells_detection_model_dir"
+        ),
+        "table_orientation": (
+            "table_orientation_classify_model_dir"
+        ),
+        "formula": (
+            "formula_recognition_model_dir"
+        ),
+        "chart": (
+            "chart_recognition_model_dir"
+        ),
+        "seal_detection": (
+            "seal_text_detection_model_dir"
+        ),
+        "seal_recognition": (
+            "seal_text_recognition_model_dir"
+        ),
+    }
+
+    for (
+        model_key,
+        argument_name,
+    ) in optional_model_args.items():
+        if model_key in model_paths:
+            kwargs[
+                argument_name
+            ] = str(
+                model_paths[
+                    model_key
+                ]
+            )
+
+    return kwargs
 
 
 def build_pipeline(
@@ -254,73 +485,30 @@ def build_pipeline(
     profile: dict[str, Any],
 ) -> PPStructureV3:
     return PPStructureV3(
-        layout_detection_model_dir=str(
-            model_paths["layout"]
-        ),
-        region_detection_model_dir=str(
-            model_paths["region"]
-        ),
-        doc_orientation_classify_model_dir=str(
-            model_paths["doc_orientation"]
-        ),
-        text_detection_model_dir=str(
-            model_paths["text_detection"]
-        ),
-        textline_orientation_model_dir=str(
-            model_paths["textline_orientation"]
-        ),
-        text_recognition_model_dir=str(
-            model_paths["text_recognition"]
-        ),
-        table_classification_model_dir=str(
-            model_paths["table_classification"]
-        ),
-        wired_table_structure_recognition_model_dir=str(
-            model_paths["wired_table_structure"]
-        ),
-        wireless_table_structure_recognition_model_dir=str(
-            model_paths["wireless_table_structure"]
-        ),
-        wired_table_cells_detection_model_dir=str(
-            model_paths["wired_table_cells"]
-        ),
-        wireless_table_cells_detection_model_dir=str(
-            model_paths["wireless_table_cells"]
-        ),
-        table_orientation_classify_model_dir=str(
-            model_paths["table_orientation"]
-        ),
-        **({
-            "formula_recognition_model_dir": str(
-                model_paths["formula"]
-            )
-        } if "formula" in model_paths else {}),
-        use_doc_orientation_classify=profile[
-            "document_orientation_classification"
-        ],
-        use_doc_unwarping=profile[
-            "document_unwarping"
-        ],
-        use_textline_orientation=profile[
-            "textline_orientation"
-        ],
-        use_seal_recognition=profile[
-            "seal_recognition"
-        ],
-        use_table_recognition=profile[
-            "table_recognition"
-        ],
-        use_formula_recognition=profile[
-            "formula_recognition"
-        ],
-        use_chart_recognition=profile[
-            "chart_recognition"
-        ],
-        use_region_detection=profile[
-            "region_detection"
-        ],
+        **build_pipeline_kwargs(
+            model_paths,
+            profile,
+        )
     )
 
+
+def _result_value(
+    result: Any,
+    key: str,
+    default: Any,
+) -> Any:
+    try:
+        value = result[key]
+    except (
+        KeyError,
+        TypeError,
+    ):
+        return default
+
+    if value is None:
+        return default
+
+    return value
 
 
 def build_paddleocr_page_contract(
@@ -364,37 +552,64 @@ def build_paddleocr_page_contract(
                 "must be a string."
             )
 
-        ocr_result = result[
-            "overall_ocr_res"
-        ]
+        ocr_result = _result_value(
+            result,
+            "overall_ocr_res",
+            {},
+        )
 
-        rec_texts = ocr_result[
-            "rec_texts"
-        ]
+        rec_texts = _result_value(
+            ocr_result,
+            "rec_texts",
+            [],
+        )
 
         orientations = [
             int(value)
-            for value in ocr_result[
-                "textline_orientation_angles"
-            ]
+            for value in _result_value(
+                ocr_result,
+                "textline_orientation_angles",
+                [],
+            )
         ]
 
-        tables = result[
-            "table_res_list"
-        ]
+        tables = _result_value(
+            result,
+            "table_res_list",
+            [],
+        )
 
-        formulas = result[
-            "formula_res_list"
-        ]
+        formulas = _result_value(
+            result,
+            "formula_res_list",
+            [],
+        )
 
         parsing_blocks = result[
             "parsing_res_list"
         ]
 
-        document_angle = int(
-            result[
-                "doc_preprocessor_res"
-            ]["angle"]
+        doc_preprocessor = _result_value(
+        result,
+        "doc_preprocessor_res",
+        {},
+        )
+
+        document_angle_value = (
+            _result_value(
+                doc_preprocessor,
+                "angle",
+                None,
+            )
+        )
+
+        document_angle = (
+            int(
+                document_angle_value
+            )
+            if document_angle_value
+            is not None
+            else None
         )
 
         orientation_counts = Counter(
@@ -456,6 +671,167 @@ def build_paddleocr_page_contract(
         parser_native_pages,
     )
 
+
+def enabled_text(
+    value: bool,
+) -> str:
+    return (
+        "enabled"
+        if value
+        else "disabled"
+    )
+
+def preflight_profile(
+    profile_name: str,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    # --------------------------------------------------
+    # Profile configuration
+    # --------------------------------------------------
+
+    try:
+        profile = get_profile(
+            PARSER_NAME,
+            profile_name,
+        )
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile configuration",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        return make_result(PARSER_NAME, profile_name, checks)
+
+    checks.append(
+        make_check(
+            "profile configuration",
+            "pass",
+            profile_name,
+        )
+    )
+
+    # --------------------------------------------------
+    # Profile contract
+    # --------------------------------------------------
+
+    try:
+        validate_profile(profile)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "profile contract",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+    else:
+        checks.append(
+            make_check("profile contract", "pass")
+        )
+
+    # --------------------------------------------------
+    # Model root
+    # --------------------------------------------------
+
+    model_root = DEFAULT_MODEL_ROOT
+
+    checks.append(
+        make_check(
+            "model root",
+            "pass" if model_root.is_dir() else "fail",
+            str(model_root),
+        )
+    )
+
+    # --------------------------------------------------
+    # Required models
+    # --------------------------------------------------
+
+    try:
+        required_keys = required_model_keys(profile)
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "model selection",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+        required_keys = set()
+    else:
+        checks.append(
+            make_check(
+                "model selection",
+                "pass",
+                f"{len(required_keys)} required model(s)",
+            )
+        )
+
+    candidate_paths: dict[str, Path] = {}
+
+    for key in sorted(required_keys):
+        model_name = MODEL_NAMES[key]
+        model_path = model_root / model_name
+        candidate_paths[key] = model_path
+        checks.append(
+            make_check(
+                f"model {model_name}",
+                "pass" if model_path.is_dir() else "fail",
+                str(model_path),
+            )
+        )
+
+    # --------------------------------------------------
+    # PPStructureV3 API compatibility
+    # --------------------------------------------------
+
+    try:
+        pipeline_kwargs = build_pipeline_kwargs(
+            candidate_paths,
+            profile,
+        )
+
+        signature = inspect.signature(PPStructureV3.__init__)
+        known_parameters = set(signature.parameters)
+        unknown_kwargs = sorted(
+            key
+            for key in pipeline_kwargs
+            if key not in known_parameters
+        )
+
+        if unknown_kwargs:
+            checks.append(
+                make_check(
+                    "PPStructureV3 API",
+                    "fail",
+                    "Unknown constructor arguments: "
+                    + ", ".join(unknown_kwargs),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "PPStructureV3 API",
+                    "pass",
+                    f"{len(pipeline_kwargs)} argument(s) validated",
+                )
+            )
+
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "PPStructureV3 API",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    return make_result(PARSER_NAME, profile_name, checks)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -484,8 +860,8 @@ def main() -> None:
     model_root = args.model_root.resolve()
 
     model_paths = resolve_model_paths(
-        model_root,
-        profile,
+    model_root,
+    profile,
     )
 
     paths = build_output_paths(
@@ -529,15 +905,78 @@ def main() -> None:
             args.artifact_policy.as_list()
         )
     )
-    print("OCR:          enabled")
-    print("Tables:       enabled")
-    print("Formulas:     enabled")
-    print("Doc orient.:  enabled")
-    print("Line orient.: enabled")
-    print("Region det.:  enabled")
-    print("Chart:        disabled")
-    print("Unwarping:    disabled")
-    print("Seal:         disabled")
+    print(
+    "OCR:          "
+    + enabled_text(
+        profile[
+            "ocr_enabled"
+        ]
+    )
+    )
+    print(
+        "Tables:       "
+        + enabled_text(
+            profile[
+                "table_recognition"
+            ]
+        )
+    )
+    print(
+        "Formulas:     "
+        + enabled_text(
+            profile[
+                "formula_recognition"
+            ]
+        )
+    )
+    print(
+        "Doc orient.:  "
+        + enabled_text(
+            profile[
+                "document_orientation_classification"
+            ]
+        )
+    )
+    print(
+        "Line orient.: "
+        + enabled_text(
+            profile[
+                "textline_orientation"
+            ]
+        )
+    )
+    print(
+        "Region det.:  "
+        + enabled_text(
+            profile[
+                "region_detection"
+            ]
+        )
+    )
+    print(
+        "Chart:        "
+        + enabled_text(
+            profile[
+                "chart_recognition"
+            ]
+        )
+    )
+    print(
+        "Unwarping:    "
+        + enabled_text(
+            profile[
+                "document_unwarping"
+            ]
+        )
+    )
+    print(
+        "Seal:         "
+        + enabled_text(
+            profile[
+                "seal_recognition"
+            ]
+        )
+    )
     print("=" * 72)
 
     monitor = ResourceMonitor()
@@ -710,6 +1149,9 @@ def main() -> None:
     document_angles: Counter[int] = Counter(
         page["document_angle"]
         for page in parser_native_pages
+        if page[
+            "document_angle"
+        ] is not None
     )
 
     line_angles: Counter[int] = Counter()
@@ -852,9 +1294,23 @@ def main() -> None:
 
     resolved_config[
         "models"
-    ] = dict(
-        MODEL_NAMES
-    )
+    ] = {
+        key: MODEL_NAMES[key]
+        for key in sorted(
+            model_paths
+        )
+    }
+
+    resolved_config[
+        "model_paths"
+    ] = {
+        key: str(
+            model_paths[key]
+        )
+        for key in sorted(
+            model_paths
+        )
+    }
 
     output_metrics = dict(
         artifact_result[

@@ -1,14 +1,14 @@
 {
   "benchmark": {
     "schema_version": 2,
-    "timestamp_utc": "2026-08-17T21:25:50.875761+00:00",
+    "timestamp_utc": "2026-08-19T14:30:52.568502+00:00",
     "reference_tokenizer": "o200k_base"
   },
   "run": {
     "parser": "pymupdf",
     "parser_display_name": "PyMuPDF4LLM",
     "profile": "ocr_auto_rapidtess",
-    "verbose": true,
+    "verbose": false,
     "artifact_selection": [
       "raw.md",
       "document.md",
@@ -39,7 +39,7 @@
       "onnxruntime": "1.28.0",
       "tesseract": "tesseract 5.5.0"
     },
-    "python_version": "3.12.14",
+    "python_version": "3.12.13",
     "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.41"
   },
   "document": {
@@ -76,19 +76,19 @@
     "warnings": []
   },
   "processing": {
-    "initialization_seconds": 0.00076,
-    "extraction_seconds": 7.937205,
-    "normalization_seconds": 0.000671,
-    "common_metrics_seconds": 0.206371,
-    "artifact_write_seconds": 0.000932,
-    "pipeline_seconds": 8.147391,
+    "initialization_seconds": 0.138292,
+    "extraction_seconds": 13.811207,
+    "normalization_seconds": 0.001173,
+    "common_metrics_seconds": 0.260223,
+    "artifact_write_seconds": 0.001339,
+    "pipeline_seconds": 14.217051,
     "pages_total": 12,
     "pages_processed": 12,
     "failed_pages": 0,
     "partial_pages": null,
     "empty_output_pages": 0,
-    "extraction_pages_per_second": 1.511867,
-    "pipeline_pages_per_second": 1.472864,
+    "extraction_pages_per_second": 0.86886,
+    "pipeline_pages_per_second": 0.844057,
     "ocr": {
       "enabled": true,
       "mode": "auto",
@@ -120,17 +120,17 @@
   "resources": {
     "monitor_version": "process_tree_v2",
     "sampling_interval_seconds": 0.1,
-    "logical_cpus": 20,
+    "logical_cpus": 12,
     "processes_observed": 1,
-    "wall_time_seconds": 8.147,
-    "process_cpu_time_seconds": 120.41,
-    "average_cpu_percent": 1690.39,
-    "peak_cpu_percent": 1969.1,
-    "average_cpu_system_capacity_percent": 84.52,
-    "peak_cpu_system_capacity_percent": 98.45,
-    "average_rss_mb": 451.081,
-    "peak_rss_mb": 728.961,
-    "disk_read_mb": 59.406,
+    "wall_time_seconds": 14.217,
+    "process_cpu_time_seconds": 53.9,
+    "average_cpu_percent": 419.98,
+    "peak_cpu_percent": 659.3,
+    "average_cpu_system_capacity_percent": 35.0,
+    "peak_cpu_system_capacity_percent": 54.94,
+    "average_rss_mb": 431.957,
+    "peak_rss_mb": 749.566,
+    "disk_read_mb": 88.664,
     "disk_write_mb": 0.086
   },
   "content_elements": {

@@ -182,10 +182,16 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_model_paths(
     model_root: Path,
+    profile: dict[str, Any],
 ) -> dict[str, Path]:
+    skip_keys: set[str] = set()
+    if not profile.get("formula_recognition"):
+        skip_keys.add("formula")
+
     paths = {
         key: model_root / model_name
         for key, model_name in MODEL_NAMES.items()
+        if key not in skip_keys
     }
 
     missing = [
@@ -284,9 +290,11 @@ def build_pipeline(
         table_orientation_classify_model_dir=str(
             model_paths["table_orientation"]
         ),
-        formula_recognition_model_dir=str(
-            model_paths["formula"]
-        ),
+        **({
+            "formula_recognition_model_dir": str(
+                model_paths["formula"]
+            )
+        } if "formula" in model_paths else {}),
         use_doc_orientation_classify=profile[
             "document_orientation_classification"
         ],
@@ -476,7 +484,8 @@ def main() -> None:
     model_root = args.model_root.resolve()
 
     model_paths = resolve_model_paths(
-        model_root
+        model_root,
+        profile,
     )
 
     paths = build_output_paths(

@@ -2,7 +2,7 @@
   "schema_version": 2,
   "benchmark": {
     "reference_tokenizer": "o200k_base",
-    "input_directory": "data/raw",
+    "input_directory": "data/raw/batch",
     "input_glob": "*.pdf",
     "output_directory": "outputs",
     "execution_mode": "sequential"
@@ -304,7 +304,7 @@
       ],
       [
         "docling",
-        "ocr_auto_visual"
+        "ocr_auto"
       ],
       [
         "mineru",
@@ -330,7 +330,7 @@
       ],
       [
         "docling",
-        "ocr_auto_visual"
+        "ocr_auto"
       ],
       [
         "mineru",
@@ -338,7 +338,7 @@
       ],
       [
         "paddleocr",
-        "ocr_structured_visual"
+        "mvp_structured"
       ]
     ],
     "diagnostic_ocr": [

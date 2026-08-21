@@ -14,9 +14,22 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = ROOT / "config" / "benchmark_profiles.json"
-LOGS_DIR = ROOT / "logs"
 
+if str(ROOT) not in sys.path:
+    sys.path.insert(
+        0,
+        str(ROOT),
+    )
+
+from src.benchmark.preflight import validate_result  # noqa: E402
+
+CONFIG_PATH = (
+    ROOT
+    / "config"
+    / "benchmark_profiles.json"
+)
+
+LOGS_DIR = ROOT / "logs"
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -505,6 +518,63 @@ def run_parser_preflight(
             ],
         }
 
+
+    _protocol_error: str | None = None
+    try:
+        validate_result(preflight_json)
+
+        if preflight_json["parser"] != parser_name:
+            raise ValueError(
+                f"Preflight parser mismatch: "
+                f"expected {parser_name!r}, "
+                f"got {preflight_json['parser']!r}"
+            )
+
+        if preflight_json["profile"] != profile_name:
+            raise ValueError(
+                f"Preflight profile mismatch: "
+                f"expected {profile_name!r}, "
+                f"got {preflight_json['profile']!r}"
+            )
+
+    except Exception as exc:
+        _protocol_error = f"{type(exc).__name__}: {exc}"
+
+    if _protocol_error is not None:
+        return {
+            "schema_version": 1,
+            "parser": parser_name,
+            "profile": profile_name,
+            "ok": False,
+            "checks": [
+                {
+                    "name": "parser preflight protocol",
+                    "status": "fail",
+                    "detail": _protocol_error,
+                }
+            ],
+        }
+
+    expected_returncode = 0 if preflight_json["ok"] else 1
+    if result.returncode != expected_returncode:
+        return {
+            "schema_version": 1,
+            "parser": parser_name,
+            "profile": profile_name,
+            "ok": False,
+            "checks": [
+                {
+                    "name": "parser preflight protocol",
+                    "status": "fail",
+                    "detail": (
+                        f"Exit code mismatch: "
+                        f"JSON ok={preflight_json['ok']} "
+                        f"but process exited {result.returncode}"
+                    ),
+                }
+            ],
+        }
+
     return preflight_json
 
 
@@ -758,6 +828,8 @@ def run_preflight(
     # Docker Compose configuration
     # --------------------------------------------------
 
+    missing_required_services = True
+
     compose_result = subprocess.run(
         compose_base
         + [
@@ -799,13 +871,24 @@ def run_preflight(
             }
         )
 
+        missing_required_services = False
         for service in sorted(
             required_services
         ):
+            present = service in services
+            if not present:
+                missing_required_services = True
             report(
-                service in services,
+                present,
                 f"Compose service: {service}",
             )
+
+    parser_preflight_ready = (
+        docker_path is not None
+        and docker_info.returncode == 0
+        and compose_result.returncode == 0
+        and not missing_required_services
+    )
 
     # --------------------------------------------------
     # Parser / profile
@@ -814,6 +897,21 @@ def run_preflight(
     print()
     print("PREFLIGHT — parser/profile")
     print("-" * 72)
+
+    if not parser_preflight_ready:
+        print(
+            "  [SKIP] parser/profile checks "
+            "because Docker/Compose infrastructure failed"
+        )
+        print()
+        parts = [f"{failures} failure(s)"]
+        if warnings_count:
+            parts.append(f"{warnings_count} warning(s)")
+        print(
+            "Preflight result: FAIL "
+            f"({', '.join(parts)})"
+        )
+        return False
 
     seen: set[tuple[str, str]] = set()
     ordered_pairs: list[tuple[str, str]] = []

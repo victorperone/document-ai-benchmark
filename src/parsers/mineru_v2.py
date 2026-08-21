@@ -282,10 +282,11 @@ def preflight_profile(
     if config_path_str:
         config_path = Path(config_path_str)
         config_ok = False
+        config_data: dict | None = None
         config_detail: str
         try:
             config_text = config_path.read_text(encoding="utf-8")
-            json.loads(config_text)
+            config_data = json.loads(config_text)
             config_ok = True
             config_detail = str(config_path)
         except FileNotFoundError:
@@ -299,6 +300,41 @@ def preflight_profile(
                 config_detail,
             )
         )
+
+        if config_data is not None:
+            models_dir = config_data.get("models-dir")
+            if not isinstance(models_dir, dict):
+                checks.append(
+                    make_check(
+                        "MinerU pipeline models",
+                        "fail",
+                        "models-dir is missing or not a dict in mineru.json",
+                    )
+                )
+            else:
+                pipeline_model_dir = models_dir.get("pipeline")
+                if (
+                    not isinstance(pipeline_model_dir, str)
+                    or not pipeline_model_dir.strip()
+                ):
+                    checks.append(
+                        make_check(
+                            "MinerU pipeline models",
+                            "fail",
+                            "models-dir.pipeline is missing or empty",
+                        )
+                    )
+                else:
+                    pipeline_path = Path(
+                        pipeline_model_dir
+                    ).expanduser()
+                    checks.append(
+                        make_check(
+                            "MinerU pipeline models",
+                            "pass" if pipeline_path.is_dir() else "fail",
+                            str(pipeline_path),
+                        )
+                    )
     else:
         checks.append(
             make_check(

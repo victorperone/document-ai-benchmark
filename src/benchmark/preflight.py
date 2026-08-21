@@ -84,6 +84,15 @@ def validate_result(result: Any) -> None:
             "Preflight checks must be a list."
         )
 
+    if not isinstance(result["ok"], bool):
+        raise TypeError("'ok' must be bool.")
+
+    if not isinstance(result["parser"], str):
+        raise TypeError("'parser' must be str.")
+
+    if not isinstance(result["profile"], str):
+        raise TypeError("'profile' must be str.")
+
     for check in result["checks"]:
         if not isinstance(check, dict):
             raise TypeError(
@@ -99,3 +108,13 @@ def validate_result(result: Any) -> None:
             raise ValueError(
                 f"Invalid check status: {check['status']!r}"
             )
+
+    computed_ok = not any(
+        check["status"] == "fail"
+        for check in result["checks"]
+    )
+
+    if result["ok"] != computed_ok:
+        raise ValueError(
+            "Preflight 'ok' value is inconsistent with checks."
+        )

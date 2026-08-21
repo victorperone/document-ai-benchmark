@@ -94,4 +94,4 @@ services:
 
     entrypoint:
       - python
-      - /app/src/parsers/paddleocr_baseline.py
+      - /app/src/parsers/paddleocr_v2.py

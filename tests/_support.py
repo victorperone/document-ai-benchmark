@@ -1,11 +1,13 @@
 """
-Shared test helpers: make_metrics(), write_metrics(), run_script().
+Shared test helpers: make_metrics(), write_metrics(), run_script(),
+load_run_batch_module().
 
 All tests that touch summary scripts or comparisons should use
 make_metrics() to build fixtures, so field paths stay in one place.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -13,6 +15,23 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_run_batch_module():
+    """Load scripts/run_batch.py as a module without executing main().
+
+    Must register in sys.modules before exec_module so that @dataclass
+    can resolve the module namespace via sys.modules[cls.__module__]
+    (required on Python 3.14+). Returns a fresh module object each call.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "scripts_run_batch",
+        ROOT / "scripts" / "run_batch.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["scripts_run_batch"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def make_metrics(

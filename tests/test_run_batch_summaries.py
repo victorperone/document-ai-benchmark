@@ -11,10 +11,8 @@ No Docker, models, or inference required.
 """
 from __future__ import annotations
 
-import importlib.util
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -23,16 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Load run_batch as a module without executing main().
-# Must register in sys.modules before exec_module so that @dataclass
-# can resolve the module's namespace via sys.modules[cls.__module__].
-_spec = importlib.util.spec_from_file_location(
-    "scripts_run_batch",
-    ROOT / "scripts" / "run_batch.py",
-)
-_run_batch = importlib.util.module_from_spec(_spec)
-sys.modules["scripts_run_batch"] = _run_batch
-_spec.loader.exec_module(_run_batch)
+from tests._support import load_run_batch_module
+
+_run_batch = load_run_batch_module()
 
 
 def _make_completed(returncode: int) -> MagicMock:

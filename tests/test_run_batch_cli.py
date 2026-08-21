@@ -103,6 +103,76 @@ class TestUnknownParser(unittest.TestCase):
         self.assertIn("parser_que_nao_existe", combined)
 
 
+class TestDefaultSuiteBehavior(unittest.TestCase):
+    """Omitting --suite and --parser must use the 'default' suite."""
+
+    def test_no_target_uses_default_suite_dry_run(self):
+        """No --suite/--parser + --dry-run uses default (4 pairs)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            result = run_batch_cli(
+                "--input-dir", str(tmp),
+                "--dry-run",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("default", combined)
+        self.assertIn("DRY RUN", combined)
+
+    def test_explicit_suite_smoke(self):
+        """--suite smoke resolves to smoke, not default."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            result = run_batch_cli(
+                "--suite", "smoke",
+                "--input-dir", str(tmp),
+                "--dry-run",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("smoke", result.stdout + result.stderr)
+
+    def test_explicit_suite_ocr_primary(self):
+        """--suite ocr_primary resolves correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            result = run_batch_cli(
+                "--suite", "ocr_primary",
+                "--input-dir", str(tmp),
+                "--dry-run",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ocr_primary", result.stdout + result.stderr)
+
+    def test_explicit_parser_profile(self):
+        """--parser + --profile resolves to a single pair."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            result = run_batch_cli(
+                "--parser", "pymupdf",
+                "--profile", "native",
+                "--input-dir", str(tmp),
+                "--dry-run",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_no_target_dry_run_four_jobs(self):
+        """No target with 1 doc produces 4 jobs (default suite = 4 pairs)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            result = run_batch_cli(
+                "--input-dir", str(tmp),
+                "--dry-run",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = result.stdout + result.stderr
+        self.assertIn("Total jobs: 4", output)
+
+
 class TestLimitCLIValidation(unittest.TestCase):
 
     def test_limit_0_rejected(self):

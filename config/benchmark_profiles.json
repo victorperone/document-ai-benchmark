@@ -300,6 +300,24 @@
     }
   },
   "suites": {
+    "default": [
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "mvp_structured"
+      ]
+    ],
     "full_corpus": [
       [
         "pymupdf",
@@ -382,6 +400,24 @@
       [
         "paddleocr",
         "ocr_structured_visual"
+      ]
+    ],
+    "smoke": [
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "paddleocr",
+        "lightweight"
       ]
     ]
   }

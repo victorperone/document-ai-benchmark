@@ -92,11 +92,14 @@ def parse_args() -> argparse.Namespace:
         help="Limit execution to the first N PDFs after deterministic discovery.",
     )
 
-    target = p.add_mutually_exclusive_group(required=True)
+    target = p.add_mutually_exclusive_group(required=False)
     target.add_argument(
         "--suite",
         metavar="SUITE",
-        help="Named suite from benchmark_profiles.json (runs multiple parser+profile pairs).",
+        help=(
+            "Named suite from benchmark_profiles.json (runs multiple parser+profile pairs). "
+            "Defaults to 'default' when neither --suite nor --parser is given."
+        ),
     )
     target.add_argument(
         "--parser",
@@ -190,12 +193,13 @@ def load_config() -> dict:
 
 
 def resolve_jobs_spec(args: argparse.Namespace, config: dict) -> list[tuple[str, str]]:
-    if args.suite:
+    suite_name = args.suite if args.suite else (None if args.parser else "default")
+    if suite_name is not None:
         suites = config["suites"]
-        if args.suite not in suites:
+        if suite_name not in suites:
             available = ", ".join(sorted(suites))
-            raise SystemExit(f"Unknown suite '{args.suite}'. Available: {available}")
-        return [tuple(job) for job in suites[args.suite]]
+            raise SystemExit(f"Unknown suite '{suite_name}'. Available: {available}")
+        return [tuple(job) for job in suites[suite_name]]
     return [(args.parser, args.profile)]
 
 
@@ -1127,8 +1131,9 @@ def main() -> None:
     print("=" * 72)
     print("DOCUMENT AI BENCHMARK — BATCH RUN")
     print("=" * 72)
-    if args.suite:
-        print(f"Suite:      {args.suite}  ({len(jobs_spec)} parser/profile pairs)")
+    effective_suite = args.suite if args.suite else (None if args.parser else "default")
+    if effective_suite:
+        print(f"Suite:      {effective_suite}  ({len(jobs_spec)} parser/profile pairs)")
     else:
         print(f"Parser:     {args.parser}  /  {args.profile}")
     print(f"Input dir:  {input_dir}")

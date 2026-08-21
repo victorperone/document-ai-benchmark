@@ -450,17 +450,73 @@ def batch_summary(plan: list[JobRecord], elapsed: float, log) -> dict[str, int]:
 
 # ── Post-run ──────────────────────────────────────────────────────────────────
 
-def run_summary_scripts() -> None:
-    for script in (
-        "scripts/build_parser_comparison.py",
-        "scripts/build_native_parser_comparison.py",
-    ):
-        script_path = ROOT / script
+_COMPARISON_REQUIREMENTS: dict[str, frozenset[tuple[str, str]]] = {
+    "build_parser_comparison.py": frozenset(
+        {
+            ("pymupdf", "native"),
+            ("docling", "native"),
+        }
+    ),
+    "build_native_parser_comparison.py": frozenset(
+        {
+            ("pymupdf", "native"),
+            ("docling", "native"),
+            ("mineru", "txt"),
+        }
+    ),
+}
+
+
+def run_summary_scripts(
+    jobs_spec: list[tuple[str, str]],
+    output_root: Path,
+) -> bool:
+    planned = set(jobs_spec)
+    metrics_root = ROOT / "metrics"
+    all_ok = True
+
+    for script_name, required_pairs in _COMPARISON_REQUIREMENTS.items():
+        script_path = ROOT / "scripts" / script_name
+
         if not script_path.is_file():
-            print(f"[SUMMARY] not found, skipping: {script}")
+            print(
+                f"[SUMMARY] not found, skipping: {script_name}"
+            )
             continue
-        print(f"\n[SUMMARY] {script}")
-        subprocess.run([sys.executable, str(script_path)], cwd=str(ROOT))
+
+        if not required_pairs.issubset(planned):
+            missing = required_pairs - planned
+            missing_str = ", ".join(
+                f"{p}/{pr}" for p, pr in sorted(missing)
+            )
+            print(
+                f"[SUMMARY] skipped {script_name}: "
+                f"required profiles not in current run "
+                f"({missing_str})"
+            )
+            continue
+
+        print(f"\n[SUMMARY] {script_name}")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--output-root",
+                str(output_root),
+                "--metrics-root",
+                str(metrics_root),
+            ],
+            cwd=str(ROOT),
+        )
+
+        if completed.returncode != 0:
+            print(
+                f"[SUMMARY FAIL] {script_name} "
+                f"exit={completed.returncode}"
+            )
+            all_ok = False
+
+    return all_ok
 
 
 def run_parser_preflight(
@@ -1074,7 +1130,7 @@ def main() -> None:
         print(f"\nWARNING: {counts['fail']} job(s) failed. See {log_path.name} for details.")
 
     if not args.no_summary and counts["done"] > 0:
-        run_summary_scripts()
+        run_summary_scripts(jobs_spec, output_root)
 
     print("\nBatch complete.")
 

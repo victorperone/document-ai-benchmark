@@ -1,45 +1,96 @@
 from __future__ import annotations
 
+import argparse
 import csv
-import json
+import sys
 from pathlib import Path
 
 
-OUTPUT_ROOT = Path("/outputs")
-METRICS_ROOT = Path("/metrics")
+ROOT = Path(__file__).resolve().parents[1]
 
-CSV_PATH = METRICS_ROOT / "parser_comparison.csv"
-MARKDOWN_PATH = METRICS_ROOT / "parser_comparison.md"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.benchmark.summary_io import (  # noqa: E402
+    SummaryInputError,
+    load_metrics_by_document,
+    require_same_documents,
+)
+
+PYMUPDF_PROFILE = "native"
+DOCLING_PROFILE = "native"
 
 
-def load_metrics(parser: str) -> dict[str, dict]:
-    results = {}
-
-    for path in sorted(
-        (OUTPUT_ROOT / parser).glob("*/metrics.json")
-    ):
-        data = json.loads(
-            path.read_text(encoding="utf-8")
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=(
+            "Build PyMuPDF vs Docling comparison "
+            "(native profile, OCR disabled)."
         )
+    )
 
-        results[data["document"]["file"]] = data
+    p.add_argument(
+        "--output-root",
+        type=Path,
+        default=ROOT / "outputs",
+        metavar="DIR",
+        help="Root of parser outputs. Default: <repo>/outputs.",
+    )
 
-    return results
+    p.add_argument(
+        "--metrics-root",
+        type=Path,
+        default=ROOT / "metrics",
+        metavar="DIR",
+        help="Root for comparison outputs. Default: <repo>/metrics.",
+    )
+
+    return p.parse_args()
 
 
 def main() -> None:
-    pymupdf = load_metrics("pymupdf")
-    docling = load_metrics("docling")
+    args = parse_args()
+
+    try:
+        pymupdf = load_metrics_by_document(
+            args.output_root,
+            "pymupdf",
+            PYMUPDF_PROFILE,
+        )
+        docling = load_metrics_by_document(
+            args.output_root,
+            "docling",
+            DOCLING_PROFILE,
+        )
+    except SummaryInputError as exc:
+        raise SystemExit(str(exc))
+
+    if not pymupdf:
+        raise SystemExit(
+            f"No metrics found for pymupdf/{PYMUPDF_PROFILE} "
+            f"under {args.output_root}"
+        )
+
+    if not docling:
+        raise SystemExit(
+            f"No metrics found for docling/{DOCLING_PROFILE} "
+            f"under {args.output_root}"
+        )
+
+    try:
+        documents = require_same_documents(
+            {
+                f"pymupdf/{PYMUPDF_PROFILE}": pymupdf,
+                f"docling/{DOCLING_PROFILE}": docling,
+            }
+        )
+    except SummaryInputError as exc:
+        raise SystemExit(str(exc))
 
     documents = sorted(
-        set(pymupdf) & set(docling),
+        documents,
         key=lambda name: pymupdf[name]["document"]["pages"],
     )
-
-    if not documents:
-        raise SystemExit(
-            "No matching benchmark documents found."
-        )
 
     rows = []
 
@@ -50,8 +101,8 @@ def main() -> None:
         py_time = py["processing"]["pipeline_seconds"]
         dc_time = dc["processing"]["pipeline_seconds"]
 
-        py_tokens = py["tokens"]["full_markdown_tokens"]
-        dc_tokens = dc["tokens"]["full_markdown_tokens"]
+        py_tokens = py["tokens"]["reference"]["clean_markdown_tokens"]
+        dc_tokens = dc["tokens"]["reference"]["clean_markdown_tokens"]
 
         slowdown = (
             dc_time / py_time
@@ -65,6 +116,8 @@ def main() -> None:
             else 0
         )
 
+        dc_parser_output = dc["content_elements"]["parser_output"]
+
         rows.append(
             {
                 "document": document,
@@ -77,21 +130,18 @@ def main() -> None:
                 "pymupdf_tokens": py_tokens,
                 "docling_tokens": dc_tokens,
                 "token_delta_percent": round(token_delta, 2),
-                "docling_tables": dc["content"]["tables_detected"],
-                "docling_pictures": dc["content"]["pictures_detected"],
+                # tables_detected and images_detected from content_elements.parser_output
+                "docling_tables": dc_parser_output["tables_detected"],
+                "docling_pictures": dc_parser_output["images_detected"],
             }
         )
 
-    METRICS_ROOT.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    args.metrics_root.mkdir(parents=True, exist_ok=True)
 
-    with CSV_PATH.open(
-        "w",
-        newline="",
-        encoding="utf-8",
-    ) as file:
+    csv_path = args.metrics_root / "parser_comparison.csv"
+    markdown_path = args.metrics_root / "parser_comparison.md"
+
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
             fieldnames=list(rows[0].keys()),
@@ -103,6 +153,9 @@ def main() -> None:
         "# Parser Comparison",
         "",
         "Native PDF baseline with OCR disabled.",
+        "",
+        f"PyMuPDF profile: `{PYMUPDF_PROFILE}`",
+        f"Docling profile: `{DOCLING_PROFILE}`",
         "",
         "| Document | Pages | PyMuPDF s | Docling s | Docling Slowdown | PyMuPDF RAM MB | Docling RAM MB | PyMuPDF Tokens | Docling Tokens | Token Delta | Tables | Pictures |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -125,14 +178,14 @@ def main() -> None:
             f"{row['docling_pictures']} |"
         )
 
-    MARKDOWN_PATH.write_text(
+    markdown_path.write_text(
         "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 
     print(f"Documents compared: {len(rows)}")
-    print(f"CSV:      {CSV_PATH}")
-    print(f"Markdown: {MARKDOWN_PATH}")
+    print(f"CSV:      {csv_path}")
+    print(f"Markdown: {markdown_path}")
 
 
 if __name__ == "__main__":

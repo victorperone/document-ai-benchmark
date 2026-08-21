@@ -1,85 +1,139 @@
 from __future__ import annotations
 
+import argparse
 import csv
-import json
+import sys
 from pathlib import Path
 
 
-OUTPUT_ROOT = Path("/outputs/pymupdf")
-METRICS_ROOT = Path("/metrics")
+ROOT = Path(__file__).resolve().parents[1]
 
-CSV_PATH = METRICS_ROOT / "pymupdf_summary.csv"
-MARKDOWN_PATH = METRICS_ROOT / "pymupdf_summary.md"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.benchmark.summary_io import (  # noqa: E402
+    SummaryInputError,
+    load_metrics_by_document,
+)
+
+PARSER_NAME = "pymupdf"
 
 
-def load_results() -> list[dict]:
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Build PyMuPDF4LLM per-profile benchmark summary."
+    )
+
+    p.add_argument(
+        "--profile",
+        required=True,
+        metavar="PROFILE",
+        help="Profile name (e.g. native).",
+    )
+
+    p.add_argument(
+        "--output-root",
+        type=Path,
+        default=ROOT / "outputs",
+        metavar="DIR",
+        help="Root of parser outputs. Default: <repo>/outputs.",
+    )
+
+    p.add_argument(
+        "--metrics-root",
+        type=Path,
+        default=ROOT / "metrics",
+        metavar="DIR",
+        help="Root for summary outputs. Default: <repo>/metrics.",
+    )
+
+    return p.parse_args()
+
+
+def load_results(
+    output_root: Path,
+    profile: str,
+) -> list[dict]:
+    raw = load_metrics_by_document(
+        output_root,
+        PARSER_NAME,
+        profile,
+    )
+
     results = []
-
-    for metrics_path in sorted(
-        OUTPUT_ROOT.glob("*/metrics.json")
-    ):
-        data = json.loads(
-            metrics_path.read_text(encoding="utf-8")
-        )
-
+    for data in raw.values():
         results.append(
             {
                 "document": data["document"]["file"],
+                "profile": profile,
                 "pages": data["document"]["pages"],
                 "input_mb": data["document"]["input_size_mb"],
-                "markdown_mb": data["output"]["markdown_size_mb"],
-                "jsonl_mb": data["output"]["jsonl_size_mb"],
-                "tokens": data["tokens"]["full_markdown_tokens"],
-                "tokens_per_page": data["tokens"]["tokens_per_page"],
-                "extraction_seconds": data["processing"][
-                    "extraction_seconds"
-                ],
-                "pipeline_seconds": data["processing"][
-                    "pipeline_seconds"
-                ],
-                "pages_per_second": data["processing"][
-                    "extraction_pages_per_second"
-                ],
-                "average_cpu_percent": data["resources"][
-                    "average_cpu_system_capacity_percent"
-                ],
-                "peak_cpu_percent": data["resources"][
-                    "peak_cpu_system_capacity_percent"
-                ],
+                "markdown_mb": data["output"]["clean_markdown_mb"],
+                "jsonl_mb": data["output"]["document_jsonl_mb"],
+                "tokens": (
+                    data["tokens"]["reference"]["clean_markdown_tokens"]
+                ),
+                "tokens_per_page": (
+                    data["tokens"]["reference"]["clean_tokens_per_page"]
+                ),
+                "extraction_seconds": (
+                    data["processing"]["extraction_seconds"]
+                ),
+                "pipeline_seconds": (
+                    data["processing"]["pipeline_seconds"]
+                ),
+                "pages_per_second": (
+                    data["processing"]["extraction_pages_per_second"]
+                ),
+                "average_cpu_percent": (
+                    data["resources"][
+                        "average_cpu_system_capacity_percent"
+                    ]
+                ),
+                "peak_cpu_percent": (
+                    data["resources"][
+                        "peak_cpu_system_capacity_percent"
+                    ]
+                ),
                 "peak_ram_mb": data["resources"]["peak_rss_mb"],
-                "size_ratio": data["output"][
-                    "input_to_markdown_size_ratio"
-                ],
-                "blank_pages": data["processing"]["blank_pages"],
+                "size_ratio": (
+                    data["output"]["input_to_clean_markdown_size_ratio"]
+                ),
+                # Historical summary column name.
+                # In schema v2 this represents processing.empty_output_pages.
+                "blank_pages": data["processing"]["empty_output_pages"],
             }
         )
 
-    results.sort(key=lambda item: item["pages"])
+    results.sort(
+        key=lambda item: (item["pages"], item["document"])
+    )
 
     return results
 
 
-def write_csv(results: list[dict]) -> None:
-    if not results:
-        return
-
-    with CSV_PATH.open(
-        "w",
-        newline="",
-        encoding="utf-8",
-    ) as file:
+def write_csv(
+    results: list[dict],
+    csv_path: Path,
+) -> None:
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
             fieldnames=list(results[0].keys()),
         )
-
         writer.writeheader()
         writer.writerows(results)
 
 
-def write_markdown(results: list[dict]) -> None:
+def write_markdown(
+    results: list[dict],
+    profile: str,
+    markdown_path: Path,
+) -> None:
     lines = [
         "# PyMuPDF4LLM Benchmark Summary",
+        "",
+        f"Profile: `{profile}`",
         "",
         "| Document | Pages | Input MB | Markdown MB | Tokens | Tokens/Page | Extraction s | Pages/s | Avg CPU % | Peak CPU % | Peak RAM MB | Size Ratio |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -102,31 +156,39 @@ def write_markdown(results: list[dict]) -> None:
             f"{item['size_ratio']} |"
         )
 
-    MARKDOWN_PATH.write_text(
+    markdown_path.write_text(
         "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 
 
 def main() -> None:
-    METRICS_ROOT.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    args = parse_args()
 
-    results = load_results()
+    try:
+        results = load_results(args.output_root, args.profile)
+    except SummaryInputError as exc:
+        raise SystemExit(str(exc))
 
     if not results:
         raise SystemExit(
-            "No PyMuPDF metrics files were found."
+            f"No metrics found for "
+            f"{PARSER_NAME}/{args.profile} "
+            f"under {args.output_root}"
         )
 
-    write_csv(results)
-    write_markdown(results)
+    summary_dir = args.metrics_root / PARSER_NAME / args.profile
+    summary_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = summary_dir / "summary.csv"
+    markdown_path = summary_dir / "summary.md"
+
+    write_csv(results, csv_path)
+    write_markdown(results, args.profile, markdown_path)
 
     print(f"Documents found: {len(results)}")
-    print(f"CSV:      {CSV_PATH}")
-    print(f"Markdown: {MARKDOWN_PATH}")
+    print(f"CSV:      {csv_path}")
+    print(f"Markdown: {markdown_path}")
 
 
 if __name__ == "__main__":

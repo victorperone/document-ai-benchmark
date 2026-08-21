@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "phases": [
+    {
+      "name": "smoke_limit1",
+      "suite": "smoke",
+      "limit": 1,
+      "output_root": "outputs/_runtime/smoke_limit1"
+    },
+    {
+      "name": "smoke_full",
+      "suite": "smoke",
+      "limit": null,
+      "output_root": "outputs/_runtime/smoke_full"
+    },
+    {
+      "name": "default_limit1",
+      "suite": "default",
+      "limit": 1,
+      "output_root": "outputs/_runtime/default_limit1"
+    },
+    {
+      "name": "default_full",
+      "suite": "default",
+      "limit": null,
+      "output_root": "outputs/_runtime/default_full"
+    },
+    {
+      "name": "full_corpus_limit1",
+      "suite": "full_corpus",
+      "limit": 1,
+      "output_root": "outputs/_runtime/full_corpus_limit1"
+    },
+    {
+      "name": "full_corpus_full",
+      "suite": "full_corpus",
+      "limit": null,
+      "output_root": "outputs/_runtime/full_corpus_full"
+    },
+    {
+      "name": "diagnostic_ocr_limit1",
+      "suite": "diagnostic_ocr",
+      "limit": 1,
+      "output_root": "outputs/_runtime/diagnostic_ocr_limit1"
+    },
+    {
+      "name": "diagnostic_ocr_full",
+      "suite": "diagnostic_ocr",
+      "limit": null,
+      "output_root": "outputs/_runtime/diagnostic_ocr_full"
+    },
+    {
+      "name": "visual_ablation_limit1",
+      "suite": "visual_ablation",
+      "limit": 1,
+      "output_root": "outputs/_runtime/visual_ablation_limit1"
+    },
+    {
+      "name": "visual_ablation_full",
+      "suite": "visual_ablation",
+      "limit": null,
+      "output_root": "outputs/_runtime/visual_ablation_full"
+    }
+  ]
+}

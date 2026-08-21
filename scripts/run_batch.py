@@ -22,6 +22,9 @@ if str(ROOT) not in sys.path:
     )
 
 from src.benchmark.preflight import validate_result  # noqa: E402
+from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError  # noqa: E402
+from src.benchmark.paths import build_output_paths  # noqa: E402
+from src.benchmark.post_validation import validate_post_execution, validate_resume_candidate  # noqa: E402
 
 CONFIG_PATH = (
     ROOT
@@ -45,6 +48,7 @@ class JobRecord:
     exit_code: int = 0
     elapsed: float = 0.0
     error: str | None = None
+    validation: dict | None = None
 
     @property
     def label(self) -> str:
@@ -52,6 +56,18 @@ class JobRecord:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parse_positive_int(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive integer, got {value!r}"
+        )
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -66,6 +82,14 @@ def parse_args() -> argparse.Namespace:
         "--input-dir",
         metavar="DIR",
         help="Directory with PDFs. Default: config benchmark.input_directory.",
+    )
+
+    p.add_argument(
+        "--limit",
+        metavar="N",
+        type=parse_positive_int,
+        default=None,
+        help="Limit execution to the first N PDFs after deterministic discovery.",
     )
 
     target = p.add_mutually_exclusive_group(required=True)
@@ -186,6 +210,12 @@ def discover_pdfs(input_dir: Path) -> list[Path]:
     return docs
 
 
+def apply_document_limit(docs: list[Path], limit: int | None) -> list[Path]:
+    if limit is None or limit >= len(docs):
+        return docs
+    return docs[:limit]
+
+
 # ── Phase 2: Validate batch ───────────────────────────────────────────────────
 
 def validate_batch(jobs_spec: list[tuple[str, str]], config: dict) -> None:
@@ -262,9 +292,11 @@ def build_run_plan(
     jobs_spec: list[tuple[str, str]],
     output_root: Path,
     resume: bool,
+    artifact_policy: ArtifactPolicy | None = None,
 ) -> tuple[list[JobRecord], dict[Path, str]]:
     plan: list[JobRecord] = []
     sha_cache: dict[Path, str] = {}
+    _policy = artifact_policy or ArtifactPolicy.from_cli(["all"])
     for doc in docs:
         if doc not in sha_cache:
             sha_cache[doc] = _sha256(doc)
@@ -277,10 +309,18 @@ def build_run_plan(
                 sha256=sha_cache[doc],
                 output_dir=out_dir,
             )
-            if resume and _metrics_match(
-                output_root, parser_name, doc.stem, profile_name, sha_cache[doc]
-            ):
-                rec.status = "skip"
+            if resume:
+                resume_result = validate_resume_candidate(
+                    output_root=output_root,
+                    parser=parser_name,
+                    profile=profile_name,
+                    document_path=doc,
+                    expected_sha256=sha_cache[doc],
+                    requested_artifacts=_policy,
+                )
+                if resume_result["ok"]:
+                    rec.status = "skip"
+                    rec.validation = resume_result
             plan.append(rec)
     return plan, sha_cache
 
@@ -324,6 +364,9 @@ def execute_plan(
     continue_on_error: bool,
     results_path: Path,
     log,
+    *,
+    output_root: Path,
+    artifact_policy: ArtifactPolicy,
 ) -> None:
     total = len(plan)
     current_doc: Path | None = None
@@ -346,8 +389,28 @@ def execute_plan(
         rec.elapsed = time.monotonic() - t0
 
         if rec.exit_code == 0:
-            rec.status = "done"
-            log(f"  [DONE ]  {rec.parser}/{rec.profile}  ({rec.elapsed:.0f}s)")
+            inv_path = output_root / "_source_inventory" / f"{rec.doc.stem}.json"
+            validation = validate_post_execution(
+                output_root=output_root,
+                parser=rec.parser,
+                profile=rec.profile,
+                document_path=rec.doc,
+                expected_sha256=rec.sha256,
+                artifact_policy=artifact_policy,
+                source_inventory_path=inv_path if inv_path.is_file() else None,
+            )
+            rec.validation = validation
+            if validation["ok"]:
+                rec.status = "done"
+                warns = [c.get("detail", c["name"]) for c in validation["checks"] if c["status"] == "warn"]
+                if warns:
+                    log(f"  [WARN ]  {rec.parser}/{rec.profile}  post-validation: {'; '.join(warns)}")
+                log(f"  [DONE ]  {rec.parser}/{rec.profile}  ({rec.elapsed:.0f}s)")
+            else:
+                rec.status = "fail"
+                fails = [c.get("detail", c["name"]) for c in validation["checks"] if c["status"] == "fail"]
+                rec.error = "post_validation: " + "; ".join(fails)
+                log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
         else:
             rec.status = "fail"
             rec.error = f"exit_code={rec.exit_code}"
@@ -374,6 +437,7 @@ def _append_result(results_path: Path, rec: JobRecord) -> None:
         "elapsed_seconds": round(rec.elapsed, 2),
         "output_dir": rec.output_dir,
         "error": rec.error,
+        "validation": rec.validation,
     }
     with results_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
@@ -1031,6 +1095,12 @@ def main() -> None:
     benchmark = config["benchmark"]
 
     jobs_spec = resolve_jobs_spec(args, config)
+
+    try:
+        artifact_policy = ArtifactPolicy.from_cli([args.artifacts])
+    except ArtifactSelectionError as exc:
+        raise SystemExit(f"Invalid --artifacts value: {exc}")
+
     input_dir = Path(args.input_dir) if args.input_dir else ROOT / benchmark["input_directory"]
     output_root = (
         (ROOT / args.output_root).resolve()
@@ -1040,13 +1110,15 @@ def main() -> None:
     container_output_root = to_container_output_root(output_root)
 
     # ── 1. Discover PDFs ──────────────────────────────────────────────────────
-    docs = discover_pdfs(input_dir)
+    all_docs = discover_pdfs(input_dir)
+    docs = apply_document_limit(all_docs, args.limit)
 
     # ── 2. Validate batch ─────────────────────────────────────────────────────
     validate_batch(jobs_spec, config)
 
     # ── 3. Build run plan ─────────────────────────────────────────────────────
-    plan, doc_sha256 = build_run_plan(docs, jobs_spec, output_root, resume=args.resume)
+    plan, doc_sha256 = build_run_plan(docs, jobs_spec, output_root, resume=args.resume,
+                                      artifact_policy=artifact_policy)
 
     total = len(plan)
     pending = sum(1 for r in plan if r.status == "pending")
@@ -1062,6 +1134,8 @@ def main() -> None:
     print(f"Input dir:  {input_dir}")
     print(f"Output:     {output_root}  →  {container_output_root}")
     print(f"Documents:  {len(docs)}")
+    if args.limit is not None and len(docs) < len(all_docs):
+        print(f"Limit:      {args.limit}  (from {len(all_docs)} discovered PDFs)")
     print(f"Total jobs: {total}  (pending={pending}, already-done={skipped})")
     print(f"On error:   {'continue' if args.continue_on_error else 'abort'}")
     if args.compose_override:
@@ -1120,6 +1194,8 @@ def main() -> None:
         execute_plan(
             plan, compose_base, container_output_root,
             args.artifacts, args.continue_on_error, results_path, log,
+            output_root=output_root,
+            artifact_policy=artifact_policy,
         )
         elapsed = time.monotonic() - batch_start
 
@@ -1133,6 +1209,8 @@ def main() -> None:
         run_summary_scripts(jobs_spec, output_root)
 
     print("\nBatch complete.")
+    if counts["fail"] or counts["aborted"]:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

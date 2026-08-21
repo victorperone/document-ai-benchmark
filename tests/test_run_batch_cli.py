@@ -103,5 +103,38 @@ class TestUnknownParser(unittest.TestCase):
         self.assertIn("parser_que_nao_existe", combined)
 
 
+class TestLimitCLIValidation(unittest.TestCase):
+
+    def test_limit_0_rejected(self):
+        """--limit 0 is not a positive integer → exit 2."""
+        result = run_batch_cli(
+            "--parser", "pymupdf",
+            "--profile", "native",
+            "--limit", "0",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_limit_negative_rejected(self):
+        """--limit -1 is not a positive integer → exit 2."""
+        result = run_batch_cli(
+            "--parser", "pymupdf",
+            "--profile", "native",
+            "--limit", "-1",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+
+    def test_limit_non_integer_rejected(self):
+        """--limit abc is not an integer → exit 2."""
+        result = run_batch_cli(
+            "--parser", "pymupdf",
+            "--profile", "native",
+            "--limit", "abc",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

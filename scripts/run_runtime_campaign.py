@@ -42,9 +42,9 @@ def build_run_batch_cmd(phase: dict, step: str) -> list[str]:
     if step == "preflight":
         cmd.append("--preflight")
     elif step == "execute":
-        pass  # default execution
+        cmd.append("--force")
     elif step == "resume":
-        cmd.append("--resume")  # already default; explicit for clarity
+        cmd.append("--resume-check")
 
     return cmd
 
@@ -190,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--phase",
         metavar="NAME",
-        help="Run only the named phase (requires --execute).",
+        help="Select only the named phase for planning or execution.",
     )
     p.add_argument(
         "--input-dir",

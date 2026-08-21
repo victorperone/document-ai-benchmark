@@ -98,12 +98,14 @@ python scripts/run_runtime_campaign.py \
   --execute
 ```
 
-The runner calls `scripts/run_batch.py` internally for:
+The runner calls `scripts/run_batch.py` internally for three sequential steps:
 
-1. Preflight (validates Docker + models)
-2. Execution (runs containers)
-3. Resume check (verifies idempotency — re-runs with `--resume` and expects
-   all jobs to be skipped)
+1. **Preflight** (`--preflight`) — validates Docker, models, and infrastructure
+2. **Forced fresh execution** (`--force`) — runs all containers unconditionally,
+   producing fresh outputs for this phase; does not reuse prior outputs
+3. **Read-only resume check** (`--resume-check`) — verifies that every job is
+   now reusable (would be SKIP in a future resume); exits 1 if any job is
+   still pending, meaning the outputs produced in step 2 are not valid
 
 ---
 

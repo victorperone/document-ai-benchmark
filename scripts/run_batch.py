@@ -167,6 +167,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    execution_mode.add_argument(
+        "--resume-check",
+        action="store_true",
+        help=(
+            "Read-only check: verify that every job in the plan is "
+            "reusable (would be SKIP in a resume run). "
+            "Exit 0 if all reusable, exit 1 if any job is pending. "
+            "Never starts containers or modifies outputs."
+        ),
+    )
+
     p.add_argument(
         "--compose-override",
         metavar="FILE",
@@ -184,6 +195,9 @@ def parse_args() -> argparse.Namespace:
         p.error("--profile is required when --parser is used.")
     if args.profile and not args.parser:
         p.error("--parser is required when --profile is used.")
+    if args.resume_check and not args.resume:
+        p.error("--force and --resume-check are semantically incompatible: "
+                "resume-check must evaluate actual on-disk state without forcing re-execution.")
 
     return args
 
@@ -1111,7 +1125,11 @@ def main() -> None:
         if args.output_root
         else (ROOT / benchmark["output_directory"]).resolve()
     )
-    container_output_root = to_container_output_root(output_root)
+    # resume-check is read-only: it never calls docker, so no container path needed.
+    container_output_root = (
+        "" if args.resume_check
+        else to_container_output_root(output_root)
+    )
 
     # ── 1. Discover PDFs ──────────────────────────────────────────────────────
     all_docs = discover_pdfs(input_dir)
@@ -1137,7 +1155,10 @@ def main() -> None:
     else:
         print(f"Parser:     {args.parser}  /  {args.profile}")
     print(f"Input dir:  {input_dir}")
-    print(f"Output:     {output_root}  →  {container_output_root}")
+    if container_output_root:
+        print(f"Output:     {output_root}  →  {container_output_root}")
+    else:
+        print(f"Output:     {output_root}")
     print(f"Documents:  {len(docs)}")
     if args.limit is not None and len(docs) < len(all_docs):
         print(f"Limit:      {args.limit}  (from {len(all_docs)} discovered PDFs)")
@@ -1162,6 +1183,22 @@ def main() -> None:
             )
         print()
         return
+
+    if args.resume_check:
+        print("\nRESUME CHECK — job reusability:\n")
+        for rec in plan:
+            tag = "SKIP   " if rec.status == "skip" else "PENDING"
+            print(
+                f"  [{tag}]  {rec.parser:<10}  {rec.profile:<30}  {rec.doc.name}"
+            )
+        n_skip = sum(1 for r in plan if r.status == "skip")
+        n_pending = sum(1 for r in plan if r.status == "pending")
+        print()
+        if n_pending == 0:
+            print(f"Resume check: PASS — all {n_skip} job(s) reusable")
+            return
+        print(f"Resume check: FAIL — {n_pending} job(s) pending (not reusable)")
+        sys.exit(1)
 
     if args.preflight:
         ok = run_preflight(

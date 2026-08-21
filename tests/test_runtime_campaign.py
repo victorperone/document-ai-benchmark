@@ -392,11 +392,167 @@ class TestCommandConstruction(unittest.TestCase):
         cmd = runner.build_run_batch_cmd(phase, "execute")
         self.assertNotIn("--preflight", cmd)
 
+    def test_execute_step_includes_force_flag(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "execute")
+        self.assertIn("--force", cmd)
+
+    def test_execute_step_does_not_include_resume_check(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "execute")
+        self.assertNotIn("--resume-check", cmd)
+
+    def test_resume_step_includes_resume_check_flag(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "resume")
+        self.assertIn("--resume-check", cmd)
+
+    def test_resume_step_does_not_include_force(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "resume")
+        self.assertNotIn("--force", cmd)
+
+    def test_resume_step_does_not_include_preflight(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "resume")
+        self.assertNotIn("--preflight", cmd)
+
+    def test_preflight_step_does_not_include_force(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "preflight")
+        self.assertNotIn("--force", cmd)
+
+    def test_preflight_step_does_not_include_resume_check(self):
+        runner = _load_runner()
+        phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
+        cmd = runner.build_run_batch_cmd(phase, "preflight")
+        self.assertNotIn("--resume-check", cmd)
+
     def test_command_calls_run_batch_not_other_scripts(self):
         runner = _load_runner()
         phase = {"name": "x", "suite": "smoke", "limit": None, "output_root": "outputs/_runtime/x"}
         cmd = runner.build_run_batch_cmd(phase, "execute")
         self.assertTrue(any("run_batch.py" in str(c) for c in cmd))
+
+
+class TestResumeCheckChain(unittest.TestCase):
+    """Verify the preflight → execute (--force) → resume-check chain semantics."""
+
+    def _make_completed(self, returncode: int) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(args=[], returncode=returncode)
+
+    def _steps_from_calls(self, calls_made: list[list[str]]) -> list[str]:
+        steps = []
+        for cmd in calls_made:
+            flat = " ".join(str(c) for c in cmd)
+            if "--preflight" in flat:
+                steps.append("preflight")
+            elif "--force" in flat:
+                steps.append("execute")
+            elif "--resume-check" in flat:
+                steps.append("resume")
+            else:
+                steps.append("unknown")
+        return steps
+
+    def test_success_chain_is_preflight_execute_resume(self):
+        """All steps pass → PASS with exactly 3 calls in correct order."""
+        runner = _load_runner()
+        phase = {"name": "smoke_limit1", "suite": "smoke", "limit": 1,
+                 "output_root": "outputs/_runtime/smoke_limit1"}
+        calls_made = []
+
+        def fake_run(cmd, **kwargs):
+            calls_made.append(list(cmd))
+            return self._make_completed(0)
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            result = runner.run_phase(phase, None)
+
+        self.assertEqual(len(calls_made), 3)
+        steps = self._steps_from_calls(calls_made)
+        self.assertEqual(steps, ["preflight", "execute", "resume"])
+        self.assertEqual(result["status"], "PASS")
+
+    def test_resume_check_fail_means_phase_fail(self):
+        """preflight=0, execute=0, resume-check=1 → FAIL."""
+        runner = _load_runner()
+        phase = {"name": "smoke_limit1", "suite": "smoke", "limit": 1,
+                 "output_root": "outputs/_runtime/smoke_limit1"}
+        call_count = [0]
+
+        def fake_run(cmd, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return self._make_completed(0)
+            return self._make_completed(1)  # resume-check fails
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            result = runner.run_phase(phase, None)
+
+        self.assertEqual(call_count[0], 3)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["resume_exit_code"], 1)
+
+    def test_resume_step_is_read_only_not_a_fourth_call(self):
+        """After preflight+execute succeed and resume-check fails, no 4th call is made."""
+        runner = _load_runner()
+        phase = {"name": "smoke_limit1", "suite": "smoke", "limit": 1,
+                 "output_root": "outputs/_runtime/smoke_limit1"}
+        call_count = [0]
+
+        def fake_run(cmd, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return self._make_completed(0)
+            return self._make_completed(1)
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            runner.run_phase(phase, None)
+
+        self.assertEqual(call_count[0], 3, "Exactly 3 calls — no 4th attempt after resume-check failure")
+
+    def test_execute_uses_force_flag(self):
+        """The execute step command must contain --force."""
+        runner = _load_runner()
+        phase = {"name": "smoke_limit1", "suite": "smoke", "limit": 1,
+                 "output_root": "outputs/_runtime/smoke_limit1"}
+        execute_cmds: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            flat = " ".join(str(c) for c in cmd)
+            if "--force" in flat:
+                execute_cmds.append(list(cmd))
+            return self._make_completed(0)
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            runner.run_phase(phase, None)
+
+        self.assertEqual(len(execute_cmds), 1, "Exactly one --force call (the execute step)")
+
+    def test_resume_uses_resume_check_flag(self):
+        """The resume step command must contain --resume-check."""
+        runner = _load_runner()
+        phase = {"name": "smoke_limit1", "suite": "smoke", "limit": 1,
+                 "output_root": "outputs/_runtime/smoke_limit1"}
+        resume_cmds: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            flat = " ".join(str(c) for c in cmd)
+            if "--resume-check" in flat:
+                resume_cmds.append(list(cmd))
+            return self._make_completed(0)
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            runner.run_phase(phase, None)
+
+        self.assertEqual(len(resume_cmds), 1, "Exactly one --resume-check call (the resume step)")
 
 
 class TestPhaseResultSchema(unittest.TestCase):

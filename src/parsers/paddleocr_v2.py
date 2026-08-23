@@ -71,6 +71,13 @@ MODEL_NAMES = {
     "seal_recognition": "PP-OCRv5_server_rec",
 }
 
+MODEL_DIRECTORY_CANDIDATES = {
+    "PP-Chart2Table": (
+        "PP-Chart2Table_safetensors",
+        "PP-Chart2Table",
+    ),
+}
+
 
 def _calculate_sha256(
     path: Path,
@@ -271,6 +278,28 @@ def required_model_keys(
 
     return keys
 
+
+def _resolve_model_path(
+    model_root: Path,
+    model_name: str,
+) -> Path:
+    directory_names = MODEL_DIRECTORY_CANDIDATES.get(
+        model_name,
+        (model_name,),
+    )
+
+    candidates = tuple(
+        model_root / directory_name
+        for directory_name in directory_names
+    )
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+
+    return candidates[0]
+
+
 def resolve_model_paths(
     model_root: Path,
     profile: dict[str, Any],
@@ -280,9 +309,9 @@ def resolve_model_paths(
     )
 
     paths = {
-        key: (
-            model_root
-            / MODEL_NAMES[key]
+        key: _resolve_model_path(
+            model_root,
+            MODEL_NAMES[key],
         )
         for key in sorted(
             required_keys
@@ -774,7 +803,10 @@ def preflight_profile(
 
     for key in sorted(required_keys):
         model_name = MODEL_NAMES[key]
-        model_path = model_root / model_name
+        model_path = _resolve_model_path(
+            model_root,
+            model_name,
+        )
         candidate_paths[key] = model_path
         checks.append(
             make_check(

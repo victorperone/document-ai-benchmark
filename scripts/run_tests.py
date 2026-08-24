@@ -6,7 +6,7 @@ Usage:
     python scripts/run_tests.py
 
 Steps:
-    1. Compile scripts/, src/, tests/ — catches syntax errors.
+    1. Compile scripts/, src/, tests/, parser_tests/ — catches syntax errors.
     2. Run all test_*.py files under tests/ with unittest discover.
 
 Returns 0 only if both steps pass.
@@ -36,6 +36,7 @@ def main() -> int:
             "scripts",
             "src",
             "tests",
+            "parser_tests",
         )
     )
 

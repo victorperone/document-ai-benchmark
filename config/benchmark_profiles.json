@@ -160,6 +160,7 @@
           "picture_description": true,
           "picture_description_preset": "smolvlm",
           "picture_description_prompt": "Describe the image concisely and factually. Include visible text, labels, quantities, relationships, and chart trends when present. Do not speculate.",
+          "picture_area_threshold": 0.0,
           "generate_picture_images": true,
           "images_scale": 2.0,
           "remote_services_enabled": false,

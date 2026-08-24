@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -24,6 +25,7 @@ from docling.datamodel.pipeline_options import (
     RapidOcrOptions,
     TableFormerMode,
     TableStructureOptions,
+    smolvlm_picture_description,
 )
 from docling.datamodel.settings import settings
 from docling.document_converter import (
@@ -54,6 +56,10 @@ from src.benchmark.runtime_io import (
 PARSER_NAME = "docling"
 PARSER_DISPLAY_NAME = "Docling"
 DEFAULT_MODEL_ARTIFACTS = Path("/home/appuser/.cache/docling/models")
+
+SMOLVLM_ARTIFACT_DIRECTORY = (
+    "HuggingFaceTB--SmolVLM-256M-Instruct"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -286,6 +292,30 @@ def _serialize_item_for_page(
 
             payload["picture_classification"] = (
                 classification.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                )
+            )
+
+        description = (
+            getattr(meta, "description", None)
+            if meta is not None
+            else None
+        )
+
+        if description is not None:
+            if not hasattr(
+                description,
+                "model_dump",
+            ):
+                raise TypeError(
+                    "Picture description metadata does "
+                    "not expose model_dump(); refusing to "
+                    "serialize unknown schema."
+                )
+
+            payload["picture_description"] = (
+                description.model_dump(
                     mode="json",
                     exclude_none=True,
                 )
@@ -640,6 +670,75 @@ def _resolve_profile_runtime(
     return resolved
 
 
+def _configure_picture_description(
+    options: PdfPipelineOptions,
+    profile: dict[str, Any],
+) -> None:
+    if not options.do_picture_description:
+        return
+
+    preset = str(
+        profile.get(
+            "picture_description_preset",
+            "",
+        )
+    )
+
+    if preset != "smolvlm":
+        raise BenchmarkConfigurationError(
+            "Unsupported Docling picture-description "
+            f"preset: {preset!r}. "
+            "Supported preset: 'smolvlm'."
+        )
+
+    prompt = str(
+        profile.get(
+            "picture_description_prompt",
+            "",
+        )
+    ).strip()
+
+    if not prompt:
+        raise BenchmarkConfigurationError(
+            "picture_description_prompt must be "
+            "non-empty when picture description "
+            "is enabled."
+        )
+
+    description_options = copy.deepcopy(
+        smolvlm_picture_description
+    )
+
+    raw_threshold = profile.get(
+        "picture_area_threshold",
+        description_options.picture_area_threshold,
+    )
+
+    try:
+        picture_area_threshold = float(
+            raw_threshold
+        )
+    except (TypeError, ValueError) as exc:
+        raise BenchmarkConfigurationError(
+            "picture_area_threshold must be numeric."
+        ) from exc
+
+    if not 0.0 <= picture_area_threshold <= 1.0:
+        raise BenchmarkConfigurationError(
+            "picture_area_threshold must be between "
+            "0.0 and 1.0."
+        )
+
+    description_options.prompt = prompt
+    description_options.picture_area_threshold = (
+        picture_area_threshold
+    )
+
+    options.picture_description_options = (
+        description_options
+    )
+
+
 def _build_pipeline_options(
     profile: dict[str, Any],
 ) -> PdfPipelineOptions:
@@ -799,12 +898,10 @@ def _build_pipeline_options(
         )
     )
 
-    if options.do_picture_description:
-        raise BenchmarkConfigurationError(
-            "Picture-description profiles are intentionally "
-            "deferred until the base Docling v2 adapter is "
-            "validated. Use native or ocr_auto for phase 1."
-        )
+    _configure_picture_description(
+        options,
+        profile,
+    )
 
     return options
 
@@ -1034,15 +1131,65 @@ def preflight_profile(
         )
 
     # --------------------------------------------------
-    # picture_description (not yet supported)
+    # Picture description
     # --------------------------------------------------
 
     if bool(profile.get("picture_description", False)):
+        preset = str(
+            profile.get(
+                "picture_description_preset",
+                "",
+            )
+        )
+
         checks.append(
             make_check(
-                "picture description",
-                "fail",
-                "picture description is not supported by docling_v2 yet",
+                "picture description preset",
+                "pass" if preset == "smolvlm" else "fail",
+                preset or "empty",
+            )
+        )
+
+        prompt = str(
+            profile.get(
+                "picture_description_prompt",
+                "",
+            )
+        ).strip()
+
+        checks.append(
+            make_check(
+                "picture description prompt",
+                "pass" if prompt else "fail",
+                "configured" if prompt else "empty",
+            )
+        )
+
+        remote_services = bool(
+            profile.get(
+                "remote_services_enabled",
+                False,
+            )
+        )
+
+        checks.append(
+            make_check(
+                "picture description locality",
+                "pass" if not remote_services else "fail",
+                "local" if not remote_services else "remote services enabled",
+            )
+        )
+
+        smolvlm_path = (
+            artifacts_path
+            / SMOLVLM_ARTIFACT_DIRECTORY
+        )
+
+        checks.append(
+            make_check(
+                "picture description model",
+                "pass" if smolvlm_path.is_dir() else "fail",
+                str(smolvlm_path),
             )
         )
 

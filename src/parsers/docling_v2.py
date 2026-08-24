@@ -669,6 +669,32 @@ def _resolve_profile_runtime(
 
     return resolved
 
+def _resolve_picture_area_threshold(
+    profile: dict[str, Any],
+    default: float,
+) -> float:
+    raw_threshold = profile.get(
+        "picture_area_threshold",
+        default,
+    )
+
+    try:
+        picture_area_threshold = float(
+            raw_threshold
+        )
+    except (TypeError, ValueError) as exc:
+        raise BenchmarkConfigurationError(
+            "picture_area_threshold must be numeric."
+        ) from exc
+
+    if not 0.0 <= picture_area_threshold <= 1.0:
+        raise BenchmarkConfigurationError(
+            "picture_area_threshold must be between "
+            "0.0 and 1.0."
+        )
+
+    return picture_area_threshold
+
 
 def _configure_picture_description(
     options: PdfPipelineOptions,
@@ -709,25 +735,15 @@ def _configure_picture_description(
         smolvlm_picture_description
     )
 
-    raw_threshold = profile.get(
-        "picture_area_threshold",
-        description_options.picture_area_threshold,
+    picture_area_threshold = (
+        _resolve_picture_area_threshold(
+            profile,
+            default=float(
+                description_options
+                .picture_area_threshold
+            ),
+        )
     )
-
-    try:
-        picture_area_threshold = float(
-            raw_threshold
-        )
-    except (TypeError, ValueError) as exc:
-        raise BenchmarkConfigurationError(
-            "picture_area_threshold must be numeric."
-        ) from exc
-
-    if not 0.0 <= picture_area_threshold <= 1.0:
-        raise BenchmarkConfigurationError(
-            "picture_area_threshold must be between "
-            "0.0 and 1.0."
-        )
 
     description_options.prompt = prompt
     description_options.picture_area_threshold = (
@@ -1164,6 +1180,33 @@ def preflight_profile(
                 "configured" if prompt else "empty",
             )
         )
+
+        try:
+            picture_area_threshold = (
+                _resolve_picture_area_threshold(
+                    profile,
+                    default=float(
+                        smolvlm_picture_description
+                        .picture_area_threshold
+                    ),
+                )
+            )
+        except BenchmarkConfigurationError as exc:
+            checks.append(
+                make_check(
+                    "picture area threshold",
+                    "fail",
+                    str(exc),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "picture area threshold",
+                    "pass",
+                    str(picture_area_threshold),
+                )
+            )
 
         remote_services = bool(
             profile.get(

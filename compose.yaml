@@ -95,3 +95,29 @@ services:
     entrypoint:
       - python
       - /app/src/parsers/paddleocr_v2.py
+
+  liteparse:
+    build:
+      context: .
+      dockerfile: docker/liteparse/Dockerfile
+
+    environment:
+      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
+      TRANSFORMERS_VERBOSITY: error
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+
+    volumes:
+      - ./config:/app/config:ro
+      - ./src:/app/src:ro
+      - ./scripts:/app/scripts:ro
+      - ./data:/data:ro
+      - ./outputs:/outputs
+      - ./metrics:/metrics
+      - ./models/liteparse:/models/liteparse:ro
+
+    working_dir: /app
+
+    entrypoint:
+      - python
+      - /app/src/parsers/liteparse_v2.py

@@ -298,6 +298,92 @@
           "seal_recognition": false
         }
       }
+    },
+    "liteparse": {
+      "profiles": {
+        "native": {
+          "ocr_enabled": false,
+          "output_format": "markdown",
+          "extract_images": true,
+          "image_mode": "off",
+          "extract_links": false,
+          "keep_headers_footers": true,
+          "preserve_very_small_text": false,
+          "extract_annotations": false,
+          "extract_form_fields": false,
+          "extract_structure_tree": false,
+          "extract_document_metadata": true,
+          "extract_vector_graphics": false,
+          "extract_text_metadata": false,
+          "extract_screenshots": false,
+          "remote_services_enabled": false,
+          "accelerator_device": "cpu",
+          "num_workers": 4,
+          "dpi": 150,
+          "image_description": false
+        },
+        "ocr_auto_tesseract": {
+          "ocr_enabled": true,
+          "output_format": "markdown",
+          "extract_images": true,
+          "image_mode": "off",
+          "extract_links": false,
+          "keep_headers_footers": true,
+          "preserve_very_small_text": false,
+          "extract_annotations": false,
+          "extract_form_fields": false,
+          "extract_structure_tree": false,
+          "extract_document_metadata": true,
+          "extract_vector_graphics": false,
+          "extract_text_metadata": false,
+          "extract_screenshots": false,
+          "remote_services_enabled": false,
+          "accelerator_device": "cpu",
+          "num_workers": 4,
+          "ocr_strategy": "selective",
+          "ocr_engine": "tesseract",
+          "ocr_language": "por+eng",
+          "ocr_server_url": null,
+          "tessdata_required": ["por", "eng", "osd"],
+          "dpi": 300,
+          "orientation_detection": true,
+          "image_ocr": true,
+          "image_description": false,
+          "ocr_failure_fatal": true
+        },
+        "ocr_auto_visual": {
+          "ocr_enabled": true,
+          "output_format": "markdown",
+          "extract_images": true,
+          "image_mode": "off",
+          "extract_links": false,
+          "keep_headers_footers": true,
+          "preserve_very_small_text": false,
+          "extract_annotations": false,
+          "extract_form_fields": false,
+          "extract_structure_tree": false,
+          "extract_document_metadata": true,
+          "extract_vector_graphics": false,
+          "extract_text_metadata": false,
+          "extract_screenshots": false,
+          "remote_services_enabled": false,
+          "accelerator_device": "cpu",
+          "num_workers": 4,
+          "ocr_strategy": "selective",
+          "ocr_engine": "tesseract",
+          "ocr_language": "por+eng",
+          "ocr_server_url": null,
+          "tessdata_required": ["por", "eng", "osd"],
+          "dpi": 300,
+          "orientation_detection": true,
+          "image_ocr": true,
+          "image_description": true,
+          "image_description_model": "HuggingFaceTB/SmolVLM-256M-Instruct",
+          "image_description_fallback_only": true,
+          "image_description_prompt": "Describe the image concisely and factually. Do not repeat readable text already supplied separately. Focus on visual information, relationships, charts, diagrams, objects, and layout that would otherwise be lost.",
+          "ocr_failure_fatal": true
+        }
+      }
     }
   },
   "suites": {
@@ -419,6 +505,122 @@
       [
         "paddleocr",
         "lightweight"
+      ]
+    ],
+    "smoke_expanded": [
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "paddleocr",
+        "lightweight"
+      ],
+      [
+        "liteparse",
+        "native"
+      ]
+    ],
+    "ocr_primary_expanded": [
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "mvp_structured"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_tesseract"
+      ]
+    ],
+    "visual_ablation_expanded": [
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "docling",
+        "ocr_auto_visual"
+      ],
+      [
+        "paddleocr",
+        "default"
+      ],
+      [
+        "paddleocr",
+        "ocr_structured_visual"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_tesseract"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_visual"
+      ]
+    ],
+    "full_corpus_expanded": [
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "lightweight"
+      ],
+      [
+        "paddleocr",
+        "ocr_structured_visual"
+      ],
+      [
+        "liteparse",
+        "native"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_tesseract"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_visual"
       ]
     ]
   }

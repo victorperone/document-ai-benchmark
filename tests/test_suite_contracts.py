@@ -534,5 +534,389 @@ class TestDefaultNonDivergence(unittest.TestCase):
         self.assertEqual(len(plan), 4)
 
 
+# ── Expanded suite definitions (liteparse added — do not modify suites above) ──
+
+SMOKE_EXPANDED_PAIRS = [
+    ("pymupdf",    "native"),
+    ("docling",    "native"),
+    ("mineru",     "txt"),
+    ("paddleocr",  "lightweight"),
+    ("liteparse",  "native"),
+]
+
+OCR_PRIMARY_EXPANDED_PAIRS = [
+    ("pymupdf",    "ocr_auto_rapidtess"),
+    ("docling",    "ocr_auto"),
+    ("mineru",     "auto"),
+    ("paddleocr",  "mvp_structured"),
+    ("liteparse",  "ocr_auto_tesseract"),
+]
+
+VISUAL_ABLATION_EXPANDED_PAIRS = [
+    ("docling",    "ocr_auto"),
+    ("docling",    "ocr_auto_visual"),
+    ("paddleocr",  "default"),
+    ("paddleocr",  "ocr_structured_visual"),
+    ("liteparse",  "ocr_auto_tesseract"),
+    ("liteparse",  "ocr_auto_visual"),
+]
+
+FULL_CORPUS_EXPANDED_PAIRS = [
+    ("pymupdf",    "native"),
+    ("pymupdf",    "ocr_auto_rapidtess"),
+    ("docling",    "native"),
+    ("docling",    "ocr_auto"),
+    ("mineru",     "txt"),
+    ("mineru",     "auto"),
+    ("paddleocr",  "lightweight"),
+    ("paddleocr",  "ocr_structured_visual"),
+    ("liteparse",  "native"),
+    ("liteparse",  "ocr_auto_tesseract"),
+    ("liteparse",  "ocr_auto_visual"),
+]
+
+
+def _docker_ok_with_liteparse(
+    cmd, **kwargs
+) -> subprocess.CompletedProcess:
+    cmd_flat = " ".join(str(c) for c in cmd)
+    if "info" in cmd_flat:
+        return _completed(returncode=0, stdout="27.0.3")
+    if "config" in cmd_flat and "--services" in cmd_flat:
+        return _completed(
+            returncode=0,
+            stdout="pymupdf\ndocling\nmineru\npaddleocr\nliteparse\n",
+        )
+    return _completed(returncode=0)
+
+
+def _run_preflight_with_liteparse_mock(
+    jobs_spec: list[tuple[str, str]],
+    docs: list[Path],
+    preflight_side_effect,
+) -> bool:
+    with tempfile.TemporaryDirectory() as tmp:
+        with (
+            patch.object(_run_batch.shutil, "which", return_value="/usr/bin/docker"),
+            patch.object(
+                _run_batch.subprocess, "run",
+                side_effect=_docker_ok_with_liteparse,
+            ),
+            patch.object(
+                _run_batch, "run_parser_preflight",
+                side_effect=preflight_side_effect,
+            ),
+        ):
+            return _run_batch.run_preflight(
+                jobs_spec,
+                docs,
+                Path(tmp),
+                Path(tmp) / "outputs",
+                ["docker", "compose"],
+                None,
+            )
+
+
+# ── Shared base for expanded suites (avoids mixin dependency on _docker_ok) ──
+
+class _ExpandedSuiteContractBase(unittest.TestCase):
+    """
+    Contract tests for expanded suites that include liteparse.
+    Tests the same guarantees as _SuiteContractMixin but uses a docker mock
+    that includes the liteparse service name.
+    """
+
+    suite_name: str
+    expected_pairs: list[tuple[str, str]]
+
+    def test_suite_exists_in_config(self):
+        self.assertIn(self.suite_name, _load_config()["suites"])
+
+    def test_exact_pairs(self):
+        self.assertEqual(
+            _suite_pairs_from_config(self.suite_name),
+            self.expected_pairs,
+        )
+
+    def test_no_duplicate_pairs(self):
+        pairs = _suite_pairs_from_config(self.suite_name)
+        self.assertEqual(len(pairs), len(set(pairs)))
+
+    def test_all_pairs_valid_in_config(self):
+        config = _load_config()
+        parsers_cfg = config["parsers"]
+        for parser, profile in self.expected_pairs:
+            self.assertIn(parser, parsers_cfg, f"parser {parser!r} missing")
+            self.assertIn(
+                profile,
+                parsers_cfg[parser]["profiles"],
+                f"profile {profile!r} missing for {parser!r}",
+            )
+
+    def test_order_is_deterministic(self):
+        self.assertEqual(
+            _suite_pairs_from_config(self.suite_name),
+            _suite_pairs_from_config(self.suite_name),
+        )
+
+    def test_resolve_jobs_spec(self):
+        config = _load_config()
+        args = type(
+            "Args", (), {"suite": self.suite_name, "parser": None, "profile": None}
+        )()
+        pairs = _run_batch.resolve_jobs_spec(args, config)
+        self.assertEqual(pairs, self.expected_pairs)
+
+    def test_one_doc_job_count(self):
+        n = len(self.expected_pairs)
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), self.expected_pairs, Path(tmp)
+            )
+        self.assertEqual(len(plan), n)
+
+    def test_two_docs_job_count(self):
+        n = len(self.expected_pairs)
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(2), self.expected_pairs, Path(tmp)
+            )
+        self.assertEqual(len(plan), 2 * n)
+
+    def test_pair_order_per_doc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), self.expected_pairs, Path(tmp)
+            )
+        self.assertEqual(
+            [(r.parser, r.profile) for r in plan],
+            list(self.expected_pairs),
+        )
+
+    def test_liteparse_pair_present(self):
+        lp_pairs = [
+            (p, pr) for p, pr in self.expected_pairs if p == "liteparse"
+        ]
+        self.assertTrue(
+            lp_pairs,
+            "Expanded suite must include at least one liteparse pair",
+        )
+
+    def test_liteparse_profiles_are_valid(self):
+        config = _load_config()
+        lp_profiles = config["parsers"]["liteparse"]["profiles"]
+        for parser, profile in self.expected_pairs:
+            if parser == "liteparse":
+                self.assertIn(profile, lp_profiles)
+
+    def test_historical_pairs_unchanged(self):
+        """Pairs from the non-expanded version of this suite must remain present."""
+        current = set(_suite_pairs_from_config(self.suite_name))
+        for pair in self._base_pairs():
+            self.assertIn(
+                pair,
+                current,
+                f"Historical pair {pair!r} was removed from expanded suite",
+            )
+
+    def _base_pairs(self) -> list[tuple[str, str]]:
+        return []
+
+    def test_preflight_all_pass_returns_true(self):
+        ok = _run_preflight_with_liteparse_mock(
+            self.expected_pairs,
+            _fake_docs(1),
+            lambda cb, parser, profile: _pass_result(parser, profile),
+        )
+        self.assertTrue(ok)
+
+    def test_preflight_liteparse_fail_returns_false(self):
+        lp_pair = next(
+            (p for p in self.expected_pairs if p[0] == "liteparse"), None
+        )
+        if lp_pair is None:
+            self.skipTest("No liteparse pair in suite")
+
+        def side_effect(cb, parser, profile):
+            if (parser, profile) == lp_pair:
+                return _fail_result(parser, profile)
+            return _pass_result(parser, profile)
+
+        ok = _run_preflight_with_liteparse_mock(
+            self.expected_pairs, _fake_docs(1), side_effect
+        )
+        self.assertFalse(ok)
+
+    def test_dry_run_exits_zero(self):
+        result = run_batch_cli(
+            "--suite", self.suite_name,
+            "--input-dir", "data/raw/batch",
+            "--output-root", "outputs/_test_contracts",
+            "--dry-run",
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_dry_run_shows_dry_run_label(self):
+        result = run_batch_cli(
+            "--suite", self.suite_name,
+            "--input-dir", "data/raw/batch",
+            "--output-root", "outputs/_test_contracts",
+            "--dry-run",
+        )
+        self.assertIn("DRY RUN", result.stdout + result.stderr)
+
+
+# ── smoke_expanded ─────────────────────────────────────────────────────────────
+
+class TestSmokeExpandedContracts(_ExpandedSuiteContractBase):
+    suite_name = "smoke_expanded"
+    expected_pairs = SMOKE_EXPANDED_PAIRS
+
+    def _base_pairs(self):
+        return SMOKE_PAIRS
+
+    def test_one_doc_five_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), SMOKE_EXPANDED_PAIRS, Path(tmp)
+            )
+        self.assertEqual(len(plan), 5)
+
+    def test_two_docs_ten_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(2), SMOKE_EXPANDED_PAIRS, Path(tmp)
+            )
+        self.assertEqual(len(plan), 10)
+
+    def test_liteparse_native_included(self):
+        self.assertIn(("liteparse", "native"), SMOKE_EXPANDED_PAIRS)
+
+    def test_does_not_include_ocr_profiles(self):
+        lp_pairs = [
+            p for p in SMOKE_EXPANDED_PAIRS if p[0] == "liteparse"
+        ]
+        for _, profile in lp_pairs:
+            self.assertEqual(
+                profile,
+                "native",
+                "smoke_expanded liteparse must be native only",
+            )
+
+
+# ── ocr_primary_expanded ───────────────────────────────────────────────────────
+
+class TestOcrPrimaryExpandedContracts(_ExpandedSuiteContractBase):
+    suite_name = "ocr_primary_expanded"
+    expected_pairs = OCR_PRIMARY_EXPANDED_PAIRS
+
+    def _base_pairs(self):
+        return OCR_PRIMARY_PAIRS
+
+    def test_one_doc_five_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), OCR_PRIMARY_EXPANDED_PAIRS, Path(tmp)
+            )
+        self.assertEqual(len(plan), 5)
+
+    def test_liteparse_ocr_tesseract_included(self):
+        self.assertIn(
+            ("liteparse", "ocr_auto_tesseract"), OCR_PRIMARY_EXPANDED_PAIRS
+        )
+
+    def test_no_visual_vlm_profile(self):
+        lp_pairs = [
+            p for p in OCR_PRIMARY_EXPANDED_PAIRS if p[0] == "liteparse"
+        ]
+        for _, profile in lp_pairs:
+            self.assertNotEqual(
+                profile,
+                "ocr_auto_visual",
+                "ocr_primary_expanded must not include VLM profiles",
+            )
+
+
+# ── visual_ablation_expanded ───────────────────────────────────────────────────
+
+class TestVisualAblationExpandedContracts(_ExpandedSuiteContractBase):
+    suite_name = "visual_ablation_expanded"
+    expected_pairs = VISUAL_ABLATION_EXPANDED_PAIRS
+
+    def _base_pairs(self):
+        return VISUAL_ABLATION_PAIRS
+
+    def test_one_doc_six_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), VISUAL_ABLATION_EXPANDED_PAIRS, Path(tmp)
+            )
+        self.assertEqual(len(plan), 6)
+
+    def test_liteparse_both_profiles_present(self):
+        """Ablation requires both tesseract and visual profiles for comparison."""
+        self.assertIn(
+            ("liteparse", "ocr_auto_tesseract"), VISUAL_ABLATION_EXPANDED_PAIRS
+        )
+        self.assertIn(
+            ("liteparse", "ocr_auto_visual"), VISUAL_ABLATION_EXPANDED_PAIRS
+        )
+
+    def test_liteparse_visual_after_tesseract(self):
+        lp = [(i, p) for i, p in enumerate(VISUAL_ABLATION_EXPANDED_PAIRS) if p[0] == "liteparse"]
+        self.assertEqual(len(lp), 2)
+        idx_tess, _ = lp[0]
+        idx_vis, _ = lp[1]
+        self.assertLess(
+            idx_tess,
+            idx_vis,
+            "ocr_auto_tesseract must come before ocr_auto_visual in the ablation suite",
+        )
+
+
+# ── full_corpus_expanded ───────────────────────────────────────────────────────
+
+class TestFullCorpusExpandedContracts(_ExpandedSuiteContractBase):
+    suite_name = "full_corpus_expanded"
+    expected_pairs = FULL_CORPUS_EXPANDED_PAIRS
+
+    def _base_pairs(self):
+        return FULL_CORPUS_PAIRS
+
+    def test_one_doc_eleven_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = _build_plan_no_resume(
+                _fake_docs(1), FULL_CORPUS_EXPANDED_PAIRS, Path(tmp)
+            )
+        self.assertEqual(len(plan), 11)
+
+    def test_all_three_liteparse_profiles(self):
+        lp_profiles = {
+            profile for parser, profile in FULL_CORPUS_EXPANDED_PAIRS
+            if parser == "liteparse"
+        }
+        self.assertEqual(
+            lp_profiles,
+            {"native", "ocr_auto_tesseract", "ocr_auto_visual"},
+        )
+
+    def test_liteparse_native_before_ocr_profiles(self):
+        lp = [
+            (i, profile)
+            for i, (parser, profile) in enumerate(FULL_CORPUS_EXPANDED_PAIRS)
+            if parser == "liteparse"
+        ]
+        self.assertEqual(lp[0][1], "native")
+
+    def test_historical_full_corpus_pairs_present(self):
+        expanded = set(FULL_CORPUS_EXPANDED_PAIRS)
+        for pair in FULL_CORPUS_PAIRS:
+            self.assertIn(
+                pair,
+                expanded,
+                f"Historical full_corpus pair {pair!r} missing from expanded suite",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -712,6 +712,8 @@ def enabled_text(
 
 def preflight_profile(
     profile_name: str,
+    *,
+    model_root_override: Path | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -765,7 +767,11 @@ def preflight_profile(
     # Model root
     # --------------------------------------------------
 
-    model_root = DEFAULT_MODEL_ROOT
+    model_root = (
+        model_root_override
+        if model_root_override is not None
+        else DEFAULT_MODEL_ROOT
+    )
 
     checks.append(
         make_check(

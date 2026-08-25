@@ -203,6 +203,113 @@ class TestRunParserPreflightProtocolLines(unittest.TestCase):
         self.assertTrue(result["ok"])
 
 
+class TestRunParserPreflightHostRuntime(unittest.TestCase):
+    """run_parser_preflight() dispatches to venv python for host runtime."""
+
+    def test_host_calls_venv_python(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST, resolve_venv_python
+        stdout = f"{_preflight_line(ok=True, parser=_PARSER, profile=_PROFILE)}"
+
+        with patch.object(_run_batch.subprocess, "run",
+                          return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
+            _run_batch.run_parser_preflight(
+                _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
+            )
+
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        self.assertEqual(cmd[0], str(resolve_venv_python(_PARSER)))
+
+    def test_host_uses_module_flag(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST
+        stdout = _preflight_line(ok=True)
+
+        with patch.object(_run_batch.subprocess, "run",
+                          return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
+            _run_batch.run_parser_preflight(
+                _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
+            )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("-m", cmd)
+        self.assertIn("scripts.parser_preflight", cmd)
+
+    def test_host_passes_runtime_host_flag(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST
+        stdout = _preflight_line(ok=True)
+
+        with patch.object(_run_batch.subprocess, "run",
+                          return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
+            _run_batch.run_parser_preflight(
+                _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
+            )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--runtime", cmd)
+        idx = cmd.index("--runtime")
+        self.assertEqual(cmd[idx + 1], "host")
+
+    def test_host_no_docker_compose_in_command(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST
+        stdout = _preflight_line(ok=True)
+
+        with patch.object(_run_batch.subprocess, "run",
+                          return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
+            _run_batch.run_parser_preflight(
+                _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
+            )
+
+        cmd = mock_run.call_args[0][0]
+        self.assertNotIn("docker", cmd)
+        self.assertNotIn("compose", cmd)
+
+
+class TestRunPreflightHostVenvChecks(unittest.TestCase):
+    """run_preflight() checks venvs instead of Docker for host runtime."""
+
+    def test_host_with_all_venvs_present_calls_parser_preflight(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = Path(tmp)
+            output_root = Path(tmp) / "outputs"
+            docs = [Path(tmp) / "dummy.pdf"]
+            jobs_spec = [(_PARSER, _PROFILE)]
+
+            stdout = _preflight_line(ok=True)
+
+            with patch.object(_run_batch, "resolve_venv_python",
+                               return_value=Path("/fake/.venvs/pymupdf/bin/python")), \
+                 patch("pathlib.Path.is_file", return_value=True), \
+                 patch.object(_run_batch, "run_parser_preflight",
+                               return_value={"schema_version": 1, "parser": _PARSER,
+                                             "profile": _PROFILE, "ok": True,
+                                             "checks": [{"name": "ok", "status": "pass"}]}) as mock_pf:
+                _run_batch.run_preflight(
+                    jobs_spec, docs, input_dir, output_root,
+                    _COMPOSE_BASE, None, RUNTIME_HOST,
+                )
+
+            mock_pf.assert_called_once()
+
+    def test_host_missing_venv_fails_preflight(self) -> None:
+        from src.benchmark.execution_paths import RUNTIME_HOST
+        with tempfile.TemporaryDirectory() as tmp:
+            input_dir = Path(tmp)
+            output_root = Path(tmp) / "outputs"
+            docs = [Path(tmp) / "dummy.pdf"]
+            jobs_spec = [(_PARSER, _PROFILE)]
+
+            with patch.object(_run_batch, "resolve_venv_python",
+                               return_value=Path("/fake/.venvs/pymupdf/bin/python")), \
+                 patch("pathlib.Path.is_file", return_value=False):
+                ok = _run_batch.run_preflight(
+                    jobs_spec, docs, input_dir, output_root,
+                    _COMPOSE_BASE, None, RUNTIME_HOST,
+                )
+
+            self.assertFalse(ok)
+
+
 class TestRunPreflightComposeFail(unittest.TestCase):
     """run_preflight() must skip run_parser_preflight when compose config fails."""
 

@@ -317,14 +317,14 @@ class _SuiteContractMixin:
         ok = _run_preflight_with_mock(
             self.expected_pairs,
             _fake_docs(1),
-            lambda cb, parser, profile: _pass_result(parser, profile),
+            lambda cb, parser, profile, **kw: _pass_result(parser, profile),
         )
         self.assertTrue(ok)
 
     def test_preflight_first_pair_fail_returns_false(self):
         first = self.expected_pairs[0]
 
-        def side_effect(cb, parser, profile):
+        def side_effect(cb, parser, profile, **kw):
             if (parser, profile) == first:
                 return _fail_result(parser, profile)
             return _pass_result(parser, profile)
@@ -337,7 +337,7 @@ class _SuiteContractMixin:
     def test_preflight_last_pair_fail_returns_false(self):
         last = self.expected_pairs[-1]
 
-        def side_effect(cb, parser, profile):
+        def side_effect(cb, parser, profile, **kw):
             if (parser, profile) == last:
                 return _fail_result(parser, profile)
             return _pass_result(parser, profile)
@@ -352,7 +352,7 @@ class _SuiteContractMixin:
         called: list[tuple[str, str]] = []
         first = self.expected_pairs[0]
 
-        def side_effect(cb, parser, profile):
+        def side_effect(cb, parser, profile, **kw):
             called.append((parser, profile))
             if (parser, profile) == first:
                 return _fail_result(parser, profile)
@@ -726,7 +726,7 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
         ok = _run_preflight_with_liteparse_mock(
             self.expected_pairs,
             _fake_docs(1),
-            lambda cb, parser, profile: _pass_result(parser, profile),
+            lambda cb, parser, profile, **kw: _pass_result(parser, profile),
         )
         self.assertTrue(ok)
 
@@ -737,7 +737,7 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
         if lp_pair is None:
             self.skipTest("No liteparse pair in suite")
 
-        def side_effect(cb, parser, profile):
+        def side_effect(cb, parser, profile, **kw):
             if (parser, profile) == lp_pair:
                 return _fail_result(parser, profile)
             return _pass_result(parser, profile)

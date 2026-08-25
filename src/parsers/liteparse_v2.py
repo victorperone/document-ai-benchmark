@@ -49,6 +49,8 @@ FULL_PAGE_OCR_REASONS: frozenset[str] = frozenset(
 )
 
 _TESSDATA_CANDIDATES = (
+    r"C:\Program Files\Tesseract-OCR\tessdata",
+    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
     "/usr/share/tesseract-ocr/5/tessdata",
     "/usr/share/tesseract-ocr/4.00/tessdata",
     "/usr/share/tessdata",
@@ -642,18 +644,10 @@ def _load_cached_inventory(
     input_path: Path,
     output_root: Path,
 ) -> dict[str, Any]:
-    candidates = [
+    destination = (
         output_root
         / "_source_inventory"
-        / f"{input_path.stem}.json",
-        Path("/outputs")
-        / "_source_inventory"
-        / f"{input_path.stem}.json",
-    ]
-
-    destination = next(
-        (c for c in candidates if c.is_file()),
-        candidates[0],
+        / f"{input_path.stem}.json"
     )
 
     if not destination.is_file():
@@ -879,7 +873,11 @@ def _find_tessdata_prefix() -> str | None:
     return None
 
 
-def preflight_profile(profile_name: str) -> dict[str, Any]:
+def preflight_profile(
+    profile_name: str,
+    *,
+    model_artifacts_override: Path | None = None,
+) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
     # Profile configuration
@@ -987,12 +985,13 @@ def preflight_profile(profile_name: str) -> dict[str, Any]:
     ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     if ocr_enabled:
-        tess_bin = shutil.which("tesseract")
+        from src.benchmark.external_tools import resolve_tesseract_executable
+        tess_bin = resolve_tesseract_executable()
         checks.append(
             make_check(
                 "tesseract executable",
                 "pass" if tess_bin else "fail",
-                tess_bin or "not found in PATH",
+                tess_bin or "not found",
             )
         )
 
@@ -1069,7 +1068,12 @@ def preflight_profile(profile_name: str) -> dict[str, Any]:
             )
         )
 
-        smolvlm_path = DEFAULT_MODEL_ARTIFACTS / SMOLVLM_ARTIFACT_DIRECTORY
+        effective_artifacts = (
+            model_artifacts_override
+            if model_artifacts_override is not None
+            else DEFAULT_MODEL_ARTIFACTS
+        )
+        smolvlm_path = effective_artifacts / SMOLVLM_ARTIFACT_DIRECTORY
         checks.append(
             make_check(
                 "smolvlm model",
@@ -1103,6 +1107,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--profile",
         default="native",
+    )
+    parser.add_argument(
+        "--model-artifacts-path",
+        type=Path,
+        default=None,
+        help="Override for pre-downloaded model artifacts directory.",
     )
 
     add_runtime_arguments(parser)
@@ -1161,7 +1171,11 @@ def main() -> None:
     ocr_enabled = bool(profile.get("ocr_enabled", False))
     ocr_language = str(profile.get("ocr_language", "por+eng"))
     image_description = bool(profile.get("image_description", False))
-    model_root = DEFAULT_MODEL_ARTIFACTS
+    model_root = (
+        args.model_artifacts_path
+        if args.model_artifacts_path is not None
+        else DEFAULT_MODEL_ARTIFACTS
+    )
 
     print("=" * 72)
     print("DOCUMENT AI BENCHMARK V2")

@@ -548,26 +548,10 @@ def load_cached_inventory(
     generation outside the Docling process avoids adding a second PDF
     parser dependency to the measured Docling runtime.
     """
-    source_root = output_root
-
-    # Allow parser runs under nested benchmark output roots while still
-    # finding the canonical inventory under /outputs/_source_inventory.
-    candidates = [
-        source_root
+    destination = (
+        output_root
         / "_source_inventory"
-        / f"{input_path.stem}.json",
-        Path("/outputs")
-        / "_source_inventory"
-        / f"{input_path.stem}.json",
-    ]
-
-    destination = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.is_file()
-        ),
-        candidates[0],
+        / f"{input_path.stem}.json"
     )
 
     if not destination.is_file():
@@ -924,6 +908,8 @@ def _build_pipeline_options(
 
 def preflight_profile(
     profile_name: str,
+    *,
+    model_artifacts_override: Path | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -948,11 +934,14 @@ def preflight_profile(
     )
 
     # --------------------------------------------------
-    # Runtime resolution (no CLI overrides)
+    # Runtime resolution (model_artifacts_override takes precedence)
     # --------------------------------------------------
 
     try:
-        profile = _resolve_profile_runtime(raw_profile)
+        profile = _resolve_profile_runtime(
+            raw_profile,
+            model_artifacts_override=model_artifacts_override,
+        )
     except Exception as exc:
         checks.append(
             make_check(

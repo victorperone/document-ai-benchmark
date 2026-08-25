@@ -273,5 +273,134 @@ class TestBatchExitCode(unittest.TestCase):
         self.assertEqual(counts["aborted"], 0)
 
 
+class TestHostRuntimeCommandBuilding(unittest.TestCase):
+    """Verify _build_host_command produces correct commands for host runtime."""
+
+    def test_host_command_uses_venv_python(self):
+        from src.benchmark.execution_paths import RUNTIME_HOST, resolve_venv_python
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, _ = _run_batch._build_host_command(
+                "pymupdf",
+                t / "doc.pdf",
+                t / "outputs",
+                "native",
+                "all",
+            )
+        self.assertEqual(cmd[0], str(resolve_venv_python("pymupdf")))
+
+    def test_host_command_uses_module_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, _ = _run_batch._build_host_command(
+                "docling", t / "doc.pdf", t / "outputs", "ocr_auto", "all"
+            )
+        self.assertIn("-m", cmd)
+        self.assertIn("src.parsers.docling_v2", cmd)
+
+    def test_host_command_no_container_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, _ = _run_batch._build_host_command(
+                "pymupdf", t / "doc.pdf", t / "outputs", "native", "all"
+            )
+        # The exact Docker container paths must not appear
+        out_idx = cmd.index("--output-root")
+        self.assertNotEqual(cmd[out_idx + 1], "/outputs")
+        in_idx = cmd.index("--input")
+        self.assertFalse(cmd[in_idx + 1].startswith("/data/"))
+        combined = " ".join(cmd)
+        self.assertNotIn("PYTHONPATH=/app", combined)
+        self.assertNotIn("/app/src/parsers", combined)
+
+    def test_host_command_docling_includes_model_artifacts_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, _ = _run_batch._build_host_command(
+                "docling", t / "doc.pdf", t / "outputs", "ocr_auto", "all"
+            )
+        self.assertIn("--model-artifacts-path", cmd)
+
+    def test_host_command_paddleocr_includes_model_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, _ = _run_batch._build_host_command(
+                "paddleocr", t / "doc.pdf", t / "outputs", "mvp_structured", "all"
+            )
+        self.assertIn("--model-root", cmd)
+
+    def test_host_command_mineru_receives_model_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            _, env = _run_batch._build_host_command(
+                "mineru", t / "doc.pdf", t / "outputs", "txt", "all"
+            )
+        self.assertIn("MINERU_MODEL_SOURCE", env)
+        self.assertEqual(env["MINERU_MODEL_SOURCE"], "local")
+        self.assertIn("HF_HOME", env)
+
+    def test_host_command_pymupdf_no_model_args(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            cmd, env = _run_batch._build_host_command(
+                "pymupdf", t / "doc.pdf", t / "outputs", "native", "all"
+            )
+        self.assertNotIn("--model-artifacts-path", cmd)
+        self.assertNotIn("--model-root", cmd)
+        self.assertEqual(env, {})
+
+
+class TestHostRuntimeExecutePlan(unittest.TestCase):
+    """Verify execute_plan dispatches correctly for host runtime."""
+
+    def test_host_runtime_calls_build_host_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            doc = t / "A.pdf"; doc.touch()
+            plan = [_run_batch.JobRecord(
+                doc=doc, parser=_PARSER, profile=_PROFILE,
+                sha256="deadbeef", output_dir=str(t / "out"),
+            )]
+            results_path = t / "results.jsonl"
+
+            with patch.object(_run_batch, "_build_host_command",
+                               return_value=(["fake_python", "-m", "src.parsers.pymupdf_v2"], {})) as mock_build, \
+                 patch.object(_run_batch, "_run_host_subprocess", return_value=0), \
+                 patch.object(_run_batch, "validate_post_execution",
+                              return_value={"schema_version": 1, "parser": _PARSER,
+                                            "profile": _PROFILE, "document": "A.pdf",
+                                            "ok": True, "checks": []}):
+                _run_batch.execute_plan(
+                    plan, [], "", "all", False, results_path, lambda m: None,
+                    output_root=t, artifact_policy=_POLICY,
+                    runtime="host",
+                )
+
+            mock_build.assert_called_once_with(
+                _PARSER, doc, t, _PROFILE, "all"
+            )
+
+    def test_docker_runtime_does_not_call_build_host_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            doc = t / "A.pdf"; doc.touch()
+            plan = [_run_batch.JobRecord(
+                doc=doc, parser=_PARSER, profile=_PROFILE,
+                sha256="deadbeef", output_dir=str(t / "out"),
+            )]
+            results_path = t / "results.jsonl"
+
+            with patch.object(_run_batch, "_build_host_command") as mock_host, \
+                 patch.object(_run_batch, "_run_subprocess", return_value=1):
+                _run_batch.execute_plan(
+                    plan, ["docker", "compose"], "/outputs", "all", False,
+                    results_path, lambda m: None,
+                    output_root=t, artifact_policy=_POLICY,
+                    runtime="docker",
+                )
+
+            mock_host.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

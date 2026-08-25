@@ -24,6 +24,9 @@ Thumbs.db
 # Corporate/raw documents
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/batch/
+data/raw/batch/*
+!data/raw/batch/.gitkeep
 
 # Benchmark documents that must not be committed
 data/benchmark/*

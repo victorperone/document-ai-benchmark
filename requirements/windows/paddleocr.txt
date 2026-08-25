@@ -1,0 +1,4 @@
+paddleocr[doc-parser]==3.7.0
+psutil==7.2.2
+tiktoken==0.13.0
+# paddlepaddle (CPU) is installed separately in setup_paddleocr.ps1 with the correct index URL

@@ -290,10 +290,11 @@ class TestResumeCheckNoContainers(unittest.TestCase):
                     "--output-root", str(output_root),
                     "--resume-check",
                 )
-            # Subprocess isolation: we verify via CLI output, not mock
+            # Subprocess isolation: we verify via CLI output, not mock.
+            # "docker" may appear as runtime label; "compose run" must not appear.
             combined = result.stdout + result.stderr
-            self.assertNotIn("docker", combined.lower())
             self.assertNotIn("compose run", combined.lower())
+            self.assertNotIn("entrypoint", combined.lower())
             self.assertIn("Resume check:", combined)
 
     def test_does_not_call_execute_plan_unit(self):

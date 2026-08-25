@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import platform
+import shutil
 import subprocess
 import sys
 import time
-import os
-import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,14 @@ from src.benchmark.preflight import validate_result  # noqa: E402
 from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError  # noqa: E402
 from src.benchmark.paths import build_output_paths  # noqa: E402
 from src.benchmark.post_validation import validate_post_execution, validate_resume_candidate  # noqa: E402
+from src.benchmark.execution_paths import (  # noqa: E402
+    RUNTIME_DOCKER,
+    RUNTIME_HOST,
+    resolve_model_root,
+    resolve_venv_bin_dir,
+    resolve_venv_python,
+)
+from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS  # noqa: E402
 
 CONFIG_PATH = (
     ROOT
@@ -179,6 +188,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     p.add_argument(
+        "--runtime",
+        choices=[RUNTIME_DOCKER, RUNTIME_HOST],
+        default=os.environ.get("BENCHMARK_RUNTIME", RUNTIME_DOCKER),
+        help="Execution runtime: docker (default) or host.",
+    )
+    p.add_argument(
         "--compose-override",
         metavar="FILE",
         help="Additional compose file to overlay.",
@@ -273,10 +288,10 @@ def build_source_inventories(
     compose_base: list[str],
     resume: bool,
     log,
+    *,
+    runtime: str = RUNTIME_DOCKER,
 ) -> None:
     inventory_dir = output_root / "_source_inventory"
-    container_input_dir = _to_container_input_dir(input_dir)
-    container_inventory_dir = to_container_output_root(output_root) + "/_source_inventory"
 
     for doc in docs:
         inv_file = inventory_dir / f"{doc.stem}.json"
@@ -285,17 +300,33 @@ def build_source_inventories(
             continue
 
         log(f"  [BUILD] source inventory: {doc.name}")
-        cmd = compose_base + [
-            "run", "--rm",
-            "-e", "PYTHONPATH=/app",
-            "--entrypoint", "python",
-            "pymupdf",
-            "/app/scripts/build_source_inventory.py",
-            "--input-dir", container_input_dir,
-            "--output-dir", container_inventory_dir,
-            "--only", doc.name,
-        ]
-        code = subprocess.run(cmd, cwd=str(ROOT)).returncode
+
+        if runtime == RUNTIME_HOST:
+            cmd = [
+                str(resolve_venv_python("pymupdf")),
+                "-m",
+                "scripts.build_source_inventory",
+                "--input-dir", str(input_dir),
+                "--output-dir", str(inventory_dir),
+                "--only", doc.name,
+            ]
+            env = _build_host_environment("pymupdf")
+            code = subprocess.run(cmd, cwd=str(ROOT), env=env).returncode
+        else:
+            container_input_dir = _to_container_input_dir(input_dir)
+            container_inventory_dir = to_container_output_root(output_root) + "/_source_inventory"
+            cmd = compose_base + [
+                "run", "--rm",
+                "-e", "PYTHONPATH=/app",
+                "--entrypoint", "python",
+                "pymupdf",
+                "/app/scripts/build_source_inventory.py",
+                "--input-dir", container_input_dir,
+                "--output-dir", container_inventory_dir,
+                "--only", doc.name,
+            ]
+            code = subprocess.run(cmd, cwd=str(ROOT)).returncode
+
         if code != 0:
             raise SystemExit(
                 f"Source inventory failed for {doc.name} (exit={code}). "
@@ -385,6 +416,7 @@ def execute_plan(
     *,
     output_root: Path,
     artifact_policy: ArtifactPolicy,
+    runtime: str = RUNTIME_DOCKER,
 ) -> None:
     total = len(plan)
     current_doc: Path | None = None
@@ -402,7 +434,8 @@ def execute_plan(
         log(f"  [START]  {rec.parser}/{rec.profile}")
         t0 = time.monotonic()
         rec.exit_code = _run_subprocess(
-            compose_base, rec.parser, rec.doc, rec.profile, container_output_root, artifacts
+            compose_base, rec.parser, rec.doc, rec.profile, container_output_root, artifacts,
+            runtime=runtime, output_root=output_root,
         )
         rec.elapsed = time.monotonic() - t0
 
@@ -489,15 +522,15 @@ def _to_container_doc_path(doc_path: Path) -> str:
     return "/data/" + relative.as_posix()
 
 
-def _run_subprocess(
+def _build_docker_command(
     compose_base: list[str],
     parser_name: str,
     doc_path: Path,
     profile_name: str,
     container_output_root: str,
     artifacts: str,
-) -> int:
-    cmd = compose_base + [
+) -> list[str]:
+    return compose_base + [
         "run", "--rm",
         "-e", "PYTHONPATH=/app",
         "--entrypoint", "python",
@@ -508,6 +541,88 @@ def _run_subprocess(
         "--profile", profile_name,
         "--artifacts", artifacts,
     ]
+
+
+def _build_host_command(
+    parser_name: str,
+    doc_path: Path,
+    output_root: Path,
+    profile_name: str,
+    artifacts: str,
+) -> tuple[list[str], dict[str, str]]:
+    spec = PARSER_RUNTIME_SPECS[parser_name]
+    model_root = resolve_model_root(RUNTIME_HOST, parser_name)
+
+    model_args = [
+        v.replace("{model_root}", str(model_root))
+        for v in spec.model_args
+    ]
+    model_env = {
+        k: v.replace("{model_root}", str(model_root))
+        for k, v in spec.model_env.items()
+    }
+
+    cmd = [
+        str(resolve_venv_python(parser_name)),
+        "-m",
+        spec.module,
+        "--input", str(doc_path),
+        "--output-root", str(output_root),
+        "--profile", profile_name,
+        "--artifacts", artifacts,
+        *model_args,
+    ]
+
+    return cmd, model_env
+
+
+def _build_host_environment(
+    parser_name: str,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    venv_bin = str(resolve_venv_bin_dir(parser_name))
+    current_path = env.get("PATH", "")
+    env["PATH"] = venv_bin if not current_path else venv_bin + os.pathsep + current_path
+    return env
+
+
+def _run_host_subprocess(
+    parser_name: str,
+    cmd: list[str],
+    extra_env: dict[str, str],
+) -> int:
+    env = _build_host_environment(parser_name, extra_env)
+    return subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        env=env,
+    ).returncode
+
+
+def _run_subprocess(
+    compose_base: list[str],
+    parser_name: str,
+    doc_path: Path,
+    profile_name: str,
+    container_output_root: str,
+    artifacts: str,
+    *,
+    runtime: str = RUNTIME_DOCKER,
+    output_root: Path | None = None,
+) -> int:
+    if runtime == RUNTIME_HOST:
+        assert output_root is not None, "output_root required for host runtime"
+        cmd, extra_env = _build_host_command(
+            parser_name, doc_path, output_root, profile_name, artifacts
+        )
+        return _run_host_subprocess(parser_name, cmd, extra_env)
+
+    cmd = _build_docker_command(
+        compose_base, parser_name, doc_path, profile_name, container_output_root, artifacts
+    )
     return subprocess.run(cmd, cwd=str(ROOT)).returncode
 
 
@@ -605,26 +720,45 @@ def run_parser_preflight(
     compose_base: list[str],
     parser_name: str,
     profile_name: str,
+    *,
+    runtime: str = RUNTIME_DOCKER,
 ) -> dict:
-    cmd = compose_base + [
-        "run",
-        "--rm",
-        "-T",
-        "--no-deps",
-        "-e", "PYTHONPATH=/app",
-        "--entrypoint", "python",
-        parser_name,
-        "/app/scripts/parser_preflight.py",
-        "--parser", parser_name,
-        "--profile", profile_name,
-    ]
-
-    result = subprocess.run(
-        cmd,
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-    )
+    if runtime == RUNTIME_HOST:
+        cmd = [
+            str(resolve_venv_python(parser_name)),
+            "-m",
+            "scripts.parser_preflight",
+            "--parser", parser_name,
+            "--profile", profile_name,
+            "--runtime", "host",
+            "--project-root", str(ROOT),
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            env=_build_host_environment(parser_name),
+        )
+    else:
+        cmd = compose_base + [
+            "run",
+            "--rm",
+            "-T",
+            "--no-deps",
+            "-e", "PYTHONPATH=/app",
+            "--entrypoint", "python",
+            parser_name,
+            "/app/scripts/parser_preflight.py",
+            "--parser", parser_name,
+            "--profile", profile_name,
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
 
     preflight_json: dict | None = None
     for line in reversed((result.stdout or "").splitlines()):
@@ -765,6 +899,7 @@ def run_preflight(
     output_root: Path,
     compose_base: list[str],
     compose_override: str | None,
+    runtime: str = RUNTIME_DOCKER,
 ) -> bool:
     failures = 0
     warnings_count = 0
@@ -891,142 +1026,123 @@ def run_preflight(
             str(adapter),
         )
 
-    # --------------------------------------------------
-    # Compose override
-    # --------------------------------------------------
+    if runtime == RUNTIME_HOST:
+        # --------------------------------------------------
+        # Host: check venv existence for each required parser
+        # --------------------------------------------------
 
-    if compose_override:
-        override_path = Path(
-            compose_override
-        )
+        required_venvs = set(parsers) | {"pymupdf"}
 
-        if not override_path.is_absolute():
-            override_path = (
-                ROOT
-                / override_path
+        for venv_name in sorted(required_venvs):
+            python_exe = resolve_venv_python(venv_name)
+            report(
+                python_exe.is_file(),
+                f"venv {venv_name}",
+                str(python_exe),
             )
 
-        report(
-            override_path.is_file(),
-            "compose override",
-            str(override_path),
-        )
-
-    # --------------------------------------------------
-    # Docker CLI
-    # --------------------------------------------------
-
-    docker_path = shutil.which(
-        "docker"
-    )
-
-    report(
-        docker_path is not None,
-        "Docker CLI",
-        docker_path,
-    )
-
-    if docker_path is None:
-        print()
-        print(
-            f"Preflight result: FAIL "
-            f"({failures} failure(s))"
-        )
-        return False
-
-    # --------------------------------------------------
-    # Docker daemon
-    # --------------------------------------------------
-
-    docker_info = subprocess.run(
-        [
-            "docker",
-            "info",
-            "--format",
-            "{{.ServerVersion}}",
-        ],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-    )
-
-    docker_detail = (
-        docker_info.stdout.strip()
-        if docker_info.returncode == 0
-        else docker_info.stderr.strip()
-    )
-
-    report(
-        docker_info.returncode == 0,
-        "Docker daemon",
-        docker_detail or None,
-    )
-
-    # --------------------------------------------------
-    # Docker Compose configuration
-    # --------------------------------------------------
-
-    missing_required_services = True
-
-    compose_result = subprocess.run(
-        compose_base
-        + [
-            "config",
-            "--services",
-        ],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-    )
-
-    if compose_result.returncode != 0:
-        report(
-            False,
-            "Docker Compose configuration",
-            (
-                compose_result.stderr.strip()
-                or compose_result.stdout.strip()
-            ),
-        )
+        parser_preflight_ready = failures == 0
 
     else:
-        report(
-            True,
-            "Docker Compose configuration",
-        )
+        # --------------------------------------------------
+        # Docker: compose override, CLI, daemon, services
+        # --------------------------------------------------
 
-        services = {
-            line.strip()
-            for line
-            in compose_result.stdout.splitlines()
-            if line.strip()
-        }
+        if compose_override:
+            override_path = Path(compose_override)
 
-        required_services = (
-            set(parsers)
-            | {
-                "pymupdf",
-            }
-        )
+            if not override_path.is_absolute():
+                override_path = ROOT / override_path
 
-        missing_required_services = False
-        for service in sorted(
-            required_services
-        ):
-            present = service in services
-            if not present:
-                missing_required_services = True
             report(
-                present,
-                f"Compose service: {service}",
+                override_path.is_file(),
+                "compose override",
+                str(override_path),
             )
 
-    parser_preflight_ready = (
-        docker_path is not None
-        and docker_info.returncode == 0
-        and compose_result.returncode == 0
-        and not missing_required_services
-    )
+        docker_path = shutil.which("docker")
+
+        report(
+            docker_path is not None,
+            "Docker CLI",
+            docker_path,
+        )
+
+        if docker_path is None:
+            print()
+            print(
+                f"Preflight result: FAIL "
+                f"({failures} failure(s))"
+            )
+            return False
+
+        docker_info = subprocess.run(
+            [
+                "docker",
+                "info",
+                "--format",
+                "{{.ServerVersion}}",
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        docker_detail = (
+            docker_info.stdout.strip()
+            if docker_info.returncode == 0
+            else docker_info.stderr.strip()
+        )
+
+        report(
+            docker_info.returncode == 0,
+            "Docker daemon",
+            docker_detail or None,
+        )
+
+        missing_required_services = True
+
+        compose_result = subprocess.run(
+            compose_base + ["config", "--services"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        if compose_result.returncode != 0:
+            report(
+                False,
+                "Docker Compose configuration",
+                (
+                    compose_result.stderr.strip()
+                    or compose_result.stdout.strip()
+                ),
+            )
+
+        else:
+            report(True, "Docker Compose configuration")
+
+            services = {
+                line.strip()
+                for line in compose_result.stdout.splitlines()
+                if line.strip()
+            }
+
+            required_services = set(parsers) | {"pymupdf"}
+
+            missing_required_services = False
+            for service in sorted(required_services):
+                present = service in services
+                if not present:
+                    missing_required_services = True
+                report(present, f"Compose service: {service}")
+
+        parser_preflight_ready = (
+            docker_path is not None
+            and docker_info.returncode == 0
+            and compose_result.returncode == 0
+            and not missing_required_services
+        )
 
     # --------------------------------------------------
     # Parser / profile
@@ -1039,7 +1155,7 @@ def run_preflight(
     if not parser_preflight_ready:
         print(
             "  [SKIP] parser/profile checks "
-            "because Docker/Compose infrastructure failed"
+            "because infrastructure checks failed"
         )
         print()
         parts = [f"{failures} failure(s)"]
@@ -1066,6 +1182,7 @@ def run_preflight(
             compose_base,
             parser_name,
             profile_name,
+            runtime=runtime,
         )
 
         for check in result.get("checks", []):
@@ -1125,9 +1242,12 @@ def main() -> None:
         if args.output_root
         else (ROOT / benchmark["output_directory"]).resolve()
     )
+    runtime = args.runtime
+
     # resume-check is read-only: it never calls docker, so no container path needed.
+    # host runtime also doesn't use container paths.
     container_output_root = (
-        "" if args.resume_check
+        "" if (args.resume_check or runtime == RUNTIME_HOST)
         else to_container_output_root(output_root)
     )
 
@@ -1163,6 +1283,7 @@ def main() -> None:
     if args.limit is not None and len(docs) < len(all_docs):
         print(f"Limit:      {args.limit}  (from {len(all_docs)} discovered PDFs)")
     print(f"Total jobs: {total}  (pending={pending}, already-done={skipped})")
+    print(f"Runtime:    {runtime}")
     print(f"On error:   {'continue' if args.continue_on_error else 'abort'}")
     if args.compose_override:
         print(f"Overlay:    {args.compose_override}")
@@ -1208,6 +1329,7 @@ def main() -> None:
             output_root,
             compose_base,
             args.compose_override,
+            runtime,
         )
         sys.exit(0 if ok else 1)
 
@@ -1215,8 +1337,17 @@ def main() -> None:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOGS_DIR / f"batch_{ts}.log"
     results_path = LOGS_DIR / f"batch_{ts}_results.jsonl"
+    manifest_path = LOGS_DIR / f"batch_{ts}_manifest.json"
+    manifest = {
+        "batch_start": ts,
+        "execution_runtime": runtime,
+        "host_os": platform.platform(),
+        "orchestrator_python": sys.version.split()[0],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Master log: {log_path.relative_to(ROOT)}")
-    print(f"Results:    {results_path.relative_to(ROOT)}\n")
+    print(f"Results:    {results_path.relative_to(ROOT)}")
+    print(f"Manifest:   {manifest_path.relative_to(ROOT)}\n")
 
     with log_path.open("w", encoding="utf-8") as lf:
 
@@ -1229,7 +1360,10 @@ def main() -> None:
 
         # ── 4. Build source inventories ───────────────────────────────────────
         log("\n[SOURCE INVENTORIES]")
-        build_source_inventories(docs, doc_sha256, input_dir, output_root, compose_base, args.resume, log)
+        build_source_inventories(
+            docs, doc_sha256, input_dir, output_root, compose_base, args.resume, log,
+            runtime=runtime,
+        )
 
         # ── 5. Execute ────────────────────────────────────────────────────────
         batch_start = time.monotonic()
@@ -1238,6 +1372,7 @@ def main() -> None:
             args.artifacts, args.continue_on_error, results_path, log,
             output_root=output_root,
             artifact_policy=artifact_policy,
+            runtime=runtime,
         )
         elapsed = time.monotonic() - batch_start
 

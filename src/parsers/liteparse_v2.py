@@ -802,7 +802,7 @@ def _build_metrics(
             "pipeline_seconds": round(pipeline_seconds, 6),
             "pages_total": page_count,
             "pages_processed": page_count,
-            "failed_pages": [],
+            "failed_pages": 0,
             "partial_pages": None,
             "empty_output_pages": artifact_result["empty_output_pages"],
             "pipeline_pages_per_second": (

@@ -26,6 +26,7 @@ from src.benchmark.config import (
     BenchmarkConfigurationError,
     get_profile,
 )
+from src.benchmark.cpu_resources import resolve_parallelism
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
 
@@ -847,6 +848,48 @@ def _build_metrics(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_profile_runtime(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    resolved = dict(profile)
+
+    configured_workers = int(
+        resolved.get(
+            "num_workers",
+            2,
+        )
+    )
+
+    if configured_workers <= 0:
+        raise BenchmarkConfigurationError(
+            "LiteParse num_workers must be greater than zero."
+        )
+
+    try:
+        parallelism = resolve_parallelism(
+            configured_workers
+        )
+    except ValueError as exc:
+        raise BenchmarkConfigurationError(
+            str(exc)
+        ) from exc
+
+    resolved["num_workers_configured"] = (
+        configured_workers
+    )
+    resolved["available_logical_cpus"] = int(
+        parallelism["available_logical_cpus"]
+    )
+    resolved["num_workers"] = int(
+        parallelism["effective"]
+    )
+    resolved["parallelism_source"] = str(
+        parallelism["source"]
+    )
+
+    return resolved
+
+
 def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
     """Build the kwargs dict for liteparse.LiteParse() from a resolved profile."""
     ocr_enabled = bool(profile.get("ocr_enabled", False))
@@ -869,7 +912,7 @@ def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
         "quiet": True,
         "continue_on_page_error": False,
         "ocr_server_url": None,
-        "num_workers": int(profile.get("num_workers", 4)),
+        "num_workers": int(profile.get("num_workers", 2)),
         "dpi": int(profile.get("dpi", 150)),
         "max_pages": 2000,
     }
@@ -914,7 +957,12 @@ def preflight_profile(
 
     # Profile configuration
     try:
-        profile = get_profile(PARSER_NAME, profile_name)
+        profile = _resolve_profile_runtime(
+            get_profile(
+                PARSER_NAME,
+                profile_name,
+            )
+        )
     except Exception as exc:
         checks.append(
             make_check(
@@ -1004,12 +1052,35 @@ def preflight_profile(
     )
 
     # Workers
-    num_workers = int(profile.get("num_workers", 0))
+    configured_workers = int(
+        profile["num_workers_configured"]
+    )
+    available_cpus = int(
+        profile["available_logical_cpus"]
+    )
+    effective_workers = int(
+        profile["num_workers"]
+    )
+
     checks.append(
         make_check(
-            "num_workers",
-            "pass" if num_workers > 0 else "fail",
-            str(num_workers),
+            "workers configured fallback",
+            "pass",
+            str(configured_workers),
+        )
+    )
+    checks.append(
+        make_check(
+            "logical CPUs available",
+            "pass" if available_cpus > 0 else "fail",
+            str(available_cpus),
+        )
+    )
+    checks.append(
+        make_check(
+            "workers effective",
+            "pass" if effective_workers > 0 else "fail",
+            str(effective_workers),
         )
     )
 
@@ -1182,7 +1253,12 @@ def main() -> None:
     if not input_path.is_file():
         raise SystemExit(f"Input not found: {input_path}")
 
-    profile = get_profile(PARSER_NAME, args.profile)
+    profile = _resolve_profile_runtime(
+        get_profile(
+            PARSER_NAME,
+            args.profile,
+        )
+    )
     normalization_config = get_normalization_config()
     tokenizer_name = get_reference_tokenizer()
 
@@ -1216,7 +1292,13 @@ def main() -> None:
     print(f"OCR enabled:   {ocr_enabled}")
     print(f"OCR language:  {ocr_language if ocr_enabled else 'N/A'}")
     print(f"DPI:           {profile.get('dpi', 150)}")
-    print(f"Workers:       {profile.get('num_workers', 4)}")
+    print(
+        "Workers:       "
+        f"{profile['num_workers']} "
+        f"(configured={profile['num_workers_configured']}, "
+        f"available={profile['available_logical_cpus']}, "
+        f"source={profile['parallelism_source']})"
+    )
     print(f"Visual desc:   {image_description}")
     print(f"Tokenizer:     {tokenizer_name}")
     print(f"Output:        {paths.output_dir}")

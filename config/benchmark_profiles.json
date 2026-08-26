@@ -128,7 +128,7 @@
           "images_scale": 1.0,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "threads": 10,
+          "threads": 2,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
         },
         "ocr_auto": {
@@ -150,7 +150,7 @@
           "images_scale": 1.0,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "threads": 10,
+          "threads": 2,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
         },
         "ocr_auto_visual": {
@@ -175,7 +175,7 @@
           "formula_enrichment": false,
           "code_enrichment": false,
           "accelerator_device": "cpu",
-          "threads": 10,
+          "threads": 2,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
         },
         "ocr_auto_formula": {
@@ -197,7 +197,7 @@
           "images_scale": 1.0,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "threads": 10,
+          "threads": 2,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
         },
         "ocr_auto_picture_classification": {
@@ -219,7 +219,7 @@
           "images_scale": 1.0,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "threads": 10,
+          "threads": 2,
           "model_artifacts_path": "/home/appuser/.cache/docling/models"
         }
       }
@@ -318,7 +318,7 @@
           "extract_screenshots": false,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "num_workers": 4,
+          "num_workers": 2,
           "dpi": 150,
           "image_description": false
         },
@@ -339,7 +339,7 @@
           "extract_screenshots": false,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "num_workers": 4,
+          "num_workers": 2,
           "ocr_strategy": "selective",
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",
@@ -368,7 +368,7 @@
           "extract_screenshots": false,
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
-          "num_workers": 4,
+          "num_workers": 2,
           "ocr_strategy": "selective",
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",

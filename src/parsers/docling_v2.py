@@ -44,6 +44,7 @@ from src.benchmark.config import (
     get_profile,
     get_reference_tokenizer,
 )
+from src.benchmark.cpu_resources import resolve_parallelism
 from src.benchmark.metrics_writer import write_json
 from src.benchmark.paths import build_output_paths
 from src.benchmark.preflight import make_check, make_result
@@ -618,20 +619,41 @@ def _resolve_profile_runtime(
             )
         )
     )
-    threads = (
+
+    configured_threads = (
         threads_override
         if threads_override is not None
         else int(
             resolved.get(
                 "threads",
-                10,
+                2,
             )
         )
     )
 
-    if threads <= 0:
+    if configured_threads <= 0:
         raise BenchmarkConfigurationError(
             "Docling threads must be greater than zero."
+        )
+
+    try:
+        parallelism = resolve_parallelism(
+            configured_threads
+        )
+    except ValueError as exc:
+        raise BenchmarkConfigurationError(
+            str(exc)
+        ) from exc
+
+    if threads_override is not None:
+        effective_threads = configured_threads
+        parallelism_source = "cli_override"
+    else:
+        effective_threads = int(
+            parallelism["effective"]
+        )
+        parallelism_source = str(
+            parallelism["source"]
         )
 
     model_artifacts_path = (
@@ -646,7 +668,14 @@ def _resolve_profile_runtime(
     )
 
     resolved["accelerator_device"] = requested_device
-    resolved["threads"] = threads
+    resolved["threads_configured"] = configured_threads
+    resolved["available_logical_cpus"] = int(
+        parallelism["available_logical_cpus"]
+    )
+    resolved["threads"] = effective_threads
+    resolved["parallelism_source"] = (
+        parallelism_source
+    )
     resolved["model_artifacts_path"] = str(
         model_artifacts_path
     )
@@ -956,12 +985,35 @@ def preflight_profile(
     # Threads
     # --------------------------------------------------
 
-    threads = int(profile.get("threads", 0))
+    configured_threads = int(
+        profile["threads_configured"]
+    )
+    available_cpus = int(
+        profile["available_logical_cpus"]
+    )
+    effective_threads = int(
+        profile["threads"]
+    )
+
     checks.append(
         make_check(
-            "threads",
-            "pass" if threads > 0 else "fail",
-            str(threads),
+            "threads configured fallback",
+            "pass",
+            str(configured_threads),
+        )
+    )
+    checks.append(
+        make_check(
+            "logical CPUs available",
+            "pass" if available_cpus > 0 else "fail",
+            str(available_cpus),
+        )
+    )
+    checks.append(
+        make_check(
+            "threads effective",
+            "pass" if effective_threads > 0 else "fail",
+            str(effective_threads),
         )
     )
 
@@ -1344,7 +1396,10 @@ def main() -> None:
     )
     print(
         "Threads:      "
-        f"{profile['threads']}"
+        f"{profile['threads']} "
+        f"(configured={profile['threads_configured']}, "
+        f"available={profile['available_logical_cpus']}, "
+        f"source={profile['parallelism_source']})"
     )
     print(
         "Models:       "
@@ -1867,8 +1922,17 @@ def main() -> None:
                 "device_resolved": (
                     resolved_device
                 ),
+                "threads_configured": int(
+                    profile["threads_configured"]
+                ),
+                "available_logical_cpus": int(
+                    profile["available_logical_cpus"]
+                ),
                 "threads": int(
                     profile["threads"]
+                ),
+                "parallelism_source": str(
+                    profile["parallelism_source"]
                 ),
                 "cuda_available": (
                     torch.cuda.is_available()

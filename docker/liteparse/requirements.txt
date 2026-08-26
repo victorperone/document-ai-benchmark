@@ -4,3 +4,5 @@ Pillow>=10.3.0
 transformers>=4.40.0
 torch>=2.2.0
 accelerate>=0.27.0
+psutil==7.2.2
+tiktoken==0.13.0

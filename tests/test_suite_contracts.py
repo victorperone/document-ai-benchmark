@@ -626,6 +626,8 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
     that includes the liteparse service name.
     """
 
+    __test__ = False  # prevent pytest from collecting the abstract base class
+
     suite_name: str
     expected_pairs: list[tuple[str, str]]
 
@@ -769,6 +771,7 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
 # ── smoke_expanded ─────────────────────────────────────────────────────────────
 
 class TestSmokeExpandedContracts(_ExpandedSuiteContractBase):
+    __test__ = True
     suite_name = "smoke_expanded"
     expected_pairs = SMOKE_EXPANDED_PAIRS
 
@@ -807,6 +810,7 @@ class TestSmokeExpandedContracts(_ExpandedSuiteContractBase):
 # ── ocr_primary_expanded ───────────────────────────────────────────────────────
 
 class TestOcrPrimaryExpandedContracts(_ExpandedSuiteContractBase):
+    __test__ = True
     suite_name = "ocr_primary_expanded"
     expected_pairs = OCR_PRIMARY_EXPANDED_PAIRS
 
@@ -840,6 +844,7 @@ class TestOcrPrimaryExpandedContracts(_ExpandedSuiteContractBase):
 # ── visual_ablation_expanded ───────────────────────────────────────────────────
 
 class TestVisualAblationExpandedContracts(_ExpandedSuiteContractBase):
+    __test__ = True
     suite_name = "visual_ablation_expanded"
     expected_pairs = VISUAL_ABLATION_EXPANDED_PAIRS
 
@@ -877,6 +882,7 @@ class TestVisualAblationExpandedContracts(_ExpandedSuiteContractBase):
 # ── full_corpus_expanded ───────────────────────────────────────────────────────
 
 class TestFullCorpusExpandedContracts(_ExpandedSuiteContractBase):
+    __test__ = True
     suite_name = "full_corpus_expanded"
     expected_pairs = FULL_CORPUS_EXPANDED_PAIRS
 

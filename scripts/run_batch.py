@@ -614,7 +614,8 @@ def _run_subprocess(
     output_root: Path | None = None,
 ) -> int:
     if runtime == RUNTIME_HOST:
-        assert output_root is not None, "output_root required for host runtime"
+        if output_root is None:
+            raise ValueError("output_root is required for host runtime")
         cmd, extra_env = _build_host_command(
             parser_name, doc_path, output_root, profile_name, artifacts
         )
@@ -733,12 +734,20 @@ def run_parser_preflight(
             "--runtime", "host",
             "--project-root", str(ROOT),
         ]
+        spec = PARSER_RUNTIME_SPECS.get(parser_name)
+        model_root = resolve_model_root(RUNTIME_HOST, parser_name)
+        extra_env = {
+            k: v.replace("{model_root}", str(model_root))
+            for k, v in (spec.model_env if spec else {}).items()
+        }
         result = subprocess.run(
             cmd,
             cwd=str(ROOT),
             capture_output=True,
             text=True,
-            env=_build_host_environment(parser_name),
+            encoding="utf-8",
+            errors="replace",
+            env=_build_host_environment(parser_name, extra_env),
         )
     else:
         cmd = compose_base + [
@@ -758,6 +767,8 @@ def run_parser_preflight(
             cwd=str(ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
     preflight_json: dict | None = None
@@ -1229,6 +1240,12 @@ def main() -> None:
     config = load_config()
     benchmark = config["benchmark"]
 
+    if getattr(args, "compose_override", None) and args.runtime == RUNTIME_HOST:
+        raise SystemExit(
+            "Error: --compose-override has no effect with --runtime host. "
+            "Remove --compose-override or switch to --runtime docker."
+        )
+
     jobs_spec = resolve_jobs_spec(args, config)
 
     try:
@@ -1237,12 +1254,14 @@ def main() -> None:
         raise SystemExit(f"Invalid --artifacts value: {exc}")
 
     input_dir = Path(args.input_dir) if args.input_dir else ROOT / benchmark["input_directory"]
-    output_root = (
-        (ROOT / args.output_root).resolve()
-        if args.output_root
-        else (ROOT / benchmark["output_directory"]).resolve()
-    )
     runtime = args.runtime
+
+    if args.output_root:
+        output_root = (ROOT / args.output_root).resolve()
+    elif runtime == RUNTIME_HOST:
+        output_root = (ROOT / benchmark["output_directory"] / "host").resolve()
+    else:
+        output_root = (ROOT / benchmark["output_directory"]).resolve()
 
     # resume-check is read-only: it never calls docker, so no container path needed.
     # host runtime also doesn't use container paths.

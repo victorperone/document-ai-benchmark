@@ -64,7 +64,6 @@ huggingface/
 # Benchmark execution logs
 logs/*
 !logs/.gitkeep
-EOF
 
 # Ignore files downloaded
 *:Zone.Identifier

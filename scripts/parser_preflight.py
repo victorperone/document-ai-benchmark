@@ -168,26 +168,17 @@ def _build_override_kwargs(
     if model_artifacts_path is not None:
         override = model_artifacts_path
     else:
-        try:
-            from src.benchmark.execution_paths import (
-                RUNTIME_HOST,
-                resolve_model_root,
-            )
-            override = resolve_model_root(RUNTIME_HOST, parser_name)
-        except Exception:
-            return {}
+        from src.benchmark.execution_paths import RUNTIME_HOST, resolve_model_root
+        override = resolve_model_root(RUNTIME_HOST, parser_name)
 
-    try:
-        from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS
-        spec = PARSER_RUNTIME_SPECS.get(parser_name)
-        if not spec or not spec.preflight_kwargs:
-            return {}
-        return {
-            k: Path(v.replace("{model_root}", str(override)))
-            for k, v in spec.preflight_kwargs.items()
-        }
-    except Exception:
+    from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS
+    spec = PARSER_RUNTIME_SPECS.get(parser_name)
+    if not spec or not spec.preflight_kwargs:
         return {}
+    return {
+        k: Path(v.replace("{model_root}", str(override)))
+        for k, v in spec.preflight_kwargs.items()
+    }
 
 
 def main() -> None:

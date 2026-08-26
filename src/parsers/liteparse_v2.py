@@ -27,6 +27,7 @@ from src.benchmark.config import (
     get_profile,
 )
 from src.benchmark.preflight import make_check, make_result
+from src.benchmark.runtime_io import add_runtime_arguments
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -721,6 +722,11 @@ def _build_metrics(
     liteparse_version: str | None,
     pipeline_seconds: float,
     page_count: int,
+    resources: dict[str, Any],
+    tokenizer_name: str,
+    artifact_selected_list: list[str],
+    run_log_path: Path | None,
+    metrics_json_path: Path | None,
 ) -> dict[str, Any]:
     pages_needing_ocr = [
         pn for pn, info in ocr_decisions.items()
@@ -732,21 +738,15 @@ def _build_metrics(
     ]
 
     reason_counter: Counter[str] = Counter()
-    orientation_counter: Counter[str] = Counter()
     for info in ocr_decisions.values():
         for r in info.get("reasons", []):
             reason_counter[r] += 1
-        rot = info.get("rotation_applied", 0)
-        if rot:
-            orientation_counter[str(rot)] += 1
 
     all_enrichments = list(image_enrichments.values())
     images_detected = len(all_images)
     images_extracted = sum(
         1 for e in all_enrichments if not e.get("duplicate", False)
     )
-    images_unique = images_extracted
-    images_duplicate = images_detected - images_extracted
     images_ocr_attempted = sum(
         1 for e in all_enrichments if e.get("ocr_attempted", False)
     )
@@ -764,49 +764,81 @@ def _build_metrics(
     }
 
     input_bytes = input_path.stat().st_size
-    clean_bytes = (
-        artifact_result.get("output", {}).get(
-            "clean_markdown_bytes", None
-        )
-    )
-    size_ratio = (
-        round(input_bytes / clean_bytes, 6) if clean_bytes else None
-    )
+    clean_bytes = artifact_result.get("output", {}).get("clean_markdown_bytes")
+    size_ratio = round(input_bytes / clean_bytes, 6) if clean_bytes else None
+
+    ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     return {
-        "parser": PARSER_NAME,
-        "profile": profile_name,
-        "liteparse_version": liteparse_version,
-        "python_version": platform.python_version(),
-        "tesseract_version": _get_tesseract_version(),
-        "ocr_language": profile.get("ocr_language"),
-        "dpi": profile.get("dpi"),
-        "num_workers": profile.get("num_workers"),
-        "source": source_summary,
-        "pages": {
-            "total": page_count,
-            "pages_native": page_count - len(pages_needing_ocr),
-            "pages_needing_ocr": len(pages_needing_ocr),
-            "pages_ocr": len(pages_needing_ocr),
-            "pages_rotated": len(pages_rotated),
-            "ocr_reason_counts": dict(reason_counter),
-            "orientation_counts": dict(orientation_counter),
+        "benchmark": {
+            "schema_version": 2,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "reference_tokenizer": tokenizer_name,
         },
-        "images": {
-            "detected": images_detected,
-            "extracted": images_extracted,
-            "unique": images_unique,
-            "duplicate": images_duplicate,
-            "ocr_attempted": images_ocr_attempted,
-            "with_usable_text": images_with_usable_text,
-            "described": images_described,
+        "run": {
+            "parser": PARSER_NAME,
+            "parser_display_name": PARSER_DISPLAY_NAME,
+            "profile": profile_name,
+            "verbose": False,
+            "artifact_selection": artifact_selected_list,
+            "resolved_config": profile,
+            "versions": {
+                "liteparse": liteparse_version,
+                "tesseract": _get_tesseract_version(),
+            },
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
         },
-        "timing": {
-            "pipeline_seconds": round(pipeline_seconds, 3),
+        "document": {
+            "id": input_path.stem,
+            "file": input_path.name,
+            "sha256": inventory.get("sha256"),
+            "pages": page_count,
+            "input_size_mb": inventory.get("file_size_mb"),
         },
-        "output": artifact_result.get("output", {}),
-        "input_bytes": input_bytes,
-        "size_ratio": size_ratio,
+        "source_pdf": source_summary,
+        "processing": {
+            **artifact_result["timing"],
+            "pipeline_seconds": round(pipeline_seconds, 6),
+            "pages_total": page_count,
+            "pages_processed": page_count,
+            "failed_pages": [],
+            "partial_pages": None,
+            "empty_output_pages": artifact_result["empty_output_pages"],
+            "pipeline_pages_per_second": (
+                round(page_count / pipeline_seconds, 6)
+                if pipeline_seconds > 0 else None
+            ),
+            "ocr": {
+                "enabled": ocr_enabled,
+                "engine": "tesseract" if ocr_enabled else None,
+                "language": profile.get("ocr_language") if ocr_enabled else None,
+                "dpi": profile.get("dpi") if ocr_enabled else None,
+                "pages_needing_ocr": len(pages_needing_ocr),
+                "pages_rotated": len(pages_rotated),
+                "ocr_reason_counts": dict(reason_counter),
+                "images_detected": images_detected,
+                "images_extracted": images_extracted,
+                "images_ocr_attempted": images_ocr_attempted,
+                "images_with_usable_text": images_with_usable_text,
+                "images_described": images_described,
+            },
+            "warnings_count": 0,
+            "errors_count": 0,
+        },
+        "resources": resources,
+        "content_elements": {
+            **artifact_result["content_elements"],
+        },
+        "heuristics": artifact_result["heuristics"],
+        "tokens": artifact_result["tokens"],
+        "normalization": artifact_result["normalization"],
+        "output": {
+            **artifact_result["output"],
+            "run_log": str(run_log_path) if run_log_path else None,
+            "metrics_json": str(metrics_json_path) if metrics_json_path else None,
+            "input_to_clean_markdown_size_ratio": size_ratio,
+        },
     }
 
 
@@ -1141,10 +1173,7 @@ def main() -> None:
     from src.benchmark.metrics_writer import write_json
     from src.benchmark.paths import build_output_paths
     from src.benchmark.resource_monitor import ResourceMonitor
-    from src.benchmark.runtime_io import (
-        add_runtime_arguments,
-        parser_output_context,
-    )
+    from src.benchmark.runtime_io import parser_output_context
 
     args = parse_args()
     artifact_policy: ArtifactPolicy = args.artifact_policy
@@ -1378,6 +1407,19 @@ def main() -> None:
         liteparse_version=liteparse_version,
         pipeline_seconds=pipeline_seconds,
         page_count=page_count,
+        resources=resources,
+        tokenizer_name=tokenizer_name,
+        artifact_selected_list=artifact_policy.as_list(),
+        run_log_path=(
+            paths.run_log
+            if artifact_policy.includes("run.log")
+            else None
+        ),
+        metrics_json_path=(
+            paths.metrics_json
+            if artifact_policy.includes("metrics.json")
+            else None
+        ),
     )
 
     if artifact_policy.includes("metrics.json"):

@@ -4,6 +4,7 @@ param(
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\_helpers.ps1"
 
 $null = & py -3.12 --version 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -21,9 +22,9 @@ if ($Force -and (Test-Path $VenvPath)) {
 }
 
 if (-not (Test-Path $VenvPath)) {
-    py -3.12 -m venv $VenvPath
+    Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
 }
 
-& "$VenvPath\Scripts\python.exe" -m pip install -r $ReqFile
+Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
 
 Write-Host "[docling] Done."

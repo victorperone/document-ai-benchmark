@@ -34,7 +34,8 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
         module="src.parsers.mineru_v2",
         model_env={
             "MINERU_MODEL_SOURCE": "local",
-            "HF_HOME": "{model_root}/hf",
+            "MINERU_TOOLS_CONFIG_JSON": "{model_root}/mineru.json",
+            "HF_HOME": "{model_root}/huggingface",
         },
     ),
 }

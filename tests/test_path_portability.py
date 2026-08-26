@@ -43,7 +43,7 @@ class TestResolveOutputRoot(unittest.TestCase):
 
     def test_host_returns_project_outputs(self):
         result = resolve_output_root(RUNTIME_HOST)
-        self.assertEqual(result, project_root() / "outputs")
+        self.assertEqual(result, project_root() / "outputs" / "host")
 
     def test_invalid_runtime_raises(self):
         with self.assertRaises(ValueError):
@@ -79,7 +79,7 @@ class TestResolveModelRoot(unittest.TestCase):
 
     def test_host_uses_project_model_path(self):
         result = resolve_model_root(RUNTIME_HOST, "docling")
-        self.assertEqual(result, project_root() / "models" / "docling")
+        self.assertEqual(result, project_root() / "models" / "docling" / "docling" / "models")
 
     def test_host_pymupdf_returns_project_path(self):
         result = resolve_model_root(RUNTIME_HOST, "pymupdf")

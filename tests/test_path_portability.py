@@ -130,6 +130,14 @@ class TestResolveVenvPythonWindows(unittest.TestCase):
             py = resolve_venv_python("docling")
         self.assertTrue(str(py).endswith("python.exe"))
 
+    def test_windows_liteparse_uses_standard_venv_python(self):
+        with patch.object(sys, "platform", "win32"):
+            py = resolve_venv_python("liteparse")
+
+        self.assertEqual(py.name, "python.exe")
+        self.assertIn("Scripts", py.parts)
+        self.assertNotEqual(py.name, "python3.11.exe")
+
     def test_windows_bin_dir_is_scripts(self):
         with patch.object(sys, "platform", "win32"):
             bd = resolve_venv_bin_dir("pymupdf")

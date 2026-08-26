@@ -21,6 +21,10 @@ from src.benchmark.execution_paths import (
 )
 from src.benchmark.paths import build_output_paths
 
+from scripts.run_batch import (
+    _resolve_batch_output_root,
+)
+
 
 class TestOutputRootIsolation(unittest.TestCase):
     """Tests 1–3: Root path separation between runtimes."""
@@ -54,6 +58,59 @@ class TestOutputRootIsolation(unittest.TestCase):
 
         self.assertNotEqual(docker_paths.output_dir, host_paths.output_dir)
         self.assertNotEqual(docker_paths.metrics_json, host_paths.metrics_json)
+
+class TestEffectiveBatchOutputRoot(unittest.TestCase):
+
+    def test_custom_host_root_gets_host_namespace(self):
+        result = _resolve_batch_output_root(
+            requested_output_root="outputs/_probe",
+            benchmark_output_directory="outputs",
+            runtime=RUNTIME_HOST,
+        )
+
+        self.assertEqual(
+            result,
+            (
+                ROOT
+                / "outputs"
+                / "_probe"
+                / "host"
+            ).resolve(),
+        )
+
+    def test_custom_docker_root_remains_unchanged(self):
+        result = _resolve_batch_output_root(
+            requested_output_root="outputs/_probe",
+            benchmark_output_directory="outputs",
+            runtime=RUNTIME_DOCKER,
+        )
+
+        self.assertEqual(
+            result,
+            (
+                ROOT
+                / "outputs"
+                / "_probe"
+            ).resolve(),
+        )
+
+    def test_same_custom_root_isolated_by_runtime(self):
+        docker_root = _resolve_batch_output_root(
+            requested_output_root="outputs/_probe",
+            benchmark_output_directory="outputs",
+            runtime=RUNTIME_DOCKER,
+        )
+
+        host_root = _resolve_batch_output_root(
+            requested_output_root="outputs/_probe",
+            benchmark_output_directory="outputs",
+            runtime=RUNTIME_HOST,
+        )
+
+        self.assertNotEqual(
+            docker_root,
+            host_root,
+        )
 
 
 class TestNonInterference(unittest.TestCase):

@@ -82,10 +82,21 @@ def _windows_python_version(parser_name: str) -> str:
 
 def resolve_venv_python(parser_name: str) -> Path:
     if sys.platform == "win32":
-        ver = _windows_python_version(parser_name)
-        script = f"python{ver}.exe" if ver != _WINDOWS_PYTHON_VERSION_DEFAULT else "python.exe"
-        return _PROJECT_ROOT / ".venvs" / parser_name / "Scripts" / script
-    return _PROJECT_ROOT / ".venvs" / parser_name / "bin" / "python"
+        return (
+            _PROJECT_ROOT
+            / ".venvs"
+            / parser_name
+            / "Scripts"
+            / "python.exe"
+        )
+
+    return (
+        _PROJECT_ROOT
+        / ".venvs"
+        / parser_name
+        / "bin"
+        / "python"
+    )
 
 
 def resolve_venv_bin_dir(parser_name: str) -> Path:

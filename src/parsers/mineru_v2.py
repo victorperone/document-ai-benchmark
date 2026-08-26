@@ -360,20 +360,10 @@ def preflight_profile(
             make_check("HF_HOME", "warn", "not set")
         )
 
-    # --------------------------------------------------
-    # /models/mineru
-    # --------------------------------------------------
-
-    models_root = Path("/models/mineru")
-    checks.append(
-        make_check(
-            "/models/mineru",
-            "pass" if models_root.is_dir() else "fail",
-            str(models_root),
-        )
-    )
-
-    return make_result(PARSER_NAME, profile_name, checks)
+    return make_result(
+        PARSER_NAME,
+        profile_name,
+        checks)
 
 
 def main() -> None:

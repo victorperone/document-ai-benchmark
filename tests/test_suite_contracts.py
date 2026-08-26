@@ -628,6 +628,11 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
 
     __test__ = False  # prevent pytest from collecting the abstract base class
 
+    __unittest_skip__ = True
+    __unittest_skip_why__ = (
+        "abstract expanded-suite contract base"
+    )
+
     suite_name: str
     expected_pairs: list[tuple[str, str]]
 
@@ -772,6 +777,7 @@ class _ExpandedSuiteContractBase(unittest.TestCase):
 
 class TestSmokeExpandedContracts(_ExpandedSuiteContractBase):
     __test__ = True
+    __unittest_skip__ = False
     suite_name = "smoke_expanded"
     expected_pairs = SMOKE_EXPANDED_PAIRS
 
@@ -811,6 +817,7 @@ class TestSmokeExpandedContracts(_ExpandedSuiteContractBase):
 
 class TestOcrPrimaryExpandedContracts(_ExpandedSuiteContractBase):
     __test__ = True
+    __unittest_skip__ = False
     suite_name = "ocr_primary_expanded"
     expected_pairs = OCR_PRIMARY_EXPANDED_PAIRS
 
@@ -845,6 +852,7 @@ class TestOcrPrimaryExpandedContracts(_ExpandedSuiteContractBase):
 
 class TestVisualAblationExpandedContracts(_ExpandedSuiteContractBase):
     __test__ = True
+    __unittest_skip__ = False
     suite_name = "visual_ablation_expanded"
     expected_pairs = VISUAL_ABLATION_EXPANDED_PAIRS
 
@@ -883,6 +891,7 @@ class TestVisualAblationExpandedContracts(_ExpandedSuiteContractBase):
 
 class TestFullCorpusExpandedContracts(_ExpandedSuiteContractBase):
     __test__ = True
+    __unittest_skip__ = False
     suite_name = "full_corpus_expanded"
     expected_pairs = FULL_CORPUS_EXPANDED_PAIRS
 

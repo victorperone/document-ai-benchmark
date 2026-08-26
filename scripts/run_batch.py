@@ -125,7 +125,9 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         metavar="DIR",
         help=(
-            "Output root, must be inside ROOT/outputs/. "
+            "Base output root. "
+            "For runtime=host, a 'host' namespace is "
+            "appended automatically. "
             "Default: config benchmark.output_directory."
         ),
     )
@@ -1233,6 +1235,32 @@ def run_preflight(
     return failures == 0
 
 
+def _resolve_batch_output_root(
+    requested_output_root: str | None,
+    benchmark_output_directory: str,
+    runtime: str,
+) -> Path:
+    if requested_output_root:
+        base_root = (
+            ROOT
+            / requested_output_root
+        ).resolve()
+    else:
+        base_root = (
+            ROOT
+            / benchmark_output_directory
+        ).resolve()
+
+    if runtime == RUNTIME_HOST:
+        return base_root / "host"
+
+    if runtime == RUNTIME_DOCKER:
+        return base_root
+
+    raise ValueError(
+        f"Invalid runtime: {runtime!r}"
+    )
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1256,12 +1284,13 @@ def main() -> None:
     input_dir = Path(args.input_dir) if args.input_dir else ROOT / benchmark["input_directory"]
     runtime = args.runtime
 
-    if args.output_root:
-        output_root = (ROOT / args.output_root).resolve()
-    elif runtime == RUNTIME_HOST:
-        output_root = (ROOT / benchmark["output_directory"] / "host").resolve()
-    else:
-        output_root = (ROOT / benchmark["output_directory"]).resolve()
+    output_root = _resolve_batch_output_root(
+        requested_output_root=args.output_root,
+        benchmark_output_directory=(
+            benchmark["output_directory"]
+        ),
+        runtime=runtime,
+    )
 
     # resume-check is read-only: it never calls docker, so no container path needed.
     # host runtime also doesn't use container paths.

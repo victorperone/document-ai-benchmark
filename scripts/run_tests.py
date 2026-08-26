@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """
-Fast regression test runner.
+Common regression test runner.
 
 Usage:
-    python scripts/run_tests.py
+    python3 scripts/run_tests.py
 
 Steps:
-    1. Compile scripts/, src/, tests/, parser_tests/ — catches syntax errors.
-    2. Run all test_*.py files under tests/ with unittest discover.
-    3. Run all test_*.py files under parser_tests/ with unittest discover.
+    1. Compile scripts/, src/, tests/, parser_tests/.
+    2. Run all test_*.py files under tests/.
 
-Returns 0 only if all steps pass with zero failures.
+Parser-specific tests are intentionally not executed with the
+orchestrator Python because each parser has an isolated dependency
+environment.
+
+Run parser-specific tests with:
+
+    python3 scripts/run_parser_tests.py <parser>
+
+Example:
+
+    python3 scripts/run_parser_tests.py docling
 """
+
 from __future__ import annotations
 
 import compileall
@@ -23,7 +33,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run_discover(start_dir: str) -> int:
+def _run_discover(
+    start_dir: str,
+) -> int:
     return subprocess.run(
         [
             sys.executable,
@@ -42,7 +54,7 @@ def _run_discover(start_dir: str) -> int:
 
 def main() -> int:
     print("=" * 60)
-    print("STEP 1 — Compile")
+    print("STEP 1 - Compile")
     print("=" * 60)
 
     compile_ok = all(
@@ -59,29 +71,33 @@ def main() -> int:
     )
 
     if not compile_ok:
-        print("\nCompile FAILED")
+        print()
+        print("Compile FAILED")
         return 1
 
-    print("Compile OK\n")
+    print("Compile OK")
+    print()
 
     print("=" * 60)
-    print("STEP 2 — Unit tests (tests/)")
+    print("STEP 2 - Common unit tests (tests/)")
     print("=" * 60)
 
-    rc_tests = _run_discover("tests")
+    rc_tests = _run_discover(
+        "tests"
+    )
+
+    if rc_tests != 0:
+        print()
+        print("Tests FAILED")
+        return 1
 
     print()
-    print("=" * 60)
-    print("STEP 3 — Parser tests (parser_tests/)")
-    print("=" * 60)
+    print("Common tests PASSED")
+    print(
+        "Parser-specific tests must run in "
+        "their parser environment."
+    )
 
-    rc_parser = _run_discover("parser_tests")
-
-    if rc_tests != 0 or rc_parser != 0:
-        print("\nTests FAILED")
-        return 1
-
-    print("\nAll tests PASSED")
     return 0
 
 

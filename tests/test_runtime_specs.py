@@ -89,6 +89,14 @@ class TestPaddleocrSpec(unittest.TestCase):
     def test_model_args_placeholder(self) -> None:
         self.assertIn("{model_root}", self.spec.model_args)
 
+    def test_model_source_check_disabled(self) -> None:
+        self.assertEqual(
+            self.spec.model_env.get(
+                "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"
+            ),
+            "True",
+        )
+
     def test_preflight_kwargs_key(self) -> None:
         self.assertIn("model_root_override", self.spec.preflight_kwargs)
 

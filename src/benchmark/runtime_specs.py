@@ -23,6 +23,9 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
     "paddleocr": ParserRuntimeSpec(
         module="src.parsers.paddleocr_v2",
         model_args=("--model-root", "{model_root}"),
+        model_env={
+            "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+        },
         preflight_kwargs={"model_root_override": "{model_root}"},
     ),
     "liteparse": ParserRuntimeSpec(

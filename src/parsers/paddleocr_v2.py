@@ -206,9 +206,14 @@ def parse_args() -> argparse.Namespace:
 def required_model_keys(
     profile: dict[str, Any],
 ) -> set[str]:
+    # PPStructureV3 may instantiate its text-line orientation
+    # component even when use_textline_orientation=False.
+    # Always resolving this model locally prevents PaddleX from
+    # falling back to an official model download at runtime.
     keys = {
         "layout",
         "text_detection",
+        "textline_orientation",
         "text_recognition",
     }
 
@@ -231,12 +236,6 @@ def required_model_keys(
             "doc_unwarping"
         )
 
-    if profile[
-        "textline_orientation"
-    ]:
-        keys.add(
-            "textline_orientation"
-        )
 
     if profile[
         "table_recognition"

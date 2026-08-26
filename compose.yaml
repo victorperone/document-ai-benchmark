@@ -80,6 +80,7 @@ services:
 
     environment:
       HOME: /home/appuser
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
 
     volumes:
       - ./config:/app/config:ro

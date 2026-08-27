@@ -35,14 +35,18 @@ class TestDockerParsersUnchanged(unittest.TestCase):
 
     def test_docker_parsers_have_at_least_one_suite(self):
         parser_in_suites = set()
-        for spec in self.suites.values():
-            if spec.get("runtime") == "docker":
-                for entry in spec.get("parsers", []):
-                    parser_in_suites.add(entry.get("name"))
+
+        for entries in self.suites.values():
+            for parser_name, _profile_name in entries:
+                parser_in_suites.add(parser_name)
+
         for parser in DOCKER_PARSERS:
             with self.subTest(parser=parser):
-                self.assertIn(parser, parser_in_suites,
-                              f"'{parser}' has no docker suite after additions")
+                self.assertIn(
+                    parser,
+                    parser_in_suites,
+                    f"'{parser}' is not referenced by any suite",
+                )
 
 
 class TestDockerComposeHasNoHostOnlyParsers(unittest.TestCase):
@@ -75,25 +79,39 @@ class TestDockerComposeHasNoHostOnlyParsers(unittest.TestCase):
 
 class TestRuntimeSpecDockerParsersUnchanged(unittest.TestCase):
     def test_docker_parsers_support_docker_runtime(self):
-        from src.benchmark.runtime_specs import PARSER_SPECS
+        from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS
+
         for parser_name in DOCKER_PARSERS:
-            spec = next((s for s in PARSER_SPECS if s.name == parser_name), None)
-            if spec is None:
-                continue
             with self.subTest(parser=parser_name):
                 self.assertIn(
-                    "docker", spec.supported_runtimes,
+                    parser_name,
+                    PARSER_RUNTIME_SPECS,
+                    f"'{parser_name}' is missing from PARSER_RUNTIME_SPECS",
+                )
+
+                spec = PARSER_RUNTIME_SPECS[parser_name]
+
+                self.assertIn(
+                    "docker",
+                    spec.supported_runtimes,
                     f"'{parser_name}' lost docker runtime support",
                 )
 
     def test_host_only_parsers_reject_docker(self):
-        from src.benchmark.runtime_specs import PARSER_SPECS
+        from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS
+
         for parser_name in HOST_ONLY_PARSERS:
-            spec = next((s for s in PARSER_SPECS if s.name == parser_name), None)
-            if spec is None:
-                continue
             with self.subTest(parser=parser_name):
+                self.assertIn(
+                    parser_name,
+                    PARSER_RUNTIME_SPECS,
+                    f"'{parser_name}' is missing from PARSER_RUNTIME_SPECS",
+                )
+
+                spec = PARSER_RUNTIME_SPECS[parser_name]
+
                 self.assertNotIn(
-                    "docker", spec.supported_runtimes,
+                    "docker",
+                    spec.supported_runtimes,
                     f"'{parser_name}' incorrectly supports docker",
                 )

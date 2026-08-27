@@ -7,6 +7,7 @@
     Uses Python 3.12. Installs requirements/windows/unstructured.txt.
     Does NOT download layout models (run prepare_unstructured_models.ps1 for that).
     Does NOT install Tesseract or Poppler (must be pre-installed system-wide).
+    Requires Windows Win32 long path support (LongPathsEnabled=1).
 
 .PARAMETER Force
     Recreate the venv even if it already exists.
@@ -17,6 +18,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\_helpers.ps1"
+
+Assert-WindowsLongPathsEnabled
 
 $null = & py -3.12 --version 2>&1
 if ($LASTEXITCODE -ne 0) {

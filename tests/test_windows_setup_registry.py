@@ -19,6 +19,8 @@ EXPECTED_SUPPORT_SCRIPTS = [
     "run_host_parser_tests.ps1",
 ]
 
+def test_helpers_has_long_path_check(self):
+    self.assertIn("Assert-WindowsLongPathsEnabled", self.text)
 
 class TestSetupScriptsExist(unittest.TestCase):
     def test_all_setup_scripts_exist(self):
@@ -35,11 +37,20 @@ class TestSetupScriptsExist(unittest.TestCase):
 
 
 class TestSetupUnstructuredStructure(unittest.TestCase):
+    """
+    Structural checks for the installation script.
+
+    Runtime offline and telemetry environment variables are intentionally
+    defined and tested through runtime_specs, not through this setup script.
+    """
     @classmethod
     def setUpClass(cls):
         path = SCRIPTS_DIR / "setup_unstructured.ps1"
         cls.available = path.exists()
         cls.text = path.read_text(encoding="utf-8") if cls.available else ""
+
+    def test_checks_windows_long_paths(self):
+        self.assertIn("Assert-WindowsLongPathsEnabled", self.text)
 
     def setUp(self):
         if not self.available:
@@ -48,20 +59,12 @@ class TestSetupUnstructuredStructure(unittest.TestCase):
     def test_creates_venv(self):
         self.assertIn(".venvs", self.text)
 
-    def test_sets_hf_hub_offline(self):
-        self.assertIn("HF_HUB_OFFLINE", self.text)
-
     def test_references_requirements_file(self):
         self.assertIn("unstructured.txt", self.text)
 
     def test_has_smoke_test(self):
         self.assertIn("import unstructured", self.text.replace("'", '"'))
 
-    def test_sets_telemetry_off(self):
-        self.assertTrue(
-            "DO_NOT_TRACK" in self.text or "SCARF_NO_ANALYTICS" in self.text,
-            "No telemetry-off variable found",
-        )
 
 
 class TestSetupXbergStructure(unittest.TestCase):

@@ -19,3 +19,42 @@ function Invoke-NativeChecked {
         throw "Command '$Cmd $($Args -join ' ')' failed with exit code $LASTEXITCODE"
     }
 }
+
+function Assert-WindowsLongPathsEnabled {
+    $RegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+    $ValueName = 'LongPathsEnabled'
+
+    try {
+        $Value = (Get-ItemProperty `
+            -Path $RegistryPath `
+            -Name $ValueName `
+            -ErrorAction Stop).$ValueName
+    }
+    catch {
+        throw @"
+Windows long path support is required for this environment.
+
+Expected:
+  HKLM\SYSTEM\CurrentControlSet\Control\FileSystem
+  LongPathsEnabled = 1
+
+Enable Win32 long paths on the Windows Server and restart the server
+before running this setup again.
+"@
+    }
+
+    if ($Value -ne 1) {
+        throw @"
+Windows long path support is disabled.
+
+Expected:
+  HKLM\SYSTEM\CurrentControlSet\Control\FileSystem
+  LongPathsEnabled = 1
+
+The Unstructured environment installs PyTorch, whose package contains
+paths that can exceed the legacy Windows MAX_PATH limit.
+
+Enable Win32 long paths and restart the Windows Server before retrying.
+"@
+    }
+}

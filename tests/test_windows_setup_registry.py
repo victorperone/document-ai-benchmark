@@ -19,8 +19,6 @@ EXPECTED_SUPPORT_SCRIPTS = [
     "run_host_parser_tests.ps1",
 ]
 
-def test_helpers_has_long_path_check(self):
-    self.assertIn("Assert-WindowsLongPathsEnabled", self.text)
 
 class TestSetupScriptsExist(unittest.TestCase):
     def test_all_setup_scripts_exist(self):
@@ -128,3 +126,10 @@ class TestHelpersPs1Structure(unittest.TestCase):
 
     def test_has_invoke_native_checked(self):
         self.assertIn("Invoke-NativeChecked", self.text)
+    def test_has_long_path_check(self):
+        self.assertIn("Assert-WindowsLongPathsEnabled", self.text)
+        self.assertIn("LongPathsEnabled", self.text)
+        self.assertIn(
+            r"HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem",
+            self.text,
+        )

@@ -14,12 +14,14 @@ $ErrorActionPreference = 'Continue'
 $Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 
 $Checks = @(
-    @{ Name = 'core';      Package = 'psutil' },
-    @{ Name = 'pymupdf';   Package = 'pymupdf' },
-    @{ Name = 'docling';   Package = 'docling' },
-    @{ Name = 'liteparse'; Package = 'liteparse' },
-    @{ Name = 'mineru';    Package = 'mineru' },
-    @{ Name = 'paddleocr'; Package = 'paddleocr' }
+    @{ Name = 'core';         Package = 'psutil' },
+    @{ Name = 'pymupdf';      Package = 'pymupdf' },
+    @{ Name = 'docling';      Package = 'docling' },
+    @{ Name = 'liteparse';    Package = 'liteparse' },
+    @{ Name = 'mineru';       Package = 'mineru' },
+    @{ Name = 'paddleocr';    Package = 'paddleocr' },
+    @{ Name = 'unstructured'; Package = 'unstructured' },
+    @{ Name = 'xberg';        Package = 'xberg' }
 )
 
 $Failures = 0

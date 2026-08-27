@@ -223,6 +223,27 @@ def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def validate_runtime_support(
+    jobs_spec: list[tuple[str, str]],
+    runtime: str,
+) -> None:
+    """Raise SystemExit if any parser does not support the requested runtime.
+
+    Called before any Docker or host dispatch so the error surfaces early,
+    before containers are queried or compose files are read.
+    """
+    errors: list[str] = []
+    for parser_name, _ in jobs_spec:
+        spec = PARSER_RUNTIME_SPECS.get(parser_name)
+        if spec is not None and runtime not in spec.supported_runtimes:
+            errors.append(
+                f"Parser '{parser_name}' does not support runtime '{runtime}'. "
+                f"Supported: {sorted(spec.supported_runtimes)}"
+            )
+    if errors:
+        raise SystemExit("\n".join(errors))
+
+
 def resolve_jobs_spec(args: argparse.Namespace, config: dict) -> list[tuple[str, str]]:
     suite_name = args.suite if args.suite else (None if args.parser else "default")
     if suite_name is not None:
@@ -942,7 +963,7 @@ def run_preflight(
 
     print()
     print(
-        "PREFLIGHT — infrastructure"
+        "PREFLIGHT - infrastructure"
     )
     print(
         "-" * 72
@@ -1162,7 +1183,7 @@ def run_preflight(
     # --------------------------------------------------
 
     print()
-    print("PREFLIGHT — parser/profile")
+    print("PREFLIGHT - parser/profile")
     print("-" * 72)
 
     if not parser_preflight_ready:
@@ -1275,6 +1296,11 @@ def main() -> None:
         )
 
     jobs_spec = resolve_jobs_spec(args, config)
+    runtime = args.runtime
+
+    # Guard: reject host-only parsers when running docker (and vice-versa).
+    # Must run before any Docker compose or host dispatch.
+    validate_runtime_support(jobs_spec, runtime)
 
     try:
         artifact_policy = ArtifactPolicy.from_cli([args.artifacts])
@@ -1282,7 +1308,6 @@ def main() -> None:
         raise SystemExit(f"Invalid --artifacts value: {exc}")
 
     input_dir = Path(args.input_dir) if args.input_dir else ROOT / benchmark["input_directory"]
-    runtime = args.runtime
 
     output_root = _resolve_batch_output_root(
         requested_output_root=args.output_root,
@@ -1315,7 +1340,7 @@ def main() -> None:
     skipped = total - pending
 
     print("=" * 72)
-    print("DOCUMENT AI BENCHMARK — BATCH RUN")
+    print("DOCUMENT AI BENCHMARK - BATCH RUN")
     print("=" * 72)
     effective_suite = args.suite if args.suite else (None if args.parser else "default")
     if effective_suite:
@@ -1324,7 +1349,7 @@ def main() -> None:
         print(f"Parser:     {args.parser}  /  {args.profile}")
     print(f"Input dir:  {input_dir}")
     if container_output_root:
-        print(f"Output:     {output_root}  →  {container_output_root}")
+        print(f"Output:     {output_root}  ->  {container_output_root}")
     else:
         print(f"Output:     {output_root}")
     print(f"Documents:  {len(docs)}")
@@ -1340,7 +1365,7 @@ def main() -> None:
     compose_base = build_compose_base(args.compose_override)
 
     if args.dry_run:
-        print("\nDRY RUN — run plan:\n")
+        print("\nDRY RUN - run plan:\n")
         for n, rec in enumerate(plan, 1):
             tag = "SKIP" if rec.status == "skip" else "    "
             print(
@@ -1354,7 +1379,7 @@ def main() -> None:
         return
 
     if args.resume_check:
-        print("\nRESUME CHECK — job reusability:\n")
+        print("\nRESUME CHECK - job reusability:\n")
         for rec in plan:
             tag = "SKIP   " if rec.status == "skip" else "PENDING"
             print(
@@ -1364,9 +1389,9 @@ def main() -> None:
         n_pending = sum(1 for r in plan if r.status == "pending")
         print()
         if n_pending == 0:
-            print(f"Resume check: PASS — all {n_skip} job(s) reusable")
+            print(f"Resume check: PASS - all {n_skip} job(s) reusable")
             return
-        print(f"Resume check: FAIL — {n_pending} job(s) pending (not reusable)")
+        print(f"Resume check: FAIL - {n_pending} job(s) pending (not reusable)")
         sys.exit(1)
 
     if args.preflight:

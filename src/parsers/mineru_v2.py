@@ -408,13 +408,27 @@ def main() -> None:
         )
     )
 
+    backend = str(
+        profile.get(
+            "backend",
+            "pipeline",
+        )
+    )
+
+    formula_enabled = bool(
+        profile.get("formula", True)
+    )
+    table_enabled = bool(
+        profile.get("table", True)
+    )
+
     print("=" * 72)
     print("DOCUMENT AI BENCHMARK V2")
     print("=" * 72)
     print(f"Parser:       {PARSER_DISPLAY_NAME}")
     print(f"Input:        {input_path}")
     print(f"Profile:      {args.profile}")
-    print("Backend:      pipeline")
+    print(f"Backend:      {backend}")
     print(f"Method:       {method}")
     print(
         "Threads:      "
@@ -441,6 +455,7 @@ def main() -> None:
         native_result = run_mineru_native(
             input_path=input_path,
             method=method,
+            backend=backend,
             threads=args.threads,
             verbose=args.verbose,
         )
@@ -708,7 +723,15 @@ def main() -> None:
 
     resolved_config[
         "backend"
-    ] = "pipeline"
+    ] = backend
+
+    resolved_config[
+        "formula"
+    ] = formula_enabled
+
+    resolved_config[
+        "table"
+    ] = table_enabled
 
     resolved_config[
         "threads"
@@ -989,10 +1012,10 @@ def main() -> None:
         ),
 
         "mineru_native": {
-            "backend": (
-                "pipeline"
-            ),
+            "backend": backend,
             "method": method,
+            "formula_enabled": formula_enabled,
+            "table_enabled": table_enabled,
             "native_content_items": (
                 len(
                     content_list
@@ -1340,6 +1363,7 @@ def run_mineru_native(
     *,
     input_path: Path,
     method: str,
+    backend: str = "pipeline",
     threads: int | None,
     verbose: bool,
 ) -> dict[str, Any]:
@@ -1383,7 +1407,7 @@ def run_mineru_native(
             "-o",
             str(native_root),
             "-b",
-            "pipeline",
+            backend,
             "-m",
             method,
         ]

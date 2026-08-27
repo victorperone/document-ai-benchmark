@@ -30,14 +30,9 @@ _HOST_MODEL_ROOTS: dict[str, Path] = {
     "paddleocr": _PROJECT_ROOT / "models" / "paddleocr" / "official_models",
     "mineru": _PROJECT_ROOT / "models" / "mineru",
     "pymupdf": _PROJECT_ROOT / "models" / "pymupdf",
+    "unstructured": _PROJECT_ROOT / "models" / "unstructured",
+    "xberg": _PROJECT_ROOT / "models" / "xberg",
 }
-
-# Windows requires per-parser Python version because liteparse 2.13.0 only
-# ships a cp311 Windows wheel; all other parsers use Python 3.12.
-_WINDOWS_PYTHON_VERSION: dict[str, str] = {
-    "liteparse": "3.11",
-}
-_WINDOWS_PYTHON_VERSION_DEFAULT = "3.12"
 
 
 def project_root() -> Path:
@@ -74,10 +69,6 @@ def resolve_model_root(runtime: str, parser_name: str) -> Path:
         except KeyError as exc:
             raise ValueError(f"Unknown parser: {parser_name!r}") from exc
     raise ValueError(f"Invalid runtime: {runtime!r}")
-
-
-def _windows_python_version(parser_name: str) -> str:
-    return _WINDOWS_PYTHON_VERSION.get(parser_name, _WINDOWS_PYTHON_VERSION_DEFAULT)
 
 
 def resolve_venv_python(parser_name: str) -> Path:

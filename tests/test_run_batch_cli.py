@@ -206,5 +206,47 @@ class TestLimitCLIValidation(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
 
+class TestWindowsConsoleCompatibility(unittest.TestCase):
+    """Regression: run_batch output must be encodable in Windows cp1252 (U+2192 was broken)."""
+
+    def _run_dry_run_cp1252(self):
+        import os
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy_pdf = Path(tmp) / "dummy.pdf"
+            dummy_pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "run_batch.py"),
+                    "--parser", "pymupdf",
+                    "--profile", "native",
+                    "--input-dir", str(tmp),
+                    "--dry-run",
+                ],
+                cwd=str(ROOT),
+                capture_output=True,
+                env=env,
+            )
+        # Decode with cp1252 — same encoding the subprocess wrote with
+        combined = proc.stdout.decode("cp1252", errors="replace") + \
+                   proc.stderr.decode("cp1252", errors="replace")
+        return proc.returncode, combined
+
+    def test_dry_run_exits_zero_with_cp1252(self):
+        returncode, _ = self._run_dry_run_cp1252()
+        self.assertEqual(returncode, 0)
+
+    def test_output_line_is_ascii_safe(self):
+        _, combined = self._run_dry_run_cp1252()
+        # Must not contain the non-ASCII arrow that broke cp1252 consoles
+        self.assertNotIn("→", combined)
+
+    def test_dry_run_contains_expected_headers(self):
+        returncode, combined = self._run_dry_run_cp1252()
+        self.assertEqual(returncode, 0)
+        self.assertIn("DRY RUN", combined)
+
+
 if __name__ == "__main__":
     unittest.main()

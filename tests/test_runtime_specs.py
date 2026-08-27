@@ -20,7 +20,7 @@ from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS, ParserRuntimeSpec
 class TestParserRuntimeSpecsPresence(unittest.TestCase):
 
     def test_all_parsers_present(self) -> None:
-        expected = {"pymupdf", "docling", "paddleocr", "liteparse", "mineru"}
+        expected = {"pymupdf", "docling", "paddleocr", "liteparse", "mineru", "unstructured", "xberg"}
         self.assertEqual(set(PARSER_RUNTIME_SPECS.keys()), expected)
 
     def test_all_specs_are_frozen_dataclass(self) -> None:

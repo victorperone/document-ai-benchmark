@@ -57,16 +57,13 @@ class LiteParsePreflightTests(unittest.TestCase):
                     return liteparse_version
                 return None
 
-            def _fake_which(cmd: str) -> str | None:
-                if cmd == "tesseract":
-                    return "/usr/bin/tesseract" if tesseract_present else None
-                return None
-
             def _fake_tessdata_prefix() -> str | None:
                 return str(tessdata_dir) if tessdata_present else None
 
             def _fake_tess_version() -> str | None:
                 return "5.3.0" if tesseract_present else None
+
+            tess_bin = "/usr/bin/tesseract" if tesseract_present else None
 
             with (
                 patch.object(liteparse_v2, "get_profile", side_effect=_fake_get_profile),
@@ -74,7 +71,10 @@ class LiteParsePreflightTests(unittest.TestCase):
                 patch.object(liteparse_v2, "_find_tessdata_prefix", side_effect=_fake_tessdata_prefix),
                 patch.object(liteparse_v2, "_get_tesseract_version", side_effect=_fake_tess_version),
                 patch.object(liteparse_v2, "DEFAULT_MODEL_ARTIFACTS", fake_model_root),
-                patch("shutil.which", side_effect=_fake_which),
+                patch(
+                    "src.benchmark.external_tools.resolve_tesseract_executable",
+                    return_value=tess_bin,
+                ),
             ):
                 return liteparse_v2.preflight_profile(profile_name)
 

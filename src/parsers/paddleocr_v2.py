@@ -44,7 +44,11 @@ PROFILE_BOOL_KEYS = (
     "document_unwarping",
     "region_detection",
     "seal_recognition",
+    "format_block_content",
 )
+
+# Additional known profile keys that are not booleans.
+PROFILE_EXTRA_KEYS = frozenset({"markdown_ignore_labels"})
 
 DEFAULT_MODEL_ROOT = Path(
     "/home/appuser/.paddlex/official_models"
@@ -346,6 +350,7 @@ def validate_profile(
     expected_keys = set(
         PROFILE_BOOL_KEYS
     )
+    all_known_keys = expected_keys | PROFILE_EXTRA_KEYS
     actual_keys = set(
         profile
     )
@@ -354,7 +359,7 @@ def validate_profile(
         expected_keys - actual_keys
     )
     unknown_keys = sorted(
-        actual_keys - expected_keys
+        actual_keys - all_known_keys
     )
 
     if missing_keys:
@@ -504,6 +509,9 @@ def build_pipeline_kwargs(
                     model_key
                 ]
             )
+
+    if profile.get("format_block_content") is True:
+        kwargs["format_block_content"] = True
 
     return kwargs
 
@@ -857,6 +865,39 @@ def preflight_profile(
                 )
             )
 
+        # Check predict() signature for markdown_ignore_labels
+        ignore_labels = profile.get("markdown_ignore_labels")
+        if ignore_labels is not None:
+            try:
+                predict_sig = inspect.signature(
+                    PPStructureV3.predict
+                )
+                predict_params = set(predict_sig.parameters)
+                if "markdown_ignore_labels" in predict_params:
+                    checks.append(
+                        make_check(
+                            "PPStructureV3 predict API (markdown_ignore_labels)",
+                            "pass",
+                        )
+                    )
+                else:
+                    checks.append(
+                        make_check(
+                            "PPStructureV3 predict API (markdown_ignore_labels)",
+                            "warn",
+                            "markdown_ignore_labels not in predict() signature "
+                            "for this paddleocr version; kwarg will be skipped at runtime",
+                        )
+                    )
+            except Exception as exc:
+                checks.append(
+                    make_check(
+                        "PPStructureV3 predict API (markdown_ignore_labels)",
+                        "warn",
+                        f"Signature check failed: {exc}",
+                    )
+                )
+
     except Exception as exc:
         checks.append(
             make_check(
@@ -1050,34 +1091,48 @@ def main() -> None:
 
             extraction_started = perf_counter()
 
-            results = list(
-                pipeline.predict(
-                    input=str(input_path),
-                    use_doc_orientation_classify=profile[
-                        "document_orientation_classification"
-                    ],
-                    use_doc_unwarping=profile[
-                        "document_unwarping"
-                    ],
-                    use_textline_orientation=profile[
-                        "textline_orientation"
-                    ],
-                    use_seal_recognition=profile[
-                        "seal_recognition"
-                    ],
-                    use_table_recognition=profile[
-                        "table_recognition"
-                    ],
-                    use_formula_recognition=profile[
-                        "formula_recognition"
-                    ],
-                    use_chart_recognition=profile[
-                        "chart_recognition"
-                    ],
-                    use_region_detection=profile[
-                        "region_detection"
-                    ],
+            predict_kwargs: dict[str, Any] = {
+                "input": str(input_path),
+                "use_doc_orientation_classify": profile[
+                    "document_orientation_classification"
+                ],
+                "use_doc_unwarping": profile[
+                    "document_unwarping"
+                ],
+                "use_textline_orientation": profile[
+                    "textline_orientation"
+                ],
+                "use_seal_recognition": profile[
+                    "seal_recognition"
+                ],
+                "use_table_recognition": profile[
+                    "table_recognition"
+                ],
+                "use_formula_recognition": profile[
+                    "formula_recognition"
+                ],
+                "use_chart_recognition": profile[
+                    "chart_recognition"
+                ],
+                "use_region_detection": profile[
+                    "region_detection"
+                ],
+            }
+
+            _ignore_labels = profile.get(
+                "markdown_ignore_labels"
+            )
+            if _ignore_labels is not None:
+                _predict_sig = inspect.signature(
+                    pipeline.predict
                 )
+                if "markdown_ignore_labels" in _predict_sig.parameters:
+                    predict_kwargs[
+                        "markdown_ignore_labels"
+                    ] = _ignore_labels
+
+            results = list(
+                pipeline.predict(**predict_kwargs)
             )
 
             extraction_seconds = (

@@ -423,7 +423,7 @@ def _build_metrics(
             "pipeline_seconds": round(pipeline_seconds, 6),
             "pages_total": inventory.get("pages"),
             "pages_processed": inventory.get("pages"),
-            "failed_pages": [],
+            "failed_pages": 0,
             "partial_pages": None,
             "empty_output_pages": artifact_result["empty_output_pages"],
             "pipeline_pages_per_second": (
@@ -733,9 +733,13 @@ def main() -> None:
     if image_block_types:
         partition_kwargs["extract_image_block_types"] = image_block_types
 
-    pdfminer_word_margin = profile.get("pdfminer_word_margin")
-    if pdfminer_word_margin is not None:
-        partition_kwargs["word_margin"] = float(pdfminer_word_margin)
+    for _pm_kwarg in (
+        "pdfminer_line_margin", "pdfminer_char_margin",
+        "pdfminer_line_overlap", "pdfminer_word_margin",
+    ):
+        _val = profile.get(_pm_kwarg)
+        if _val is not None:
+            partition_kwargs[_pm_kwarg] = float(_val)
 
     password = profile.get("password")
     if password:

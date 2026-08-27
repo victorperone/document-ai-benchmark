@@ -127,3 +127,47 @@ class TestProfileValues(unittest.TestCase):
 
     def test_fast_native_infer_table_false(self):
         self.assertFalse(self._profile("fast_native")["infer_table_structure"])
+
+
+class TestFullCpuLocalProfile(unittest.TestCase):
+    def _profile(self) -> dict:
+        return get_profile(PARSER_NAME, "full_cpu_local")
+
+    def test_exists(self):
+        self.assertIsInstance(self._profile(), dict)
+
+    def test_strategy_hi_res(self):
+        self.assertEqual(self._profile()["strategy"], "hi_res")
+
+    def test_ocr_enabled(self):
+        self.assertTrue(self._profile()["ocr_enabled"])
+
+    def test_infer_table_structure_true(self):
+        self.assertTrue(self._profile()["infer_table_structure"])
+
+    def test_extract_forms_true(self):
+        self.assertTrue(self._profile()["extract_forms"])
+
+    def test_form_extraction_skip_tables_false(self):
+        self.assertFalse(self._profile()["form_extraction_skip_tables"])
+
+    def test_extract_image_block_types_nonempty(self):
+        types = self._profile()["extract_image_block_types"]
+        self.assertTrue(len(types) > 0, "full_cpu_local must extract at least one image block type")
+
+    def test_detect_language_per_element_true(self):
+        self.assertTrue(self._profile()["detect_language_per_element"])
+
+    def test_no_payload_extraction(self):
+        self.assertFalse(self._profile()["extract_image_block_to_payload"])
+
+    def test_no_remote_services(self):
+        self.assertFalse(self._profile()["remote_services_enabled"])
+
+    def test_no_network(self):
+        self.assertFalse(self._profile()["network_allowed_during_run"])
+
+    def test_all_keys_valid(self):
+        from src.parsers.unstructured_v2 import _PROFILE_KEYS
+        unknown = set(self._profile()) - _PROFILE_KEYS
+        self.assertEqual(unknown, set(), f"Unknown keys in full_cpu_local: {unknown}")

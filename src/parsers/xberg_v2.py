@@ -26,15 +26,47 @@ PARSER_NAME = "xberg"
 PARSER_DISPLAY_NAME = "Xberg"
 XBERG_REQUIRED_VERSION = "1.0.14"
 
-_VALID_STRATEGIES = frozenset({"fast", "hi_res", "ocr_only"})
+# Keys that may appear in benchmark_profiles.json for the xberg parser.
+# These are the canonical config keys; _build_xberg_config() translates them
+# to the Xberg 1.0.14 object API.
 _PROFILE_KEYS = frozenset({
-    "strategy", "ocr_enabled", "ocr_engine", "languages",
-    "infer_table_structure", "detect_tables", "table_output_format",
-    "extract_images", "image_description", "output_format",
-    "detect_language", "language_hint", "max_pages",
-    "password", "dpi", "hi_res_dpi", "fast_dpi",
+    # Output format
+    "output_format", "result_format", "escape_markdown", "table_anchors",
+    "include_document_structure",
+    # Cache / quality
+    "use_cache", "enable_quality_processing",
+    # OCR
+    "ocr_enabled", "ocr_backend", "ocr_languages", "ocr_strategy",
+    "force_ocr", "auto_rotate",
+    # Tesseract tuning
+    "tesseract_psm", "tesseract_oem", "min_confidence",
+    "enable_table_detection", "tesseract_use_cache",
+    # Rendering / DPI
+    "target_dpi",
+    # Image preprocessing
+    "deskew", "denoise", "contrast_enhance",
+    # PDF extraction features
+    "extract_pages", "insert_page_markers",
+    "extract_tables", "extract_images", "extract_metadata",
+    "extract_annotations", "extract_form_fields",
+    "reading_order", "ocr_inline_images",
+    # Image extraction tuning
+    "run_ocr_on_images", "append_ocr_text", "include_data_base64",
+    # Content filter
+    "include_headers", "include_footers",
+    "strip_repeating_text", "include_watermarks",
+    # Layout
+    "layout_enabled",
+    # Downstream (disabled in primary profiles)
+    "chunking_enabled", "token_reduction_mode",
+    # Isolation
     "remote_services_enabled", "network_allowed_during_run",
 })
+
+
+class XbergConfigurationError(ValueError):
+    """The configured benchmark profile is incompatible with the pinned Xberg API."""
+
 
 # ---------------------------------------------------------------------------
 # Xberg API helpers
@@ -81,57 +113,193 @@ def _find_tessdata_prefix() -> str | None:
 
 
 def _build_xberg_config(profile: dict[str, Any], model_root: Path) -> Any:
-    """Build Xberg ExtractionConfig from a benchmark profile dict."""
+    """Translate a benchmark profile dict into a Xberg 1.0.14 ExtractionConfig.
+
+    Each sub-object is built explicitly against the pinned API. Any TypeError
+    raised by Xberg constructors surfaces as XbergConfigurationError — no
+    silent fallback to defaults.
+    """
     import xberg
 
-    strategy = str(profile.get("strategy", "fast"))
-    ocr_enabled = bool(profile.get("ocr_enabled", False))
-    languages = list(profile.get("languages", ["por", "eng"]))
-    infer_tables = bool(profile.get("infer_table_structure", True))
-    detect_tables = bool(profile.get("detect_tables", True))
+    ExtractionConfig = getattr(xberg, "ExtractionConfig", None)
+    if ExtractionConfig is None:
+        raise BenchmarkConfigurationError(
+            "xberg.ExtractionConfig not found — check Xberg 1.0.14 installation."
+        )
 
-    # Build OCR config if OCR is enabled
+    ocr_enabled = bool(profile.get("ocr_enabled", False))
+    target_dpi = int(profile.get("target_dpi", 300))
+
+    # --- OcrConfig -----------------------------------------------------------
     ocr_config = None
     if ocr_enabled:
         OcrConfig = getattr(xberg, "OcrConfig", None)
         TesseractConfig = getattr(xberg, "TesseractConfig", None)
-        if OcrConfig is not None:
+        if OcrConfig is None:
+            raise XbergConfigurationError(
+                "xberg.OcrConfig not found — Xberg 1.0.14 required."
+            )
+
+        tess_cfg = None
+        if TesseractConfig is not None:
+            tess_kwargs: dict[str, Any] = {}
+            languages = list(profile.get("ocr_languages", ["por", "eng"]))
+            if languages:
+                tess_kwargs["language"] = languages
+            psm = profile.get("tesseract_psm")
+            if psm is not None:
+                tess_kwargs["psm"] = int(psm)
+            oem = profile.get("tesseract_oem")
+            if oem is not None:
+                tess_kwargs["oem"] = int(oem)
+            min_conf = profile.get("min_confidence")
+            if min_conf is not None:
+                tess_kwargs["min_confidence"] = float(min_conf)
+            tess_kwargs["use_cache"] = bool(profile.get("tesseract_use_cache", False))
             try:
-                tess_cfg = TesseractConfig(languages=languages) if TesseractConfig else None
-                if tess_cfg is not None:
-                    ocr_config = OcrConfig(engine="tesseract", tesseract=tess_cfg)
-                else:
-                    ocr_config = OcrConfig(languages=languages)
-            except TypeError:
-                try:
-                    ocr_config = OcrConfig()
-                except Exception:
-                    ocr_config = None
+                tess_cfg = TesseractConfig(**tess_kwargs)
+            except TypeError as exc:
+                raise XbergConfigurationError(
+                    f"Xberg 1.0.14 TesseractConfig contract mismatch: {exc}"
+                ) from exc
 
-    # DPI for rendering
-    dpi_key = "hi_res_dpi" if strategy == "hi_res" else "fast_dpi"
-    dpi = int(profile.get(dpi_key, profile.get("dpi", 150 if strategy == "hi_res" else 72)))
+        ocr_kwargs: dict[str, Any] = {
+            "enabled": True,
+            "backend": str(profile.get("ocr_backend", "tesseract")),
+            "auto_rotate": bool(profile.get("auto_rotate", False)),
+            "vlm_fallback": "disabled",
+            "vlm_config": None,
+        }
+        if tess_cfg is not None:
+            ocr_kwargs["tesseract_config"] = tess_cfg
+        ocr_strategy = str(profile.get("ocr_strategy", "auto"))
+        if ocr_strategy not in ("disabled",):
+            ocr_kwargs["pipeline"] = ocr_strategy
+        try:
+            ocr_config = OcrConfig(**ocr_kwargs)
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 OcrConfig contract mismatch: {exc}"
+            ) from exc
 
-    ExtractionConfig = getattr(xberg, "ExtractionConfig", None)
-    if ExtractionConfig is None:
-        raise BenchmarkConfigurationError("xberg.ExtractionConfig not found — check Xberg version.")
+    # --- PdfConfig -----------------------------------------------------------
+    PdfConfig = getattr(xberg, "PdfConfig", None)
+    pdf_config = None
+    if PdfConfig is not None:
+        pdf_kwargs: dict[str, Any] = {
+            "extract_tables": bool(profile.get("extract_tables", True)),
+            "extract_metadata": bool(profile.get("extract_metadata", True)),
+            "extract_annotations": bool(profile.get("extract_annotations", False)),
+            "extract_form_fields": bool(profile.get("extract_form_fields", True)),
+            "reading_order": bool(profile.get("reading_order", False)),
+            "ocr_inline_images": bool(profile.get("ocr_inline_images", False)),
+        }
+        try:
+            pdf_config = PdfConfig(**pdf_kwargs)
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 PdfConfig contract mismatch: {exc}"
+            ) from exc
+
+    # --- PageConfig ----------------------------------------------------------
+    PageConfig = getattr(xberg, "PageConfig", None)
+    page_config = None
+    if PageConfig is not None:
+        page_kwargs: dict[str, Any] = {
+            "extract_pages": bool(profile.get("extract_pages", True)),
+            "insert_page_markers": bool(profile.get("insert_page_markers", False)),
+        }
+        try:
+            page_config = PageConfig(**page_kwargs)
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 PageConfig contract mismatch: {exc}"
+            ) from exc
+
+    # --- ImageExtractionConfig -----------------------------------------------
+    ImageExtractionConfig = getattr(xberg, "ImageExtractionConfig", None)
+    image_config = None
+    extract_images = bool(profile.get("extract_images", False))
+    if ImageExtractionConfig is not None and extract_images:
+        img_kwargs: dict[str, Any] = {
+            "extract_images": True,
+            "target_dpi": target_dpi,
+            "run_ocr_on_images": bool(profile.get("run_ocr_on_images", ocr_enabled)),
+            "append_ocr_text": bool(profile.get("append_ocr_text", ocr_enabled)),
+            "include_data_base64": bool(profile.get("include_data_base64", False)),
+            "include_page_rasters": False,
+        }
+        try:
+            image_config = ImageExtractionConfig(**img_kwargs)
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 ImageExtractionConfig contract mismatch: {exc}"
+            ) from exc
+
+    # --- ContentFilterConfig -------------------------------------------------
+    ContentFilterConfig = getattr(xberg, "ContentFilterConfig", None)
+    content_filter = None
+    if ContentFilterConfig is not None:
+        cf_kwargs: dict[str, Any] = {
+            "include_headers": bool(profile.get("include_headers", True)),
+            "include_footers": bool(profile.get("include_footers", True)),
+            "strip_repeating_text": bool(profile.get("strip_repeating_text", False)),
+            "include_watermarks": bool(profile.get("include_watermarks", True)),
+        }
+        try:
+            content_filter = ContentFilterConfig(**cf_kwargs)
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 ContentFilterConfig contract mismatch: {exc}"
+            ) from exc
+
+    # --- LayoutDetectionConfig -----------------------------------------------
+    LayoutDetectionConfig = getattr(xberg, "LayoutDetectionConfig", None)
+    layout_config = None
+    layout_enabled = bool(profile.get("layout_enabled", False))
+    if LayoutDetectionConfig is not None and layout_enabled:
+        try:
+            layout_config = LayoutDetectionConfig()
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 LayoutDetectionConfig contract mismatch: {exc}"
+            ) from exc
+
+    # --- ExtractionConfig (root) ---------------------------------------------
+    root_kwargs: dict[str, Any] = {
+        "use_cache": bool(profile.get("use_cache", False)),
+        "enable_quality_processing": bool(profile.get("enable_quality_processing", False)),
+        "output_format": str(profile.get("output_format", "markdown")),
+        "result_format": str(profile.get("result_format", "unified")),
+        "include_document_structure": bool(profile.get("include_document_structure", False)),
+    }
+    if ocr_enabled:
+        root_kwargs["ocr"] = ocr_config
+        if bool(profile.get("force_ocr", False)):
+            root_kwargs["force_ocr"] = True
+    else:
+        root_kwargs["disable_ocr"] = True
+    if pdf_config is not None:
+        root_kwargs["pdf_options"] = pdf_config
+    if page_config is not None:
+        root_kwargs["pages"] = page_config
+    if image_config is not None:
+        root_kwargs["images"] = image_config
+    if content_filter is not None:
+        root_kwargs["content_filter"] = content_filter
+    if layout_config is not None:
+        root_kwargs["layout"] = layout_config
+
+    # Downstream features — always off in primary profiles
+    root_kwargs["chunking"] = None
+    root_kwargs["token_reduction"] = None
 
     try:
-        cfg = ExtractionConfig(
-            extract_tables=detect_tables,
-            infer_table_structure=infer_tables,
-            ocr=ocr_config,
-            dpi=dpi,
-            strategy=strategy,
-        )
-    except TypeError:
-        # Fall back to minimal config if signature differs
-        try:
-            cfg = ExtractionConfig(extract_tables=detect_tables, ocr=ocr_config)
-        except TypeError:
-            cfg = ExtractionConfig()
-
-    return cfg
+        return ExtractionConfig(**root_kwargs)
+    except TypeError as exc:
+        raise XbergConfigurationError(
+            f"Xberg 1.0.14 ExtractionConfig contract mismatch: {exc}"
+        ) from exc
 
 
 async def _extract(input_path: Path, cfg: Any) -> Any:
@@ -139,16 +307,20 @@ async def _extract(input_path: Path, cfg: Any) -> Any:
 
     extract_fn = getattr(xberg, "extract", None)
     if extract_fn is None:
-        raise BenchmarkConfigurationError("xberg.extract not found — check Xberg version.")
+        raise BenchmarkConfigurationError("xberg.extract not found — check Xberg 1.0.14 installation.")
 
     ExtractInput = getattr(xberg, "ExtractInput", None)
-    if ExtractInput is not None:
-        try:
-            inp = ExtractInput(source=str(input_path))
-            return await extract_fn(inp, cfg)
-        except (TypeError, AttributeError):
-            pass
-    return await extract_fn(str(input_path), cfg)
+    if ExtractInput is None:
+        raise BenchmarkConfigurationError("xberg.ExtractInput not found — check Xberg 1.0.14 installation.")
+
+    try:
+        inp = ExtractInput(source=str(input_path))
+    except TypeError as exc:
+        raise XbergConfigurationError(
+            f"Xberg 1.0.14 ExtractInput contract mismatch: {exc}"
+        ) from exc
+
+    return await extract_fn(inp, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -156,31 +328,32 @@ async def _extract(input_path: Path, cfg: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 def _get_pages(result: Any) -> list[Any]:
-    """Extract per-page result objects from whatever structure Xberg returns."""
-    # Common shapes tried in order
-    for attr in ("documents", "results"):
-        docs = getattr(result, attr, None)
-        if isinstance(docs, list) and docs:
-            doc = docs[0]
-            # doc may have .pages
-            pages = getattr(doc, "pages", None)
-            if isinstance(pages, list):
-                return pages
-            # or the doc itself may be a page list
-            return docs
-    # result.pages at top level
+    """Extract per-page result objects from the Xberg 1.0.14 result.
+
+    Primary shape: result.pages (list of PageContent objects).
+    Fallback shape: result.documents[0].pages.
+    Any other shape returns [] — caller must treat that as FAIL.
+    """
+    # Primary: result.pages
     pages = getattr(result, "pages", None)
-    if isinstance(pages, list):
+    if isinstance(pages, list) and pages:
         return pages
+    # Secondary: result.documents[0].pages
+    docs = getattr(result, "documents", None)
+    if isinstance(docs, list) and docs:
+        doc = docs[0]
+        pages = getattr(doc, "pages", None)
+        if isinstance(pages, list) and pages:
+            return pages
     return []
 
 
 def _page_text(page_obj: Any) -> str:
-    """Extract text from a page result object."""
+    """Extract text from a page result object (no trailing newline added here)."""
     for attr in ("content", "text", "markdown", "output"):
         val = getattr(page_obj, attr, None)
         if isinstance(val, str) and val.strip():
-            return val.rstrip() + "\n"
+            return val.rstrip()
     return ""
 
 
@@ -207,36 +380,69 @@ def _table_to_native(table_obj: Any) -> dict[str, Any]:
     for attr in ("data", "rows", "cells", "html", "text", "markdown",
                  "row_count", "col_count", "confidence", "bbox"):
         v = getattr(table_obj, attr, None)
-        if v is not None:
+        if v is not None and not isinstance(v, (bytes, bytearray)):
             record[attr] = v if not hasattr(v, "__dict__") else str(v)
     return record
 
 
-def _result_to_page_texts(
+def _page_native(page_obj: Any) -> dict[str, Any]:
+    """Extract additional native fields from a PageContent object for retention."""
+    record: dict[str, Any] = {}
+    for attr in ("elements", "images", "form_fields", "annotations",
+                 "hierarchy", "layout_regions", "formulas", "warnings",
+                 "ocr_metadata", "reading_order", "document_structure",
+                 "language", "quality"):
+        v = getattr(page_obj, attr, None)
+        if v is None:
+            continue
+        if isinstance(v, (bytes, bytearray)):
+            continue
+        if isinstance(v, list):
+            record[attr] = [
+                (str(item) if isinstance(item, (bytes, bytearray)) else item)
+                for item in v
+            ]
+        else:
+            record[attr] = v if not hasattr(v, "__dict__") else str(v)
+    return record
+
+
+def _result_to_page_texts(result: Any, expected_pages: int) -> dict[int, str]:
+    """Map Xberg per-page results to {page_number: text}.
+
+    Returns an empty dict if the result contains no per-page data.
+    The caller is responsible for treating an empty return as a pipeline FAIL.
+    """
+    pages = _get_pages(result)
+    page_map: dict[int, str] = {}
+    for i, pg in enumerate(pages):
+        pnum = _page_number(pg, fallback=i + 1)
+        page_map[pnum] = _page_text(pg)
+    return page_map
+
+
+def _result_to_artifacts(
     result: Any,
     page_count: int,
 ) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Convert Xberg result to (page_texts, parser_page_elements, parser_native_pages)."""
+    """Convert Xberg result to (page_texts, parser_page_elements, parser_native_pages).
+
+    Raises XbergConfigurationError if the result contains no per-page data —
+    a flat document cannot be distributed across pages (benchmark page contract).
+    """
     pages = _get_pages(result)
 
-    # Build a mapping from page_number → page_obj
+    if not pages:
+        raise XbergConfigurationError(
+            "Xberg returned no per-page data. "
+            "Ensure PageConfig.extract_pages=True and the result shape is correct. "
+            "A flat document cannot be mapped to pages — this is a FAIL."
+        )
+
     page_map: dict[int, Any] = {}
     for i, pg in enumerate(pages):
         pnum = _page_number(pg, fallback=i + 1)
         page_map[pnum] = pg
-
-    # If Xberg returns a single unified document without per-page, check for text attr on result
-    if not page_map:
-        docs = getattr(result, "documents", None) or getattr(result, "results", None)
-        if isinstance(docs, list) and docs:
-            doc = docs[0]
-            full_text = getattr(doc, "content", None) or getattr(doc, "text", None) or getattr(doc, "markdown", None)
-            if isinstance(full_text, str):
-                # Can't map to pages — put all on page 1
-                page_texts = [full_text.rstrip() + "\n"] + [""] * (page_count - 1)
-                parser_page_elements = [{"page_number": i + 1} for i in range(page_count)]
-                parser_native_pages = [{"page_number": i + 1, "elements": []} for i in range(page_count)]
-                return page_texts, parser_page_elements, parser_native_pages
 
     page_texts: list[str] = []
     parser_page_elements: list[dict[str, Any]] = []
@@ -245,32 +451,40 @@ def _result_to_page_texts(
     for page_num in range(1, page_count + 1):
         pg = page_map.get(page_num)
         if pg is not None:
-            text = _page_text(pg)
+            raw = _page_text(pg)
+            text = (raw + "\n") if raw else ""
             tables = _page_tables(pg)
-            table_count = len(tables)
+            native_data = _page_native(pg)
         else:
             text = ""
             tables = []
-            table_count = 0
+            native_data = {}
 
         page_texts.append(text)
         parser_page_elements.append({
             "page_number": page_num,
-            "tables_detected": table_count,
+            "tables_detected": len(tables),
         })
         native_tables = [_table_to_native(t) for t in tables]
         parser_native_pages.append({
             "page_number": page_num,
             "tables": native_tables,
+            **native_data,
         })
 
     return page_texts, parser_page_elements, parser_native_pages
 
 
-def _count_elements_from_result(result: Any, page_texts: list[str]) -> dict[str, Any]:
+def _count_elements_from_result(
+    result: Any,
+    page_texts: dict[int, str] | list[str],
+) -> dict[str, Any]:
     pages = _get_pages(result)
     total_tables = sum(len(_page_tables(pg)) for pg in pages)
-    non_empty_pages = sum(1 for t in page_texts if t.strip())
+    if isinstance(page_texts, dict):
+        non_empty_pages = sum(1 for t in page_texts.values() if t.strip())
+    else:
+        non_empty_pages = sum(1 for t in page_texts if t.strip())
     return {
         "layout_boxes": None,
         "tables_detected": total_tables,
@@ -349,7 +563,6 @@ def _build_metrics(
     clean_bytes = artifact_result.get("output", {}).get("clean_markdown_bytes")
     size_ratio = round(input_bytes / clean_bytes, 6) if clean_bytes else None
     ocr_enabled = bool(profile.get("ocr_enabled", False))
-    strategy = str(profile.get("strategy", "fast"))
 
     return {
         "benchmark": {
@@ -387,7 +600,7 @@ def _build_metrics(
             "pipeline_seconds": round(pipeline_seconds, 6),
             "pages_total": inventory.get("pages"),
             "pages_processed": inventory.get("pages"),
-            "failed_pages": [],
+            "failed_pages": 0,
             "partial_pages": None,
             "empty_output_pages": artifact_result["empty_output_pages"],
             "pipeline_pages_per_second": (
@@ -396,12 +609,11 @@ def _build_metrics(
             ),
             "ocr": {
                 "enabled": ocr_enabled,
-                "strategy": strategy,
+                "strategy": str(profile.get("ocr_strategy", "disabled")),
                 "engine": profile.get("ocr_backend"),
                 "languages": profile.get("ocr_languages"),
-                "infer_table_structure": profile.get("extract_tables", True),
-                "force_ocr": profile.get("force_ocr", False),
-                "auto_rotate": profile.get("auto_rotate", False),
+                "force_ocr": bool(profile.get("force_ocr", False)),
+                "auto_rotate": bool(profile.get("auto_rotate", False)),
                 "pages_requested": None,
                 "pages_processed": None,
                 "tracking_note": (
@@ -456,13 +668,6 @@ def preflight_profile(
     else:
         checks.append(make_check("profile keys", "pass"))
 
-    # Strategy
-    strategy = str(profile.get("strategy", ""))
-    if strategy in _VALID_STRATEGIES:
-        checks.append(make_check("strategy", "pass", strategy))
-    else:
-        checks.append(make_check("strategy", "fail", f"unknown strategy: {strategy!r}"))
-
     # No remote services
     if bool(profile.get("remote_services_enabled", False)):
         checks.append(make_check("remote services disabled", "fail", "remote_services_enabled=true"))
@@ -504,9 +709,8 @@ def preflight_profile(
             "pass" if tess_bin else "fail",
             tess_bin or "not found in PATH",
         ))
-        # Tessdata language files
         tessdata = _find_tessdata_prefix()
-        for lang in ("por", "eng"):
+        for lang in profile.get("ocr_languages", ["por", "eng"]):
             if tessdata:
                 td_file = Path(tessdata) / f"{lang}.traineddata"
                 checks.append(make_check(
@@ -516,7 +720,6 @@ def preflight_profile(
                 ))
             else:
                 checks.append(make_check(f"tessdata {lang}", "fail", "tessdata directory not found"))
-        # osd required when auto_rotate=true
         if bool(profile.get("auto_rotate", False)):
             if tessdata:
                 osd_file = Path(tessdata) / "osd.traineddata"
@@ -528,7 +731,7 @@ def preflight_profile(
             else:
                 checks.append(make_check("tessdata osd (auto_rotate)", "fail", "tessdata directory not found"))
 
-    # adapter import
+    # adapter import + API object probes
     try:
         import xberg  # noqa: F401
         checks.append(make_check("adapter import", "pass", "xberg"))
@@ -539,12 +742,29 @@ def preflight_profile(
         else:
             checks.append(make_check("xberg.extract async", "pass"))
 
-        ExtractionConfig = getattr(xberg, "ExtractionConfig", None)
-        checks.append(make_check(
-            "ExtractionConfig",
-            "pass" if ExtractionConfig else "fail",
-            "found" if ExtractionConfig else "not found",
-        ))
+        for cls_name in (
+            "ExtractionConfig", "ExtractInput",
+            "OcrConfig", "TesseractConfig",
+            "PdfConfig", "PageConfig",
+            "ImageExtractionConfig", "ContentFilterConfig",
+        ):
+            obj = getattr(xberg, cls_name, None)
+            checks.append(make_check(
+                cls_name,
+                "pass" if obj is not None else "fail",
+                "found" if obj is not None else "not found in xberg 1.0.14",
+            ))
+
+        # Validate that _build_xberg_config does not raise on this profile
+        model_root = model_root_override or Path("models/xberg")
+        try:
+            _build_xberg_config(profile, model_root)
+            checks.append(make_check("config builder", "pass"))
+        except XbergConfigurationError as exc:
+            checks.append(make_check("config builder", "fail", str(exc)))
+        except Exception as exc:
+            checks.append(make_check("config builder", "fail", f"{type(exc).__name__}: {exc}"))
+
     except Exception as exc:
         checks.append(make_check("adapter import", "fail", f"{type(exc).__name__}: {exc}"))
 
@@ -559,7 +779,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Xberg benchmark adapter v2.")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output-root", type=Path, default=Path("/outputs"))
-    parser.add_argument("--profile", default="fast_native")
+    parser.add_argument("--profile", default="native_markdown")
     parser.add_argument(
         "--model-root", type=Path, default=None,
         help="Override for model artifacts directory (models/xberg).",
@@ -603,7 +823,6 @@ def main() -> None:
     page_count = int(inventory["pages"])
 
     model_root = args.model_root if args.model_root is not None else Path("models/xberg")
-    strategy = str(profile.get("strategy", "fast"))
     ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     print("=" * 72)
@@ -613,7 +832,6 @@ def main() -> None:
     print(f"Version:   {_package_version('xberg')}")
     print(f"Input:     {input_path}")
     print(f"Profile:   {args.profile}")
-    print(f"Strategy:  {strategy}")
     print(f"OCR:       {ocr_enabled}")
     print(f"Tokenizer: {tokenizer_name}")
     print(f"Output:    {paths.output_dir}")
@@ -645,7 +863,7 @@ def main() -> None:
             result = asyncio.run(_extract(input_path, cfg))
             extraction_seconds = perf_counter() - extraction_start
 
-            page_texts, parser_page_elements, parser_native_pages = _result_to_page_texts(
+            page_texts, parser_page_elements, parser_native_pages = _result_to_artifacts(
                 result, page_count
             )
             element_counts = _count_elements_from_result(result, page_texts)

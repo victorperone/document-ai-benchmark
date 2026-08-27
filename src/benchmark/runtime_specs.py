@@ -17,20 +17,30 @@ class ParserRuntimeSpec:
         default_factory=lambda: frozenset({"docker", "host"})
     )
 
+_COMMON_OFFLINE_ENV = {
+    "HF_HUB_OFFLINE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "DO_NOT_TRACK": "1",
+    "SCARF_NO_ANALYTICS": "1",
+}
 
 PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
     "pymupdf": ParserRuntimeSpec(
         module="src.parsers.pymupdf_v2",
+        model_env={**_COMMON_OFFLINE_ENV,},
     ),
     "docling": ParserRuntimeSpec(
         module="src.parsers.docling_v2",
         model_args=("--model-artifacts-path", "{model_root}"),
+        model_env={**_COMMON_OFFLINE_ENV,},
         preflight_kwargs={"model_artifacts_override": "{model_root}"},
     ),
     "paddleocr": ParserRuntimeSpec(
         module="src.parsers.paddleocr_v2",
         model_args=("--model-root", "{model_root}"),
         model_env={
+            **_COMMON_OFFLINE_ENV,
             "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
         },
         preflight_kwargs={"model_root_override": "{model_root}"},
@@ -38,11 +48,13 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
     "liteparse": ParserRuntimeSpec(
         module="src.parsers.liteparse_v2",
         model_args=("--model-artifacts-path", "{model_root}"),
+        model_env={**_COMMON_OFFLINE_ENV,},
         preflight_kwargs={"model_artifacts_override": "{model_root}"},
     ),
     "mineru": ParserRuntimeSpec(
         module="src.parsers.mineru_v2",
         model_env={
+            **_COMMON_OFFLINE_ENV,
             "MINERU_MODEL_SOURCE": "local",
             "MINERU_TOOLS_CONFIG_JSON": "{model_root}/mineru.json",
             "HF_HOME": "{model_root}/huggingface",
@@ -52,6 +64,7 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
         module="src.parsers.unstructured_v2",
         model_args=("--model-root", "{model_root}"),
         model_env={
+            **_COMMON_OFFLINE_ENV,
             "HF_HOME": "{model_root}/huggingface",
             "HF_HUB_CACHE": "{model_root}/huggingface/hub",
             "HF_HUB_OFFLINE": "1",
@@ -69,6 +82,7 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
         module="src.parsers.xberg_v2",
         model_args=("--model-root", "{model_root}"),
         model_env={
+            **_COMMON_OFFLINE_ENV,
             "HF_HOME": "{model_root}/huggingface",
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",

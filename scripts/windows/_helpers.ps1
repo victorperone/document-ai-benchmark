@@ -20,6 +20,39 @@ function Invoke-NativeChecked {
     }
 }
 
+function Invoke-PythonScriptChecked {
+    <#
+    .SYNOPSIS
+        Execute multiline Python source without PowerShell 5.1 native
+        argument quoting issues.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Python,
+        [Parameter(Mandatory)][string]$ScriptText
+    )
+
+    $TempScript = Join-Path `
+        ([System.IO.Path]::GetTempPath()) `
+        ("document-ai-benchmark-" + [guid]::NewGuid().ToString("N") + ".py")
+
+    try {
+        $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText(
+            $TempScript,
+            $ScriptText,
+            $Utf8NoBom
+        )
+
+        Invoke-NativeChecked $Python @($TempScript)
+    }
+    finally {
+        if (Test-Path $TempScript) {
+            Remove-Item -LiteralPath $TempScript -Force
+        }
+    }
+}
+
 function Assert-WindowsLongPathsEnabled {
     $RegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
     $ValueName = 'LongPathsEnabled'

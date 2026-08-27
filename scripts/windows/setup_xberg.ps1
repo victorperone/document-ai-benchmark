@@ -47,6 +47,11 @@ Write-Host "[xberg] Running pip check..."
 Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'check')
 
 Write-Host "[xberg] Validating imports and native module..."
+$env:HF_HUB_OFFLINE = '1'
+$env:TRANSFORMERS_OFFLINE = '1'
+$env:HF_HUB_DISABLE_TELEMETRY = '1'
+$env:DO_NOT_TRACK = '1'
+$env:SCARF_NO_ANALYTICS = '1'
 $smoke = @'
 import xberg
 print("xberg OK:", xberg.__version__)
@@ -62,6 +67,8 @@ except ImportError:
         raise RuntimeError("xberg.extract not found -- native extension may be broken")
     print("xberg native extension: OK (verified via xberg.extract)")
 '@
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-c', $smoke)
+Invoke-PythonScriptChecked `
+    -Python "$VenvPath\Scripts\python.exe" `
+    -ScriptText $smoke
 
 Write-Host "[xberg] Done."

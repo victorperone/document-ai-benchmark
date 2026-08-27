@@ -40,10 +40,20 @@ if (-not (Test-Path $VenvPath)) {
     Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
 }
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
+Invoke-PythonScriptChecked `
+    -Python "$VenvPath\Scripts\python.exe" `
+    -ScriptText $smoke
 
 Write-Host "[unstructured] Running pip check..."
 Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'check')
+
+# Dependency installation above may use the network.
+# From this point forward validation must be offline.
+$env:HF_HUB_OFFLINE = '1'
+$env:TRANSFORMERS_OFFLINE = '1'
+$env:HF_HUB_DISABLE_TELEMETRY = '1'
+$env:DO_NOT_TRACK = '1'
+$env:SCARF_NO_ANALYTICS = '1'
 
 Write-Host "[unstructured] Validating imports..."
 $smoke = @'

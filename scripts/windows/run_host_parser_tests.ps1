@@ -57,6 +57,7 @@ $env:HF_HUB_OFFLINE       = '1'
 $env:TRANSFORMERS_OFFLINE  = '1'
 $env:DO_NOT_TRACK          = '1'
 $env:SCARF_NO_ANALYTICS    = '1'
+$env:HF_HUB_DISABLE_TELEMETRY = '1'
 
 # Parser-specific model environment (mirrors runtime_specs.py model_env with {model_root} resolved)
 $ModelsRoot = Join-Path $RepoRoot "models"

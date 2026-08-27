@@ -405,6 +405,28 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _get_git_sha() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=ROOT, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _is_git_dirty() -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, cwd=ROOT, timeout=5,
+        )
+        return bool(result.stdout.strip()) if result.returncode == 0 else False
+    except Exception:
+        return False
+
+
 def _metrics_match(
     output_root: Path,
     parser: str,
@@ -1416,6 +1438,27 @@ def main() -> None:
         "execution_runtime": runtime,
         "host_os": platform.platform(),
         "orchestrator_python": sys.version.split()[0],
+        "git_commit": _get_git_sha(),
+        "git_dirty": _is_git_dirty(),
+        "config_sha256": _sha256(CONFIG_PATH),
+        "suite": args.suite if args.suite else None,
+        "jobs": [{"parser": p, "profile": pr} for p, pr in jobs_spec],
+        "documents": [
+            {"name": doc.name, "sha256": doc_sha256[doc]}
+            for doc in docs
+        ],
+        "document_count": len(docs),
+        "total_jobs": len(jobs_spec) * len(docs),
+        "input_dir": str(input_dir),
+        "output_root": str(output_root),
+        "artifacts": args.artifacts,
+        "flags": {
+            "resume": args.resume,
+            "force": not args.resume,
+            "continue_on_error": args.continue_on_error,
+            "no_summary": args.no_summary,
+            "limit": args.limit,
+        },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Master log: {log_path.relative_to(ROOT)}")

@@ -90,6 +90,101 @@ class TestAllSuitesFormat(_SuiteBase):
                 self.assertIn(expected, parser_names)
 
 
+_WINDOWS_ALL_HOST_SUITE = "windows_full_cpu_local_all_host"
+_EXPECTED_ALL_HOST_PARSERS = [
+    "pymupdf",
+    "docling",
+    "mineru",
+    "paddleocr",
+    "liteparse",
+    "unstructured",
+    "xberg",
+]
+
+
+class TestWindowsFullCpuLocalAllHostSuite(_SuiteBase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if cls.available:
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            cls.parser_profiles = data.get("parsers", {})
+        else:
+            cls.parser_profiles = {}
+
+    def _suite(self):
+        return self.suites.get(_WINDOWS_ALL_HOST_SUITE, [])
+
+    def test_suite_exists(self):
+        self.assertIn(
+            _WINDOWS_ALL_HOST_SUITE,
+            self.suites,
+            f"Suite '{_WINDOWS_ALL_HOST_SUITE}' missing from config",
+        )
+
+    def test_suite_has_exactly_seven_entries(self):
+        suite = self._suite()
+        self.assertEqual(
+            len(suite),
+            7,
+            f"Suite '{_WINDOWS_ALL_HOST_SUITE}' must have exactly 7 entries, got {len(suite)}",
+        )
+
+    def test_parsers_are_exactly_the_seven_expected(self):
+        suite = self._suite()
+        parsers = [entry[0] for entry in suite]
+        self.assertEqual(
+            sorted(parsers),
+            sorted(_EXPECTED_ALL_HOST_PARSERS),
+            f"Parser list mismatch in '{_WINDOWS_ALL_HOST_SUITE}'",
+        )
+
+    def test_no_duplicate_parsers(self):
+        suite = self._suite()
+        parsers = [entry[0] for entry in suite]
+        self.assertEqual(
+            len(parsers),
+            len(set(parsers)),
+            f"Duplicate parsers found in '{_WINDOWS_ALL_HOST_SUITE}': {parsers}",
+        )
+
+    def test_all_entries_use_full_cpu_local_profile(self):
+        for entry in self._suite():
+            with self.subTest(entry=entry):
+                parser, profile = entry
+                self.assertEqual(
+                    profile,
+                    "full_cpu_local",
+                    f"Parser '{parser}' must use profile 'full_cpu_local', got '{profile}'",
+                )
+
+    def test_each_parser_profile_exists_in_config(self):
+        for entry in self._suite():
+            parser, profile = entry
+            with self.subTest(parser=parser, profile=profile):
+                self.assertIn(parser, self.parser_profiles, f"Parser '{parser}' not in config")
+                profiles = self.parser_profiles[parser].get("profiles", {})
+                self.assertIn(
+                    profile,
+                    profiles,
+                    f"Profile '{profile}' not found for parser '{parser}'",
+                )
+
+    def test_all_parsers_support_host_runtime(self):
+        from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS
+
+        for entry in self._suite():
+            parser, _ = entry
+            with self.subTest(parser=parser):
+                self.assertIn(parser, PARSER_RUNTIME_SPECS, f"Parser '{parser}' not in PARSER_RUNTIME_SPECS")
+                spec = PARSER_RUNTIME_SPECS[parser]
+                self.assertIn(
+                    "host",
+                    spec.supported_runtimes,
+                    f"Parser '{parser}' does not support runtime 'host'",
+                )
+
+
 class TestRuntimeSpecHostOnlyParsers(unittest.TestCase):
     def _get_spec(self, parser_name: str):
         from src.benchmark.runtime_specs import PARSER_RUNTIME_SPECS

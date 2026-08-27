@@ -44,8 +44,10 @@ PROFILE_BOOL_KEYS = (
     "document_unwarping",
     "region_detection",
     "seal_recognition",
-    "format_block_content",
 )
+
+# Optional bool keys: present in some profiles only; must be bool if present.
+PROFILE_OPTIONAL_BOOL_KEYS = frozenset({"format_block_content"})
 
 # Additional known profile keys that are not booleans.
 PROFILE_EXTRA_KEYS = frozenset({"markdown_ignore_labels"})
@@ -350,7 +352,11 @@ def validate_profile(
     expected_keys = set(
         PROFILE_BOOL_KEYS
     )
-    all_known_keys = expected_keys | PROFILE_EXTRA_KEYS
+    all_known_keys = (
+        expected_keys
+        | PROFILE_OPTIONAL_BOOL_KEYS
+        | PROFILE_EXTRA_KEYS
+    )
     actual_keys = set(
         profile
     )
@@ -378,7 +384,10 @@ def validate_profile(
             )
         )
 
-    for key in PROFILE_BOOL_KEYS:
+    for key in (
+        *PROFILE_BOOL_KEYS,
+        *PROFILE_OPTIONAL_BOOL_KEYS,
+    ):
         if key not in profile:
             continue
 

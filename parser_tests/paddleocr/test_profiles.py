@@ -7,6 +7,7 @@ from src.benchmark.config import get_profile
 from src.parsers.paddleocr_v2 import (
     PROFILE_BOOL_KEYS,
     PROFILE_EXTRA_KEYS,
+    PROFILE_OPTIONAL_BOOL_KEYS,
     validate_profile,
 )
 
@@ -52,7 +53,7 @@ class TestProfilesExist(unittest.TestCase):
                         )
 
     def test_no_unknown_keys_in_any_profile(self):
-        all_known = set(PROFILE_BOOL_KEYS) | PROFILE_EXTRA_KEYS
+        all_known = set(PROFILE_BOOL_KEYS) | PROFILE_OPTIONAL_BOOL_KEYS | PROFILE_EXTRA_KEYS
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):
                 p = get_profile(PARSER_NAME, name)

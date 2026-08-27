@@ -143,7 +143,7 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": "/home/appuser/.cache/docling/models"
+          "model_artifacts_path": null
         },
         "ocr_auto": {
           "ocr_enabled": true,
@@ -165,7 +165,7 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": "/home/appuser/.cache/docling/models"
+          "model_artifacts_path": null
         },
         "ocr_auto_visual": {
           "ocr_enabled": true,
@@ -190,7 +190,7 @@
           "code_enrichment": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": "/home/appuser/.cache/docling/models"
+          "model_artifacts_path": null
         },
         "ocr_auto_formula": {
           "ocr_enabled": true,
@@ -212,7 +212,7 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": "/home/appuser/.cache/docling/models"
+          "model_artifacts_path": null
         },
         "ocr_auto_picture_classification": {
           "ocr_enabled": true,
@@ -234,7 +234,7 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": "/home/appuser/.cache/docling/models"
+          "model_artifacts_path": null
         },
         "full_cpu_local": {
           "ocr_enabled": true,
@@ -464,7 +464,7 @@
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",
           "ocr_server_url": null,
-          "tessdata_required": ["por", "eng"],
+          "tessdata_required": ["por", "eng", "osd"],
           "dpi": 300,
           "orientation_detection": true,
           "image_ocr": true,

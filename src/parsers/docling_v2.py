@@ -428,6 +428,9 @@ def build_docling_page_contract(
         try:
             page_text = document.export_to_markdown(
                 page_no=page_number,
+                # Picture descriptions are stored in parser_native only;
+                # block them from the compared markdown (adendo §2, §9).
+                blocked_meta_names={"description"},
             )
         except Exception:
             page_text = ""
@@ -660,10 +663,8 @@ def _resolve_profile_runtime(
         model_artifacts_override
         if model_artifacts_override is not None
         else Path(
-            resolved.get(
-                "model_artifacts_path",
-                DEFAULT_MODEL_ARTIFACTS,
-            )
+            resolved.get("model_artifacts_path")
+            or DEFAULT_MODEL_ARTIFACTS
         )
     )
 

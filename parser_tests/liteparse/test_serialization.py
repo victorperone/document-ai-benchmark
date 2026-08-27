@@ -19,14 +19,11 @@ def _build(
     raw: str,
     page_images: list | None = None,
     enrichments: dict | None = None,
-    *,
-    image_description: bool = False,
 ) -> str:
     return liteparse_v2._build_page_text_with_enrichments(
         raw,
         page_images or [],
         enrichments or {},
-        image_description=image_description,
     )
 
 

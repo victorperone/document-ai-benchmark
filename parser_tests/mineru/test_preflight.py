@@ -40,7 +40,7 @@ class _PreflightHelper(unittest.TestCase):
             if config_json_present:
                 config_data = {
                     "models-dir": {
-                        "pipeline": str(pipeline_dir),
+                        "auto": str(pipeline_dir),
                     }
                 }
                 config_path.write_text(json.dumps(config_data), encoding="utf-8")
@@ -90,17 +90,17 @@ class _PreflightHelper(unittest.TestCase):
 
 class TestPreflightCliCheck(_PreflightHelper):
     def test_mineru_on_path_passes(self):
-        result = self._run_preflight("pipeline")
+        result = self._run_preflight("auto")
         cli_check = self._find_check(result, "mineru CLI")
         self.assertIsNotNone(cli_check)
         self.assertEqual(cli_check["status"], "pass")
 
     def test_mineru_absent_fails(self):
-        result = self._run_preflight("pipeline", mineru_on_path=False)
+        result = self._run_preflight("auto", mineru_on_path=False)
         self.assertFalse(result["ok"])
 
     def test_result_has_ok_and_checks(self):
-        result = self._run_preflight("pipeline")
+        result = self._run_preflight("auto")
         self.assertIn("ok", result)
         self.assertIn("checks", result)
         self.assertIsInstance(result["checks"], list)
@@ -108,33 +108,33 @@ class TestPreflightCliCheck(_PreflightHelper):
 
 class TestPreflightModelSource(_PreflightHelper):
     def test_model_source_local_passes(self):
-        result = self._run_preflight("pipeline", model_source="local")
+        result = self._run_preflight("auto", model_source="local")
         check = self._find_check(result, "MINERU_MODEL_SOURCE")
         self.assertIsNotNone(check)
         self.assertEqual(check["status"], "pass")
 
     def test_model_source_not_local_fails(self):
-        result = self._run_preflight("pipeline", model_source="huggingface")
+        result = self._run_preflight("auto", model_source="huggingface")
         self.assertFalse(result["ok"])
 
     def test_model_source_unset_fails(self):
-        result = self._run_preflight("pipeline", model_source=None, config_json_present=False)
+        result = self._run_preflight("auto", model_source=None, config_json_present=False)
         self.assertFalse(result["ok"])
 
 
 class TestPreflightConfigJson(_PreflightHelper):
     def test_config_absent_fails(self):
-        result = self._run_preflight("pipeline", config_json_present=False)
+        result = self._run_preflight("auto", config_json_present=False)
         self.assertFalse(result["ok"])
 
     def test_config_present_with_pipeline_dir_passes(self):
-        result = self._run_preflight("pipeline")
+        result = self._run_preflight("auto")
         check = self._find_check(result, "MINERU_TOOLS_CONFIG_JSON")
         self.assertIsNotNone(check)
         self.assertEqual(check["status"], "pass")
 
     def test_pipeline_dir_missing_fails(self):
-        result = self._run_preflight("pipeline", pipeline_dir_exists=False)
+        result = self._run_preflight("auto", pipeline_dir_exists=False)
         self.assertFalse(result["ok"])
 
 

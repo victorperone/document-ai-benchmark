@@ -737,6 +737,13 @@ def main() -> None:
         "threads"
     ] = args.threads
 
+    # formula and table are always active in pipeline backend (no CLI flags
+    # to disable them in MinerU 3.4.4); capability_exceptions = [] confirms
+    # both are effectively enabled when their profile keys are True.
+    resolved_config[
+        "capability_exceptions"
+    ] = []
+
     output_metrics = dict(
         artifact_result[
             "output"

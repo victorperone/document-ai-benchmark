@@ -74,14 +74,11 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
         raw: str,
         page_images: list | None = None,
         enrichments: dict | None = None,
-        *,
-        image_description: bool = False,
     ) -> str:
         return liteparse_v2._build_page_text_with_enrichments(
             raw,
             page_images or [],
             enrichments or {},
-            image_description=image_description,
         )
 
     def test_image_text_appears_in_page_text(self) -> None:
@@ -95,7 +92,8 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
         out = self._build("Paragraph one.", [img], enrichments)
         self.assertIn("extracted text here", out)
 
-    def test_image_description_appears_in_page_text(self) -> None:
+    def test_image_description_not_injected_into_markdown(self) -> None:
+        """VLM descriptions go to parser_native only — never into compared markdown."""
         img = _make_image_obj("/tmp/img_1.png")
         enrichments = {
             "/tmp/img_1.png": {
@@ -103,11 +101,11 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
                 "image_description": "A bar chart showing monthly sales.",
             }
         }
-        out = self._build("Content.", [img], enrichments, image_description=True)
-        self.assertIn("bar chart", out)
+        out = self._build("Content.", [img], enrichments)
+        self.assertNotIn("bar chart", out)
 
-    def test_image_text_and_description_not_both_emitted(self) -> None:
-        # When image_description=False only image_text kind is emitted.
+    def test_image_text_ocr_content_present_without_synthetic_label(self) -> None:
+        """OCR text is emitted but without synthetic PT-BR labels."""
         img = _make_image_obj("/tmp/img_0.png")
         enrichments = {
             "/tmp/img_0.png": {
@@ -115,28 +113,32 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
                 "ocr_text": "OCR only text",
             }
         }
-        out = self._build("Text.", [img], enrichments, image_description=False)
+        out = self._build("Text.", [img], enrichments)
         self.assertIn("OCR only text", out)
-        self.assertNotIn("image_description", out)
+        self.assertNotIn("Texto extraído", out)
+        self.assertNotIn("Imagem:", out)
 
     def test_no_enrichment_means_no_extra_content(self) -> None:
         out = self._build("Before.\n\nAfter.")
         self.assertIn("Before.", out)
         self.assertIn("After.", out)
 
-    def test_image_text_uses_extraction_label(self) -> None:
-        """Image OCR output uses a Portuguese extraction label."""
+    def test_image_text_no_synthetic_label_in_output(self) -> None:
+        """No Portuguese extraction label is injected into the markdown."""
         img = _make_image_obj("/tmp/img_0.png")
         enrichments = {
             "/tmp/img_0.png": {
                 "kind": "image_text",
-                "ocr_text": "some words",
+                "ocr_text": "some words here to find",
             }
         }
         out = self._build("", [img], enrichments)
-        self.assertIn("imagem", out.lower())
+        self.assertNotIn("imagem", out.lower())
+        self.assertNotIn("extraído", out)
+        self.assertIn("some words here to find", out)
 
-    def test_image_description_has_italic_format(self) -> None:
+    def test_image_description_no_italic_injected(self) -> None:
+        """VLM descriptions must not appear as italic text in the markdown."""
         img = _make_image_obj("/tmp/img_0.png")
         enrichments = {
             "/tmp/img_0.png": {
@@ -144,8 +146,9 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
                 "image_description": "A pie chart with three segments.",
             }
         }
-        out = self._build("", [img], enrichments, image_description=True)
-        self.assertIn("*", out)
+        out = self._build("", [img], enrichments)
+        self.assertNotIn("pie chart", out)
+        self.assertNotIn("*Imagem:", out)
 
 
 class LiteParseMarkdownBlockParserTests(unittest.TestCase):

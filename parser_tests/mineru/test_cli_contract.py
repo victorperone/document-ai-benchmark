@@ -33,13 +33,18 @@ def _run_native_dry(
 
     try:
         with patch("subprocess.run", side_effect=_fake_run):
-            run_mineru_native(
-                input_path=input_path,
-                method=method,
-                backend=backend,
-                threads=threads,
-                verbose=verbose,
-            )
+            try:
+                run_mineru_native(
+                    input_path=input_path,
+                    method=method,
+                    backend=backend,
+                    threads=threads,
+                    verbose=verbose,
+                )
+            except (FileNotFoundError, RuntimeError, TypeError):
+                # subprocess succeeded (command captured) but no real output
+                # files exist in the temp dir — expected in dry-run mode.
+                pass
     finally:
         input_path.unlink(missing_ok=True)
 

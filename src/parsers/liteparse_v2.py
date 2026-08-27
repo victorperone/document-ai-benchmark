@@ -522,8 +522,6 @@ def _build_page_text_with_enrichments(
     raw_text: str,
     page_images: list[Any],
     enrichments: dict[str, dict[str, Any]],
-    *,
-    image_description: bool = False,
 ) -> str:
     parts: list[str] = [raw_text.rstrip() if raw_text else ""]
 
@@ -545,13 +543,10 @@ def _build_page_text_with_enrichments(
         if kind == "image_text":
             text = enrichment.get("ocr_text", "")
             if text:
-                parts.append(
-                    f"\nTexto extraído da imagem:\n\n{text}"
-                )
-        elif kind == "image_description" and image_description:
-            desc = enrichment.get("image_description", "")
-            if desc:
-                parts.append(f"\n*Imagem: {desc}*")
+                # OCR text is part of the document content — no synthetic label.
+                parts.append(f"\n{text}")
+        # VLM descriptions are stored in parser_native only; never injected
+        # into the compared markdown (adendo §2, §9).
 
     combined = "\n\n".join(p for p in parts if p)
     combined = _compact_markdown_tables(combined)
@@ -1440,7 +1435,6 @@ def main() -> None:
                         text,
                         page_images,
                         image_enrichments,
-                        image_description=image_description,
                     )
                     page_texts.append(enriched)
 

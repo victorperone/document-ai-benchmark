@@ -8,7 +8,9 @@ from src.parsers.mineru_v2 import _MINERU_VALID_METHODS
 
 PARSER_NAME = "mineru"
 _ALL_PROFILES = [
-    "pipeline",
+    "auto",
+    "ocr",
+    "txt",
     "full_cpu_local",
 ]
 

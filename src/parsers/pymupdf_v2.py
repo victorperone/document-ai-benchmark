@@ -58,6 +58,26 @@ from src.benchmark.source_inventory import (
 
 PARSER_NAME = "pymupdf"
 
+_TESSDATA_CANDIDATES = (
+    r"C:\Program Files\Tesseract-OCR\tessdata",
+    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
+    "/usr/share/tesseract-ocr/5/tessdata",
+    "/usr/share/tesseract-ocr/4.00/tessdata",
+    "/usr/share/tessdata",
+    "/usr/local/share/tessdata",
+)
+
+
+def _find_tessdata_prefix() -> str | None:
+    import os
+    prefix_env = os.environ.get("TESSDATA_PREFIX")
+    if prefix_env and Path(prefix_env).is_dir():
+        return prefix_env
+    for candidate in _TESSDATA_CANDIDATES:
+        if Path(candidate).is_dir():
+            return candidate
+    return None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -793,17 +813,40 @@ def preflight_profile(
         )
 
     # --------------------------------------------------
-    # Tesseract binary (optional — warn if absent)
+    # Tesseract binary (required when ocr_engine=rapidtess)
     # --------------------------------------------------
 
     tess_path = shutil.which("tesseract")
+    rapidtess_engine = (
+        ocr_enabled
+        and str(profile.get("ocr_engine", "")) == "rapidtess"
+    )
     checks.append(
         make_check(
             "tesseract binary",
-            "pass" if tess_path else "warn",
+            "pass" if tess_path else ("fail" if rapidtess_engine else "warn"),
             tess_path or "not found in PATH",
         )
     )
+
+    if rapidtess_engine and tess_path:
+        ocr_language_val = str(profile.get("ocr_language", ""))
+        if ocr_language_val:
+            tessdata_prefix = _find_tessdata_prefix()
+            if tessdata_prefix:
+                lang_ok = (
+                    Path(tessdata_prefix)
+                    / f"{ocr_language_val}.traineddata"
+                ).exists()
+            else:
+                lang_ok = False
+            checks.append(
+                make_check(
+                    f"tessdata:{ocr_language_val}",
+                    "pass" if lang_ok else "fail",
+                    f"{ocr_language_val}.traineddata",
+                )
+            )
 
     return make_result(PARSER_NAME, profile_name, checks)
 
@@ -878,17 +921,20 @@ def main() -> None:
         )
     )
 
-    rapidocr_version = (
-        importlib.metadata.version(
-            "rapidocr"
+    if profile["ocr_enabled"]:
+        rapidocr_version = (
+            importlib.metadata.version(
+                "rapidocr"
+            )
         )
-    )
-
-    onnx_version = (
-        importlib.metadata.version(
-            "onnxruntime"
+        onnx_version = (
+            importlib.metadata.version(
+                "onnxruntime"
+            )
         )
-    )
+    else:
+        rapidocr_version = None
+        onnx_version = None
 
     print("=" * 72)
     print("DOCUMENT AI BENCHMARK V2")

@@ -42,8 +42,12 @@ class TestPymupdfSpec(unittest.TestCase):
     def test_no_model_args(self) -> None:
         self.assertEqual(self.spec.model_args, ())
 
-    def test_no_model_env(self) -> None:
-        self.assertEqual(self.spec.model_env, {})
+    def test_common_offline_env(self) -> None:
+        self.assertEqual(self.spec.model_env["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(self.spec.model_env["TRANSFORMERS_OFFLINE"], "1")
+        self.assertEqual(self.spec.model_env["HF_HUB_DISABLE_TELEMETRY"], "1")
+        self.assertEqual(self.spec.model_env["DO_NOT_TRACK"], "1")
+        self.assertEqual(self.spec.model_env["SCARF_NO_ANALYTICS"], "1")
 
     def test_no_preflight_kwargs(self) -> None:
         self.assertEqual(self.spec.preflight_kwargs, {})
@@ -63,8 +67,12 @@ class TestDoclingSpec(unittest.TestCase):
     def test_model_args_placeholder(self) -> None:
         self.assertIn("{model_root}", self.spec.model_args)
 
-    def test_no_model_env(self) -> None:
-        self.assertEqual(self.spec.model_env, {})
+    def test_common_offline_env(self) -> None:
+        self.assertEqual(self.spec.model_env["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(self.spec.model_env["TRANSFORMERS_OFFLINE"], "1")
+        self.assertEqual(self.spec.model_env["HF_HUB_DISABLE_TELEMETRY"], "1")
+        self.assertEqual(self.spec.model_env["DO_NOT_TRACK"], "1")
+        self.assertEqual(self.spec.model_env["SCARF_NO_ANALYTICS"], "1")
 
     def test_preflight_kwargs_key(self) -> None:
         self.assertIn("model_artifacts_override", self.spec.preflight_kwargs)

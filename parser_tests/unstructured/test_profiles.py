@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import unittest
 
-from src.benchmark.config import get_profile
+from src.benchmark.config import (
+    get_profile,
+    load_config,
+)
 
 PARSER_NAME = "unstructured"
-_EXPECTED_PROFILES = ["fast_native", "auto_ocr", "hi_res_tables", "ocr_only_diagnostic"]
+_EXPECTED_PROFILES = [
+    "fast_native",
+    "auto_ocr",
+    "hi_res_tables",
+    "ocr_only_diagnostic",
+]
 _VALID_STRATEGIES = frozenset({"fast", "auto", "hi_res", "ocr_only"})
 _REQUIRED_KEYS = frozenset({
     "strategy", "ocr_enabled", "ocr_mode", "ocr_engine",
@@ -27,10 +35,16 @@ class TestUnstructuredProfilesExist(unittest.TestCase):
                 self.assertIsInstance(profile, dict)
 
     def test_no_unexpected_profiles(self):
-        from src.benchmark.config import get_parser_profiles
-        defined = set(get_parser_profiles(PARSER_NAME).keys())
-        for expected in _EXPECTED_PROFILES:
-            self.assertIn(expected, defined)
+        config = load_config()
+
+        defined = set(
+            config["parsers"][PARSER_NAME]["profiles"].keys()
+        )
+
+        self.assertEqual(
+            defined,
+            set(_EXPECTED_PROFILES),
+        )
 
 
 class TestProfileKeys(unittest.TestCase):

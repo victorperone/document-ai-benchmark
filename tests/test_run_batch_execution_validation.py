@@ -342,12 +342,25 @@ class TestHostRuntimeCommandBuilding(unittest.TestCase):
     def test_host_command_pymupdf_no_model_args(self):
         with tempfile.TemporaryDirectory() as tmp:
             t = Path(tmp)
+
             cmd, env = _run_batch._build_host_command(
-                "pymupdf", t / "doc.pdf", t / "outputs", "native", "all"
+                "pymupdf",
+                t / "doc.pdf",
+                t / "outputs",
+                "native",
+                "all",
             )
+
+        # PyMuPDF does not require a model-root CLI argument.
         self.assertNotIn("--model-artifacts-path", cmd)
         self.assertNotIn("--model-root", cmd)
-        self.assertEqual(env, {})
+
+        # Host runtime must still receive the common offline environment.
+        self.assertEqual(env["HF_HUB_OFFLINE"], "1")
+        self.assertEqual(env["TRANSFORMERS_OFFLINE"], "1")
+        self.assertEqual(env["HF_HUB_DISABLE_TELEMETRY"], "1")
+        self.assertEqual(env["DO_NOT_TRACK"], "1")
+        self.assertEqual(env["SCARF_NO_ANALYTICS"], "1")
 
 
 class TestHostRuntimeExecutePlan(unittest.TestCase):

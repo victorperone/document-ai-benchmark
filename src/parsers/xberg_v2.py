@@ -467,6 +467,29 @@ def _page_tables(page_obj: Any) -> list[Any]:
     return []
 
 
+_JSON_PRIMITIVES = (bool, int, float, str, type(None))
+
+
+def _to_json_safe(v: Any) -> Any:
+    """Recursively convert a Xberg result value to a JSON-serializable form.
+
+    Xberg dataclasses may use __slots__ (no __dict__) or C extensions,
+    so hasattr(v, '__dict__') is not a reliable proxy for 'is complex object'.
+    Any value that is not a primitive, list, or dict is stringified.
+    Binary data is dropped (returns None).
+    """
+    if isinstance(v, _JSON_PRIMITIVES):
+        return v
+    if isinstance(v, (bytes, bytearray)):
+        return None
+    if isinstance(v, dict):
+        return {str(k): _to_json_safe(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        result = [_to_json_safe(item) for item in v]
+        return [item for item in result if item is not None]
+    return str(v)
+
+
 def _table_to_native(table_obj: Any) -> dict[str, Any]:
     record: dict[str, Any] = {
         "table_type": type(table_obj).__name__,
@@ -474,8 +497,9 @@ def _table_to_native(table_obj: Any) -> dict[str, Any]:
     for attr in ("data", "rows", "cells", "html", "text", "markdown",
                  "row_count", "col_count", "confidence", "bbox"):
         v = getattr(table_obj, attr, None)
-        if v is not None and not isinstance(v, (bytes, bytearray)):
-            record[attr] = v if not hasattr(v, "__dict__") else str(v)
+        safe = _to_json_safe(v)
+        if safe is not None:
+            record[attr] = safe
     return record
 
 
@@ -487,17 +511,9 @@ def _page_native(page_obj: Any) -> dict[str, Any]:
                  "ocr_metadata", "reading_order", "document_structure",
                  "language", "quality"):
         v = getattr(page_obj, attr, None)
-        if v is None:
-            continue
-        if isinstance(v, (bytes, bytearray)):
-            continue
-        if isinstance(v, list):
-            record[attr] = [
-                (str(item) if isinstance(item, (bytes, bytearray)) else item)
-                for item in v
-            ]
-        else:
-            record[attr] = v if not hasattr(v, "__dict__") else str(v)
+        safe = _to_json_safe(v)
+        if safe is not None:
+            record[attr] = safe
     return record
 
 

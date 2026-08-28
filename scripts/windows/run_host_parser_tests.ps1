@@ -98,8 +98,16 @@ if ($TestPath) {
     # When a specific file/directory is given, discover from that sub-path
     $Target = Join-Path $ParserTestsDir $TestPath
     if (Test-Path $Target -PathType Leaf) {
-        # Single file: run directly instead of discover
-        $UnittestArgs = @('-m', 'unittest', $Target)
+        # Single file: discover from its directory so the top-level package path
+        # is resolved correctly (absolute paths are not valid module names).
+        $TargetDirectory = Split-Path $Target -Parent
+        $TargetName      = Split-Path $Target -Leaf
+        $UnittestArgs = @(
+            '-m', 'unittest', 'discover',
+            '--start-directory', $TargetDirectory,
+            '--top-level-directory', $RepoRoot,
+            '--pattern', $TargetName
+        )
     } else {
         $UnittestArgs = @(
             '-m', 'unittest', 'discover',

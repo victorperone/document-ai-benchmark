@@ -5,6 +5,7 @@ import asyncio
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -16,14 +17,21 @@ def _make_mock_page(text: str = "Mock page content", page_num: int = 1):
     return page
 
 
-def _make_mock_result(pages=None):
-    result = MagicMock()
-    result.errors = []
-    result.warnings = []
-    doc = MagicMock()
-    doc.pages = pages or [_make_mock_page()]
-    result.documents = [doc]
-    return result
+def _make_mock_envelope(pages=None):
+    """Return a mock ExtractionResult envelope compatible with _unwrap_extraction_result."""
+    document = MagicMock()
+    document.content = "text"
+    document.pages = pages or [_make_mock_page()]
+    document.tables = []
+    document.processing_warnings = []
+
+    summary = SimpleNamespace(inputs=1, results=1, errors=0)
+
+    envelope = MagicMock()
+    envelope.results = [document]
+    envelope.errors = []
+    envelope.summary = summary
+    return envelope
 
 
 def _make_inventory(pages: int = 1) -> dict:
@@ -37,6 +45,9 @@ def _make_inventory(pages: int = 1) -> dict:
 
 class TestAdapterContract(unittest.TestCase):
     def _run_main(self, tmp_path: Path, profile: str = "native_markdown"):
+        import hashlib
+        import importlib
+        import sys
         from src.parsers import xberg_v2
 
         fake_input = tmp_path / "test.pdf"
@@ -47,97 +58,117 @@ class TestAdapterContract(unittest.TestCase):
         inventory = _make_inventory(pages=1)
         inv_dir = output_root / "_source_inventory"
         inv_dir.mkdir(parents=True)
-        import hashlib
         sha = hashlib.sha256(fake_input.read_bytes()).hexdigest()
         inventory["sha256"] = sha
         (inv_dir / "test.json").write_text(json.dumps(inventory), encoding="utf-8")
 
-        mock_result = _make_mock_result()
+        mock_envelope = _make_mock_envelope()
 
         args_list = [
             "--input", str(fake_input),
             "--output-root", str(output_root),
             "--profile", profile,
+            "--artifacts", "all",
         ]
 
         mock_xberg = MagicMock()
-        mock_xberg.extract = AsyncMock(return_value=mock_result)
-        mock_xberg.ExtractionConfig = MagicMock(return_value=MagicMock())
-        mock_xberg.OcrConfig = MagicMock(return_value=MagicMock())
-        mock_xberg.TesseractConfig = MagicMock(return_value=MagicMock())
+        mock_xberg.extract = AsyncMock(return_value=mock_envelope)
+        # _build_xberg_config now returns a dict — xberg classes are used as
+        # dataclass constructors inside the function.
+        for cls_name in (
+            "OcrConfig", "TesseractConfig", "ImagePreprocessingConfig",
+            "PdfConfig", "PageConfig", "ImageExtractionConfig", "ContentFilterConfig",
+        ):
+            mock_cls = MagicMock()
+            mock_cls.return_value = MagicMock()
+            setattr(mock_xberg, cls_name, mock_cls)
         mock_xberg.__version__ = "1.0.14"
 
-        with (
-            patch("sys.argv", ["xberg_v2"] + args_list),
-            patch("src.parsers.xberg_v2.get_profile", return_value={
-                "strategy": "fast",
-                "ocr_enabled": False,
-                "ocr_backend": None,
-                "ocr_languages": [],
-                "ocr_strategy": "disabled",
-                "force_ocr": False,
-                "auto_rotate": False,
-                "target_dpi": 150,
-                "deskew": False,
-                "denoise": False,
-                "contrast_enhance": False,
-                "extract_tables": True,
-                "extract_images": False,
-                "extract_pages": True,
-                "insert_page_markers": False,
-                "include_headers": True,
-                "include_footers": True,
-                "strip_repeating_text": False,
-                "chunking_enabled": False,
-                "token_reduction_mode": "off",
-                "layout_enabled": False,
-                "use_cache": False,
-                "enable_quality_processing": False,
-                "reading_order": False,
-                "remote_services_enabled": False,
-                "network_allowed_during_run": False,
-                "output_format": "markdown",
-                "result_format": "unified",
-                "escape_markdown": True,
-                "table_anchors": False,
-                "include_document_structure": False,
-                "extract_metadata": True,
-                "extract_annotations": False,
-                "extract_form_fields": True,
-                "include_watermarks": True,
-            }),
-            patch("src.parsers.xberg_v2.get_normalization_config", return_value={}),
-            patch("src.parsers.xberg_v2.get_reference_tokenizer", return_value="o200k_base"),
-            patch("src.parsers.xberg_v2.ResourceMonitor") as MockMonitor,
-            patch("src.parsers.xberg_v2.finalize_artifacts") as mock_finalize,
-            patch("src.parsers.xberg_v2.write_json") as mock_write,
-            patch("src.parsers.xberg_v2.build_output_paths") as mock_paths,
-            patch("src.parsers.xberg_v2.parser_output_context"),
-            patch("src.parsers.xberg_v2._load_cached_inventory", return_value=inventory),
-            patch.dict("sys.modules", {"xberg": mock_xberg}),
-        ):
-            mock_monitor_instance = MockMonitor.return_value
-            mock_monitor_instance.stop.return_value = {"cpu_percent": 0.0}
+        # main() imports benchmark helpers lazily inside the function body.
+        # We need to pre-import those modules so patch() can find their attributes.
+        # tiktoken may not be installed in WSL — mock it first so the imports succeed.
+        sys_extras: dict = {"xberg": mock_xberg}
+        if "tiktoken" not in sys.modules:
+            sys_extras["tiktoken"] = MagicMock()
 
-            mock_paths_instance = MagicMock()
-            mock_paths_instance.output_dir = tmp_path / "out"
-            mock_paths_instance.run_log = tmp_path / "run.log"
-            mock_paths_instance.metrics_json = tmp_path / "metrics.json"
-            mock_paths.return_value = mock_paths_instance
+        # Use a nested context: outer ensures tiktoken mock is active during pre-imports;
+        # inner applies all functional patches.
+        with patch.dict("sys.modules", sys_extras):
+            import src.benchmark.artifacts  # noqa: F401
+            import src.benchmark.metrics_writer  # noqa: F401
+            import src.benchmark.paths  # noqa: F401
+            import src.benchmark.resource_monitor  # noqa: F401
+            import src.benchmark.runtime_io  # noqa: F401
 
-            mock_finalize.return_value = {
-                "timing": {"normalization_seconds": 0.0},
-                "empty_output_pages": [],
-                "content_elements": {},
-                "heuristics": {},
-                "tokens": {},
-                "normalization": {},
-                "output": {"clean_markdown_bytes": 100},
-            }
+            with (
+                patch("sys.argv", ["xberg_v2"] + args_list),
+                patch("src.parsers.xberg_v2.get_profile", return_value={
+                    "output_format": "markdown",
+                    "result_format": "unified",
+                    "escape_markdown": True,
+                    "table_anchors": False,
+                    "include_document_structure": False,
+                    "use_cache": False,
+                    "enable_quality_processing": False,
+                    "ocr_enabled": False,
+                    "ocr_backend": None,
+                    "ocr_languages": [],
+                    "ocr_strategy": "disabled",
+                    "force_ocr": False,
+                    "auto_rotate": False,
+                    "target_dpi": 150,
+                    "deskew": False,
+                    "denoise": False,
+                    "contrast_enhance": False,
+                    "extract_tables": True,
+                    "extract_images": False,
+                    "extract_pages": True,
+                    "insert_page_markers": False,
+                    "include_headers": True,
+                    "include_footers": True,
+                    "strip_repeating_text": False,
+                    "include_watermarks": True,
+                    "chunking_enabled": False,
+                    "token_reduction_mode": "off",
+                    "layout_enabled": False,
+                    "reading_order": False,
+                    "remote_services_enabled": False,
+                    "network_allowed_during_run": False,
+                    "extract_metadata": True,
+                    "extract_annotations": False,
+                    "extract_form_fields": True,
+                }),
+                patch("src.parsers.xberg_v2.get_normalization_config", return_value={}),
+                patch("src.parsers.xberg_v2.get_reference_tokenizer", return_value="o200k_base"),
+                patch("src.benchmark.resource_monitor.ResourceMonitor") as MockMonitor,
+                patch("src.benchmark.artifacts.finalize_artifacts") as mock_finalize,
+                patch("src.benchmark.metrics_writer.write_json") as mock_write,
+                patch("src.benchmark.paths.build_output_paths") as mock_paths,
+                patch("src.benchmark.runtime_io.parser_output_context"),
+                patch("src.parsers.xberg_v2._load_cached_inventory", return_value=inventory),
+                patch("src.parsers.xberg_v2._find_tessdata_prefix", return_value=None),
+            ):
+                mock_monitor_instance = MockMonitor.return_value
+                mock_monitor_instance.stop.return_value = {"cpu_percent": 0.0}
 
-            import importlib
-            importlib.reload(xberg_v2)
-            xberg_v2.main()
+                mock_paths_instance = MagicMock()
+                mock_paths_instance.output_dir = tmp_path / "out"
+                mock_paths_instance.run_log = tmp_path / "run.log"
+                mock_paths_instance.metrics_json = tmp_path / "metrics.json"
+                mock_paths.return_value = mock_paths_instance
+
+                mock_finalize.return_value = {
+                    "timing": {"normalization_seconds": 0.0},
+                    "empty_output_pages": [],
+                    "content_elements": {},
+                    "heuristics": {},
+                    "tokens": {},
+                    "normalization": {},
+                    "output": {"clean_markdown_bytes": 100},
+                }
+
+                importlib.reload(xberg_v2)
+                xberg_v2.main()
 
         return mock_monitor_instance, mock_finalize, mock_write, MockMonitor
 
@@ -159,3 +190,32 @@ class TestAdapterContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _, _, mock_write, _ = self._run_main(Path(tmp))
             mock_write.assert_called()
+
+
+class TestXbergExtractInput(unittest.TestCase):
+    def test_local_pdf_uses_uri_contract(self) -> None:
+        fake_result = object()
+        fake_extract = AsyncMock(return_value=fake_result)
+
+        fake_ExtractInput = MagicMock()
+        mock_xberg = MagicMock()
+        mock_xberg.extract = fake_extract
+        mock_xberg.ExtractInput = fake_ExtractInput
+
+        with patch.dict("sys.modules", {"xberg": mock_xberg}):
+            from src.parsers.xberg_v2 import _extract
+            result = asyncio.run(
+                _extract(Path("/benchmark/document.pdf"), {})
+            )
+
+        self.assertIs(result, fake_result)
+
+        call_kwargs = fake_ExtractInput.call_args.kwargs
+        self.assertEqual(call_kwargs.get("kind"), "uri")
+        self.assertEqual(call_kwargs.get("uri"), "/benchmark/document.pdf")
+        self.assertEqual(call_kwargs.get("mime_type"), "application/pdf")
+        self.assertEqual(call_kwargs.get("filename"), "document.pdf")
+
+
+if __name__ == "__main__":
+    unittest.main()

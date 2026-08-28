@@ -329,6 +329,33 @@ def _find_tessdata_prefix() -> str | None:
             return c
     return None
 
+_FULL_CPU_THREAD_LIMIT_VARS = (
+    "OMP_THREAD_LIMIT",
+    "KMP_DEVICE_THREAD_LIMIT",
+    "KMP_ALL_THREADS",
+    "KMP_TEAMS_THREAD_LIMIT",
+)
+
+
+def _single_thread_environment_limits() -> dict[str, str]:
+    """
+    Return OpenMP/KMP environment variables that explicitly
+    restrict the current process to one thread.
+
+    full_cpu_local must fail closed instead of silently
+    benchmarking with a single CPU thread.
+    """
+    import os
+
+    restricted: dict[str, str] = {}
+
+    for name in _FULL_CPU_THREAD_LIMIT_VARS:
+        value = os.environ.get(name)
+
+        if value is not None and value.strip() == "1":
+            restricted[name] = value
+
+    return restricted
 
 # ---------------------------------------------------------------------------
 # Source inventory
@@ -697,6 +724,42 @@ def preflight_profile(
             "disabled — unsupported by pinned unstructured==0.27.1",
         ))
 
+    # full_cpu_local must not silently run with a one-thread
+    # OpenMP/KMP environment inherited from the parent process.
+    if profile_name == "full_cpu_local":
+        single_thread_limits = (
+            _single_thread_environment_limits()
+        )
+
+        if single_thread_limits:
+            detail = ", ".join(
+                f"{name}={value}"
+                for name, value
+                in sorted(single_thread_limits.items())
+            )
+
+            checks.append(
+                make_check(
+                    "CPU thread environment",
+                    "fail",
+                    (
+                        "full_cpu_local is restricted to one "
+                        f"thread by: {detail}"
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "CPU thread environment",
+                    "pass",
+                    (
+                        "no single-thread OpenMP/KMP "
+                        "limit detected"
+                    ),
+                )
+            )
+
     # Telemetria desabilitada — validada via env vars que o runtime seta
     import os as _os
     for _env_var in ("DO_NOT_TRACK", "SCARF_NO_ANALYTICS"):
@@ -867,6 +930,23 @@ def main() -> None:
         raise SystemExit(f"Input not found: {input_path}")
 
     profile = get_profile(PARSER_NAME, args.profile)
+    if args.profile == "full_cpu_local":
+        single_thread_limits = (
+            _single_thread_environment_limits()
+        )
+
+        if single_thread_limits:
+            detail = ", ".join(
+                f"{name}={value}"
+                for name, value
+                in sorted(single_thread_limits.items())
+            )
+
+            raise BenchmarkConfigurationError(
+                "Unstructured full_cpu_local cannot run "
+                "with a single-thread OpenMP/KMP limit: "
+                f"{detail}"
+            )
     normalization_config = get_normalization_config()
     tokenizer_name = get_reference_tokenizer()
 
@@ -928,9 +1008,31 @@ def main() -> None:
         model_name = profile.get("hi_res_model_name") or "yolox"
         partition_kwargs["hi_res_model_name"] = model_name
 
-    image_block_types = list(profile.get("extract_image_block_types", []))
+    image_block_types = list(
+        profile.get("extract_image_block_types", [])
+    )
+
     if image_block_types:
-        partition_kwargs["extract_image_block_types"] = image_block_types
+        image_output_dir = paths.output_dir / "figures"
+
+        # A real re-run must not mix crops from a previous execution.
+        # --force in run_batch bypasses resume, but does not delete
+        # the parser output directory.
+        if image_output_dir.exists():
+            shutil.rmtree(image_output_dir)
+
+        image_output_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        partition_kwargs[
+            "extract_image_block_types"
+        ] = image_block_types
+
+        partition_kwargs[
+            "extract_image_block_output_dir"
+        ] = str(image_output_dir)
 
     for _pm_kwarg in (
         "pdfminer_line_margin", "pdfminer_char_margin",

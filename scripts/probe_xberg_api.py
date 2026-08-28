@@ -283,49 +283,173 @@ with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
 
 async def _run_extraction() -> None:
     try:
-        extract_fn = getattr(xberg, "extract", None)
+        extract_fn = getattr(
+            xberg,
+            "extract",
+            None,
+        )
+
         if extract_fn is None:
-            _fail("extraction", "xberg.extract not found")
+            _fail(
+                "extraction",
+                "xberg.extract not found",
+            )
             return
 
-        # Build minimal config — try common patterns and fall back gracefully
-        try:
-            cfg_cls = getattr(xberg, "ExtractionConfig", None)
-            input_cls = getattr(xberg, "ExtractInput", None)
-            if cfg_cls and input_cls:
-                # Minimal: just output format markdown, no OCR
-                cfg = cfg_cls()
-                inp = input_cls(source=tmp_path)
-                result = await extract_fn(inp, cfg)
+        cfg_cls = getattr(
+            xberg,
+            "ExtractionConfig",
+            None,
+        )
+        input_cls = getattr(
+            xberg,
+            "ExtractInput",
+            None,
+        )
+
+        if cfg_cls is None:
+            _fail(
+                "extraction",
+                "xberg.ExtractionConfig not found",
+            )
+            return
+
+        if input_cls is None:
+            _fail(
+                "extraction",
+                "xberg.ExtractInput not found",
+            )
+            return
+
+        local_pdf = Path(tmp_path).resolve()
+
+        # Minimal local-only extraction contract.
+        # This mirrors src/parsers/xberg_v2.py.
+        cfg = cfg_cls()
+
+        inp = input_cls(
+            kind="uri",
+            uri=str(local_pdf),
+            mime_type="application/pdf",
+            filename=local_pdf.name,
+        )
+
+        result = await extract_fn(
+            inp,
+            cfg,
+        )
+
+        _ok(
+            "extraction completed",
+        )
+
+        if result is None:
+            _fail(
+                "result",
+                "xberg.extract returned None",
+            )
+            return
+
+        _ok(
+            "result type",
+            type(result).__name__,
+        )
+
+        for attr in (
+            "results",
+            "errors",
+            "summary",
+            "crawl_final_urls",
+            "crawl_redirect_count",
+        ):
+            if hasattr(result, attr):
+                value = getattr(
+                    result,
+                    attr,
+                )
+
+                _ok(
+                    f"result.{attr}",
+                    type(value).__name__,
+                )
+
+        errors = list(
+            getattr(
+                result,
+                "errors",
+                None,
+            )
+            or []
+        )
+
+        if errors:
+            _fail(
+                "result errors",
+                "; ".join(
+                    str(error)
+                    for error in errors
+                ),
+            )
+            return
+
+        documents = list(
+            getattr(
+                result,
+                "results",
+                None,
+            )
+            or []
+        )
+
+        if len(documents) != 1:
+            _fail(
+                "result count",
+                (
+                    "expected exactly one "
+                    "ExtractedDocument, got "
+                    f"{len(documents)}"
+                ),
+            )
+            return
+
+        document = documents[0]
+
+        _ok(
+            "document type",
+            type(document).__name__,
+        )
+
+        for field in (
+            "content",
+            "pages",
+            "tables",
+            "metadata",
+            "processing_warnings",
+        ):
+            if hasattr(document, field):
+                value = getattr(
+                    document,
+                    field,
+                )
+
+                _ok(
+                    f"document.{field}",
+                    type(value).__name__,
+                )
             else:
-                result = await extract_fn(tmp_path)
-        except Exception:
-            # Fallback: pass path directly
-            result = await extract_fn(tmp_path)
-
-        _ok("extraction completed")
-
-        # Inspect result shape
-        if result is not None:
-            _ok("result type", type(result).__name__)
-            for attr in ("documents", "errors", "summary", "output"):
-                if hasattr(result, attr):
-                    val = getattr(result, attr)
-                    _ok(f"result.{attr}", type(val).__name__)
-
-            # Try to find the document content
-            docs = getattr(result, "documents", None) or getattr(result, "results", None)
-            if docs:
-                doc = docs[0] if isinstance(docs, list) else docs
-                _ok("document type", type(doc).__name__)
-                for field in ("content", "pages", "tables", "metadata", "warnings", "elements"):
-                    if hasattr(doc, field):
-                        _ok(f"document.{field}", type(getattr(doc, field)).__name__)
-                    else:
-                        _warn(f"document.{field}", "not found")
+                _warn(
+                    f"document.{field}",
+                    "not found",
+                )
 
     except Exception as exc:
-        _fail("extraction", str(exc))
+        _fail(
+            "extraction",
+            (
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            ),
+        )
 
 
 try:

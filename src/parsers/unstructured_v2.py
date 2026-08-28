@@ -682,6 +682,21 @@ def preflight_profile(
     else:
         checks.append(make_check("network during run", "pass"))
 
+    # Form extraction — unstructured==0.27.1 declares the parameter but never implemented it
+    if bool(profile.get("extract_forms", False)):
+        checks.append(make_check(
+            "form extraction support",
+            "fail",
+            "unstructured==0.27.1 declares extract_forms in partition_pdf() but "
+            "its implementation raises NotImplementedError. Disable extract_forms.",
+        ))
+    else:
+        checks.append(make_check(
+            "form extraction support",
+            "pass",
+            "disabled — unsupported by pinned unstructured==0.27.1",
+        ))
+
     # Telemetria desabilitada — validada via env vars que o runtime seta
     import os as _os
     for _env_var in ("DO_NOT_TRACK", "SCARF_NO_ANALYTICS"):
@@ -892,7 +907,6 @@ def main() -> None:
     os.environ["SCARF_NO_ANALYTICS"] = "1"
     os.environ["UNSTRUCTURED_DEFAULT_MODEL_NAME"] = "yolox"
     os.environ["UNSTRUCTURED_HI_RES_MODEL_NAME"] = "yolox"
-    os.environ["OMP_THREAD_LIMIT"] = "1"
 
     # Build partition kwargs from profile
     partition_kwargs: dict[str, Any] = {

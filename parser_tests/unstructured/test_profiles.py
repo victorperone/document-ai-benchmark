@@ -145,11 +145,11 @@ class TestFullCpuLocalProfile(unittest.TestCase):
     def test_infer_table_structure_true(self):
         self.assertTrue(self._profile()["infer_table_structure"])
 
-    def test_extract_forms_true(self):
-        self.assertTrue(self._profile()["extract_forms"])
+    def test_extract_forms_disabled_for_pinned_version(self):
+        self.assertFalse(self._profile()["extract_forms"])
 
-    def test_form_extraction_skip_tables_false(self):
-        self.assertFalse(self._profile()["form_extraction_skip_tables"])
+    def test_form_extraction_skip_tables_true(self):
+        self.assertTrue(self._profile()["form_extraction_skip_tables"])
 
     def test_extract_image_block_types_nonempty(self):
         types = self._profile()["extract_image_block_types"]

@@ -114,6 +114,16 @@ try:
         else:
             _warn(f"pdfminer param: {p}", "not in signature (may be passed via kwargs)")
 
+    # extract_forms is present in the signature but NOT implemented in pinned 0.27.1:
+    # form_extraction.run_form_extraction() raises NotImplementedError unconditionally.
+    # Treat its presence as "parameter exists / implementation missing".
+    _warn(
+        "form extraction implementation",
+        "parameter 'extract_forms' exists in partition_pdf() signature but "
+        "form_extraction.run_form_extraction() raises NotImplementedError in "
+        "unstructured==0.27.1 — do not set extract_forms=True in profiles",
+    )
+
     print(f"\n  Full signature:\n  {sig}")
 
 except Exception as exc:

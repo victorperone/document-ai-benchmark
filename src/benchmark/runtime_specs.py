@@ -69,7 +69,6 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
             "HF_HUB_CACHE": "{model_root}/huggingface/hub",
             "UNSTRUCTURED_DEFAULT_MODEL_NAME": "yolox",
             "UNSTRUCTURED_HI_RES_MODEL_NAME": "yolox",
-            "OMP_THREAD_LIMIT": "1",
         },
         preflight_kwargs={"model_root_override": "{model_root}"},
         supported_runtimes=_HOST_ONLY,

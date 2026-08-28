@@ -50,6 +50,10 @@ class TestUnstructuredSpec(unittest.TestCase):
         self.assertIn("model_root_override", self.spec.preflight_kwargs)
         self.assertIn("{model_root}", self.spec.preflight_kwargs["model_root_override"])
 
+    def test_full_cpu_does_not_force_single_omp_thread(self):
+        env = self.spec.model_env
+        self.assertNotEqual(env.get("OMP_THREAD_LIMIT"), "1")
+
 
 class TestXbergSpec(unittest.TestCase):
     def setUp(self):

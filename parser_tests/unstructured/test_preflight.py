@@ -152,6 +152,44 @@ class TestPreflightInferenceVersion(unittest.TestCase):
         self.assertEqual(_status(result, "unstructured-inference version"), "pass")
 
 
+class TestPreflightFormExtraction(unittest.TestCase):
+    def _fake_profile(self, extract_forms: bool) -> dict:
+        return {
+            "strategy": "fast",
+            "ocr_enabled": False,
+            "remote_services_enabled": False,
+            "network_allowed_during_run": False,
+            "infer_table_structure": False,
+            "languages": ["por"],
+            "ocr_mode": None,
+            "ocr_engine": None,
+            "detect_language_per_element": False,
+            "include_page_breaks": True,
+            "hi_res_model_name": None,
+            "extract_image_block_types": [],
+            "extract_image_block_to_payload": False,
+            "extract_forms": extract_forms,
+            "form_extraction_skip_tables": not extract_forms,
+            "password": None,
+            "pdfminer_line_margin": None,
+            "pdfminer_char_margin": None,
+            "pdfminer_line_overlap": None,
+            "pdfminer_word_margin": 0.185,
+        }
+
+    def test_extract_forms_true_fails(self):
+        with patch("src.parsers.unstructured_v2.get_profile",
+                   return_value=self._fake_profile(extract_forms=True)):
+            result = preflight_profile("fast_native")
+        self.assertEqual(_status(result, "form extraction support"), "fail")
+
+    def test_extract_forms_false_passes(self):
+        with patch("src.parsers.unstructured_v2.get_profile",
+                   return_value=self._fake_profile(extract_forms=False)):
+            result = preflight_profile("fast_native")
+        self.assertEqual(_status(result, "form extraction support"), "pass")
+
+
 class TestPreflightModelManifest(unittest.TestCase):
     def test_missing_manifest_fails(self):
         with TemporaryDirectory() as tmp:

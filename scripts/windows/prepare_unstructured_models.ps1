@@ -1,153 +1,486 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Download and verify the YOLOX layout model for Unstructured hi_res strategy.
+    Acquire and certify all local artifacts required by the
+    Unstructured full_cpu_local profile.
 
 .DESCRIPTION
-    This script runs ONCE before formal benchmark execution.
-    It allows network access only for the duration of the download.
-    After download, it verifies offline loading and writes a manifest with SHA-256.
+    Phase 1 allows network access and acquires:
+      - spaCy en_core_web_sm 3.8.0
+      - YOLOX layout model
+      - Microsoft Table Transformer structure model
 
-    During the formal benchmark run, set:
-        HF_HUB_OFFLINE=1  TRANSFORMERS_OFFLINE=1
+    Phase 2 starts a new Python process with Hugging Face offline
+    variables and a socket guard. Every required resource must load.
+
+    Phase 3 writes a manifest with versions, resource identities,
+    persistent paths and SHA-256 digests.
 
 .PARAMETER Force
-    Re-download even if model files already exist.
+    Delete the Unstructured model root and reinstall the pinned
+    spaCy model before acquisition.
 #>
 [CmdletBinding()]
 param(
     [switch]$Force
 )
+
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
 . "$PSScriptRoot\_helpers.ps1"
 
-$Root      = (Get-Item $PSScriptRoot).Parent.Parent.FullName
-$VenvPath  = Join-Path $Root '.venvs\unstructured'
-$ModelRoot = Join-Path $Root 'models\unstructured'
-$HfHome    = Join-Path $ModelRoot 'huggingface'
-$ManifestDir = Join-Path $ModelRoot 'manifests'
+Assert-WindowsLongPathsEnabled
 
-if (-not (Test-Path "$VenvPath\Scripts\python.exe")) {
-    throw "[prepare_unstructured_models] Venv not found. Run setup_unstructured.ps1 first."
-}
-
-Write-Host "[prepare_unstructured_models] Creating model directories..."
-New-Item -ItemType Directory -Force -Path $HfHome | Out-Null
-New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
-
-$Python = "$VenvPath\Scripts\python.exe"
-
-# ============================================================
-# PHASE 1 - acquisition
-# Network is allowed ONLY here.
-# ============================================================
-
-$env:HF_HOME = $HfHome
-$env:HF_HUB_CACHE = Join-Path $HfHome 'hub'
-
-Remove-Item Env:HF_HUB_OFFLINE -ErrorAction SilentlyContinue
-Remove-Item Env:TRANSFORMERS_OFFLINE -ErrorAction SilentlyContinue
-
-$env:HF_HUB_DISABLE_TELEMETRY = '1'
-$env:DO_NOT_TRACK = '1'
-$env:SCARF_NO_ANALYTICS = '1'
-$env:UNSTRUCTURED_DEFAULT_MODEL_NAME = 'yolox'
-$env:UNSTRUCTURED_HI_RES_MODEL_NAME = 'yolox'
-
-Write-Host "[prepare_unstructured_models] Acquiring YOLOX..."
-
-$DownloadScript = @'
-from unstructured_inference.models.base import get_model
-
-model = get_model("yolox")
-
-if model is None:
-    raise RuntimeError("get_model('yolox') returned None")
-
-print("YOLOX acquisition: PASS")
-'@
-
-Invoke-PythonScriptChecked `
-    -Python $Python `
-    -ScriptText $DownloadScript
-
-# ============================================================
-# PHASE 2 - independent offline validation
-# Invoke-PythonScriptChecked starts a NEW python.exe process.
-# ============================================================
-
-$env:HF_HUB_OFFLINE = '1'
-$env:TRANSFORMERS_OFFLINE = '1'
-$env:HF_HUB_DISABLE_TELEMETRY = '1'
-$env:DO_NOT_TRACK = '1'
-$env:SCARF_NO_ANALYTICS = '1'
-
-Write-Host "[prepare_unstructured_models] Validating YOLOX offline..."
-
-$OfflineValidationScript = @'
-from unstructured_inference.models.base import get_model
-
-model = get_model("yolox")
-
-if model is None:
-    raise RuntimeError(
-        "Offline validation failed: get_model('yolox') returned None"
-    )
-
-print("YOLOX offline validation: PASS")
-'@
-
-Invoke-PythonScriptChecked `
-    -Python $Python `
-    -ScriptText $OfflineValidationScript
-
-# ============================================================
-# PHASE 3 - manifest
-# Only reached after independent offline validation succeeds.
-# ============================================================
-
-$ManifestScript = @"
-import hashlib
-import json
-import time
-from pathlib import Path
-
-model_root = Path(r'$ModelRoot')
-hf_home = Path(r'$HfHome')
-manifest_dir = Path(r'$ManifestDir')
-
-files = {}
-
-for path in sorted(hf_home.rglob("*.onnx")):
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    files[str(path.relative_to(model_root))] = digest
-
-if not files:
-    raise RuntimeError(
-        "No ONNX model files found after YOLOX preparation"
-    )
-
-manifest = {
-    "timestamp": time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ",
-        time.gmtime(),
-    ),
-    "model": "yolox",
-    "offline_validation": True,
-    "files": files,
-}
-
-manifest_path = manifest_dir / "unstructured_models.json"
-
-manifest_path.write_text(
-    json.dumps(manifest, indent=2),
-    encoding="utf-8",
+# spaCy en_core_web_sm 3.8.0 — URL is from the official spaCy GitHub release.
+# Hash is computed on download and recorded in the manifest (no secret value).
+$SpacyModelUrl = (
+    'https://github.com/explosion/spacy-models/releases/download/' +
+    'en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl'
 )
 
-print(f"Manifest: {manifest_path}")
-print("Unstructured model preparation: PASS")
-"@
+$Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
+$VenvPath = Join-Path $Root '.venvs\unstructured'
+$Python = Join-Path $VenvPath 'Scripts\python.exe'
 
-Invoke-PythonScriptChecked `
-    -Python $Python `
-    -ScriptText $ManifestScript
+$ModelRoot = Join-Path $Root 'models\unstructured'
+$HfHome = Join-Path $ModelRoot 'huggingface'
+$HfCache = Join-Path $HfHome 'hub'
+$SpacyRoot = Join-Path $ModelRoot 'spacy'
+$SpacyWheel = Join-Path $SpacyRoot 'en_core_web_sm-3.8.0-py3-none-any.whl'
+$ManifestDir = Join-Path $ModelRoot 'manifests'
+$ManifestPath = Join-Path $ManifestDir 'unstructured_models_manifest.json'
+
+if (-not (Test-Path $Python -PathType Leaf)) {
+    throw (
+        "[unstructured-models] Venv not found. " +
+        "Run setup_unstructured.ps1 first: $VenvPath"
+    )
+}
+
+if ($Force) {
+    if (Test-Path $ModelRoot) {
+        Remove-Item -Recurse -Force $ModelRoot
+    }
+    Invoke-NativeChecked `
+        -Cmd $Python `
+        -Args @('-m', 'pip', 'uninstall', '--yes', 'en-core-web-sm')
+}
+
+New-Item -ItemType Directory -Force -Path $HfCache   | Out-Null
+New-Item -ItemType Directory -Force -Path $SpacyRoot  | Out-Null
+New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
+
+$ManagedEnvironmentNames = @(
+    'HF_HOME',
+    'HF_HUB_CACHE',
+    'HF_HUB_OFFLINE',
+    'TRANSFORMERS_OFFLINE',
+    'HF_HUB_DISABLE_TELEMETRY',
+    'DO_NOT_TRACK',
+    'SCARF_NO_ANALYTICS',
+    'UNSTRUCTURED_DEFAULT_MODEL_NAME',
+    'UNSTRUCTURED_HI_RES_MODEL_NAME',
+    'OMP_THREAD_LIMIT',
+    'BENCHMARK_UNSTRUCTURED_MODEL_ROOT',
+    'BENCHMARK_UNSTRUCTURED_SPACY_WHEEL',
+    'BENCHMARK_UNSTRUCTURED_SPACY_URL',
+    'BENCHMARK_UNSTRUCTURED_MANIFEST'
+)
+
+$OriginalEnvironment = @{}
+foreach ($Name in $ManagedEnvironmentNames) {
+    $OriginalEnvironment[$Name] = (
+        [Environment]::GetEnvironmentVariable($Name, 'Process')
+    )
+}
+
+try {
+    $env:HF_HOME = $HfHome
+    $env:HF_HUB_CACHE = $HfCache
+    $env:HF_HUB_DISABLE_TELEMETRY = '1'
+    $env:DO_NOT_TRACK = '1'
+    $env:SCARF_NO_ANALYTICS = '1'
+    $env:UNSTRUCTURED_DEFAULT_MODEL_NAME = 'yolox'
+    $env:UNSTRUCTURED_HI_RES_MODEL_NAME = 'yolox'
+    $env:OMP_THREAD_LIMIT = '1'
+
+    $env:BENCHMARK_UNSTRUCTURED_MODEL_ROOT = $ModelRoot
+    $env:BENCHMARK_UNSTRUCTURED_SPACY_WHEEL = $SpacyWheel
+    $env:BENCHMARK_UNSTRUCTURED_SPACY_URL = $SpacyModelUrl
+    $env:BENCHMARK_UNSTRUCTURED_MANIFEST = $ManifestPath
+
+    # ============================================================
+    # PHASE 1 - acquisition. Network may be available.
+    # ============================================================
+    Remove-Item Env:HF_HUB_OFFLINE      -ErrorAction SilentlyContinue
+    Remove-Item Env:TRANSFORMERS_OFFLINE -ErrorAction SilentlyContinue
+
+    Write-Host ""
+    Write-Host "[unstructured-models] PHASE 1 - acquisition" -ForegroundColor Cyan
+
+    $AcquireSpacyWheel = @'
+from __future__ import annotations
+
+import hashlib
+import os
+import urllib.request
+from pathlib import Path
+
+url = os.environ["BENCHMARK_UNSTRUCTURED_SPACY_URL"]
+destination = Path(os.environ["BENCHMARK_UNSTRUCTURED_SPACY_WHEEL"])
+destination.parent.mkdir(parents=True, exist_ok=True)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+if destination.is_file():
+    print(f"spaCy wheel already present: {destination}")
+    print(f"spaCy wheel SHA-256: {sha256(destination)}")
+else:
+    temporary = destination.with_suffix(".download")
+    if temporary.exists():
+        temporary.unlink()
+
+    print(f"Downloading: {url}")
+
+    with urllib.request.urlopen(url, timeout=120) as response:
+        with temporary.open("wb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+
+    temporary.replace(destination)
+    print(f"spaCy wheel SHA-256: {sha256(destination)}")
+
+print("spaCy acquisition: PASS")
+'@
+
+    Invoke-PythonScriptChecked `
+        -Python $Python `
+        -ScriptText $AcquireSpacyWheel
+
+    Invoke-NativeChecked `
+        -Cmd $Python `
+        -Args @(
+            '-m', 'pip', 'install',
+            '--no-deps',
+            '--force-reinstall',
+            $SpacyWheel
+        )
+
+    Invoke-NativeChecked `
+        -Cmd $Python `
+        -Args @('-m', 'pip', 'check')
+
+    $AcquireModels = @'
+from __future__ import annotations
+
+from pathlib import Path
+
+from unstructured.nlp.tokenize import sent_tokenize
+from unstructured_inference.models.base import get_model
+from unstructured_inference.models.tables import load_agent, tables_agent
+
+sentences = sent_tokenize(
+    "This is a model acquisition smoke. "
+    "The sentence boundary must be available."
+)
+if not sentences:
+    raise RuntimeError("spaCy sentence tokenizer returned no sentences")
+
+layout = get_model("yolox")
+layout_path = Path(layout.model_path)
+if not layout_path.is_file():
+    raise RuntimeError(f"YOLOX model path does not exist: {layout_path}")
+
+load_agent()
+
+if tables_agent.model is None:
+    raise RuntimeError("Table Transformer model was not initialized")
+
+if tables_agent.feature_extractor is None:
+    raise RuntimeError(
+        "Table Transformer feature extractor was not initialized"
+    )
+
+print("spaCy model: PASS")
+print("YOLOX model:", layout_path)
+print("Table model: PASS")
+print("UNSTRUCTURED MODEL ACQUISITION: PASS")
+'@
+
+    Invoke-PythonScriptChecked `
+        -Python $Python `
+        -ScriptText $AcquireModels
+
+    # ============================================================
+    # PHASE 2 - independent offline validation.
+    # ============================================================
+    $env:HF_HUB_OFFLINE = '1'
+    $env:TRANSFORMERS_OFFLINE = '1'
+
+    Write-Host ""
+    Write-Host "[unstructured-models] PHASE 2 - offline validation" -ForegroundColor Cyan
+
+    $OfflineValidation = @'
+from __future__ import annotations
+
+import socket
+from pathlib import Path
+
+
+def blocked(*args, **kwargs):
+    raise RuntimeError(
+        "Network access attempted during offline validation"
+    )
+
+
+class BlockedSocket(socket.socket):
+    def connect(self, *args, **kwargs):
+        return blocked(*args, **kwargs)
+
+    def connect_ex(self, *args, **kwargs):
+        return blocked(*args, **kwargs)
+
+
+socket.create_connection = blocked
+socket.socket = BlockedSocket
+
+import spacy
+
+from unstructured.nlp.tokenize import sent_tokenize
+from unstructured_inference.models.base import get_model
+from unstructured_inference.models.tables import load_agent, tables_agent
+
+nlp = spacy.load(
+    "en_core_web_sm",
+    exclude=["ner", "lemmatizer", "attribute_ruler"],
+)
+if nlp.meta.get("version") != "3.8.0":
+    raise RuntimeError(
+        "Unexpected spaCy model version: "
+        f"{nlp.meta.get('version')!r}"
+    )
+
+if not sent_tokenize("Offline validation. Second sentence."):
+    raise RuntimeError("spaCy tokenizer unavailable offline")
+
+layout = get_model("yolox")
+if not Path(layout.model_path).is_file():
+    raise RuntimeError("YOLOX model unavailable offline")
+
+load_agent()
+if tables_agent.model is None:
+    raise RuntimeError("Table Transformer model unavailable offline")
+if tables_agent.feature_extractor is None:
+    raise RuntimeError(
+        "Table Transformer processor unavailable offline"
+    )
+
+print("spaCy offline load: PASS")
+print("YOLOX offline load: PASS")
+print("Table Transformer offline load: PASS")
+print("UNSTRUCTURED OFFLINE VALIDATION: PASS")
+'@
+
+    Invoke-PythonScriptChecked `
+        -Python $Python `
+        -ScriptText $OfflineValidation
+
+    # ============================================================
+    # PHASE 3 - deterministic manifest.
+    # ============================================================
+    Write-Host ""
+    Write-Host "[unstructured-models] PHASE 3 - manifest" -ForegroundColor Cyan
+
+    $BuildManifest = @'
+from __future__ import annotations
+
+import hashlib
+import importlib.metadata as metadata
+import importlib.util
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from unstructured_inference.models.base import get_model
+from unstructured_inference.models.tables import (
+    DEFAULT_MODEL as TABLE_MODEL,
+    load_agent,
+)
+
+model_root = Path(os.environ["BENCHMARK_UNSTRUCTURED_MODEL_ROOT"]).resolve()
+manifest_path = Path(os.environ["BENCHMARK_UNSTRUCTURED_MANIFEST"]).resolve()
+spacy_wheel = Path(os.environ["BENCHMARK_UNSTRUCTURED_SPACY_WHEEL"]).resolve()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def relative_to_model_root(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(model_root).as_posix()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Artifact is outside model root: {path}"
+        ) from exc
+
+
+def file_record(path: Path) -> dict:
+    return {
+        "path": relative_to_model_root(path),
+        "size_bytes": path.stat().st_size,
+        "sha256": sha256_file(path),
+    }
+
+
+def tree_digest(root: Path):
+    digest = hashlib.sha256()
+    count = 0
+    for path in sorted(
+        item
+        for item in root.rglob("*")
+        if item.is_file()
+        and "__pycache__" not in item.parts
+        and item.suffix.lower() not in {".pyc", ".pyo"}
+    ):
+        relative = path.relative_to(root).as_posix()
+        file_hash = sha256_file(path)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_hash.encode("ascii"))
+        digest.update(b"\n")
+        count += 1
+    return digest.hexdigest(), count
+
+
+layout = get_model("yolox")
+layout_path = Path(layout.model_path).resolve()
+if not layout_path.is_file():
+    raise RuntimeError(f"YOLOX file missing: {layout_path}")
+
+load_agent()
+
+table_root_name = "models--microsoft--table-transformer-structure-recognition"
+
+table_files = sorted(
+    path
+    for path in model_root.rglob("*")
+    if path.is_file()
+    and table_root_name in path.as_posix()
+    and path.suffix.lower() in {".json", ".bin", ".safetensors", ".txt", ".model"}
+)
+
+if not table_files:
+    raise RuntimeError("No persistent Table Transformer files were found")
+
+if not any(
+    path.suffix.lower() in {".bin", ".safetensors"} for path in table_files
+):
+    raise RuntimeError("Table Transformer weights were not found")
+
+if not spacy_wheel.is_file():
+    raise RuntimeError(f"spaCy wheel missing: {spacy_wheel}")
+
+spec = importlib.util.find_spec("en_core_web_sm")
+if spec is None or not spec.submodule_search_locations:
+    raise RuntimeError("Installed spaCy model was not found")
+
+spacy_package_root = Path(
+    next(iter(spec.submodule_search_locations))
+).resolve()
+spacy_tree_sha, spacy_file_count = tree_digest(spacy_package_root)
+
+manifest = {
+    "schema_version": 1,
+    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    "offline_validation": True,
+    "packages": {
+        name: metadata.version(name)
+        for name in (
+            "unstructured",
+            "unstructured-inference",
+            "spacy",
+            "en-core-web-sm",
+            "transformers",
+            "onnxruntime",
+        )
+    },
+    "resources": {
+        "layout": {
+            "name": "yolox",
+            "repository": "unstructuredio/yolo_x_layout",
+            "file": file_record(layout_path),
+        },
+        "table": {
+            "name": TABLE_MODEL,
+            "files": [file_record(path) for path in table_files],
+        },
+        "spacy": {
+            "name": "en_core_web_sm",
+            "version": metadata.version("en-core-web-sm"),
+            "wheel": file_record(spacy_wheel),
+            "installed_package_root": str(spacy_package_root),
+            "installed_tree_sha256": spacy_tree_sha,
+            "installed_file_count": spacy_file_count,
+        },
+    },
+}
+
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+temporary = manifest_path.with_suffix(".json.tmp")
+temporary.write_text(
+    json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+temporary.replace(manifest_path)
+
+print("Manifest:", manifest_path)
+print("Layout file:", layout_path)
+print("Table files:", len(table_files))
+print("spaCy files:", spacy_file_count)
+print("UNSTRUCTURED MODEL MANIFEST: PASS")
+'@
+
+    Invoke-PythonScriptChecked `
+        -Python $Python `
+        -ScriptText $BuildManifest
+
+    if (-not (Test-Path $ManifestPath -PathType Leaf)) {
+        throw (
+            "[unstructured-models] Manifest was not created: " +
+            $ManifestPath
+        )
+    }
+
+    Write-Host ""
+    Write-Host "[unstructured-models] Completed successfully." -ForegroundColor Green
+    Write-Host "Manifest: $ManifestPath"
+}
+finally {
+    foreach ($Name in $ManagedEnvironmentNames) {
+        $OriginalValue = $OriginalEnvironment[$Name]
+
+        if ($null -eq $OriginalValue) {
+            Remove-Item "Env:$Name" -ErrorAction SilentlyContinue
+        }
+        else {
+            Set-Item -Path "Env:$Name" -Value $OriginalValue
+        }
+    }
+}

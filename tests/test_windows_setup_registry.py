@@ -126,10 +126,139 @@ class TestHelpersPs1Structure(unittest.TestCase):
 
     def test_has_invoke_native_checked(self):
         self.assertIn("Invoke-NativeChecked", self.text)
+
     def test_has_long_path_check(self):
         self.assertIn("Assert-WindowsLongPathsEnabled", self.text)
         self.assertIn("LongPathsEnabled", self.text)
         self.assertIn(
             r"HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem",
             self.text,
+        )
+
+
+class TestInvokePythonScriptChecked(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (SCRIPTS_DIR / "_helpers.ps1").read_text(encoding="utf-8")
+
+    def test_helper_exists(self):
+        self.assertIn("function Invoke-PythonScriptChecked", self.text)
+
+    def test_helper_writes_utf8_without_bom(self):
+        self.assertIn("System.Text.UTF8Encoding($false)", self.text)
+
+    def test_helper_uses_finally(self):
+        self.assertIn("finally", self.text)
+        self.assertIn("Remove-Item", self.text)
+
+    def test_helper_delegates_native_exit_check(self):
+        self.assertIn("Invoke-NativeChecked", self.text)
+
+
+class TestUnstructuredSetupHardening(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (
+            SCRIPTS_DIR / "setup_unstructured.ps1"
+        ).read_text(encoding="utf-8")
+
+    def _position(self, token: str) -> int:
+        position = self.text.find(token)
+        self.assertGreaterEqual(position, 0, f"Missing token: {token!r}")
+        return position
+
+    def test_has_required_header(self):
+        self.assertTrue(
+            self.text.startswith("#Requires -Version 5.1"),
+            "Script must begin with #Requires -Version 5.1",
+        )
+        self.assertIn("Set-StrictMode -Version Latest", self.text)
+        self.assertIn("$ErrorActionPreference = 'Stop'", self.text)
+
+    def test_definitions_precede_use(self):
+        self.assertLess(
+            self._position("$VenvPath ="),
+            self._position("Test-Path $VenvPath"),
+        )
+        self.assertLess(
+            self._position("$ReqFile ="),
+            self._position("Test-Path $ReqFile"),
+        )
+        self.assertLess(
+            self._position('. "$PSScriptRoot\\_helpers.ps1"'),
+            self._position("Assert-WindowsLongPathsEnabled"),
+        )
+
+    def test_install_check_smoke_order(self):
+        install = self._position("'-m', 'pip', 'install'")
+        pip_check = self._position("'-m', 'pip', 'check'")
+        smoke = self._position("$Smoke = @'")
+        invoke = self._position("Invoke-PythonScriptChecked")
+
+        self.assertLess(install, pip_check)
+        self.assertLess(pip_check, smoke)
+        self.assertLess(smoke, invoke)
+
+    def test_multiline_smoke_is_not_passed_to_c(self):
+        self.assertNotRegex(
+            self.text,
+            re.compile(
+                r"@\(\s*['\"]+-c['\"]+"
+                r"\s*,\s*\$[Ss]moke",
+                re.IGNORECASE,
+            ),
+        )
+
+
+class TestUnstructuredModelPreparation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (
+            SCRIPTS_DIR / "prepare_unstructured_models.ps1"
+        ).read_text(encoding="utf-8")
+
+    def test_all_resources_are_present(self):
+        for token in (
+            "en_core_web_sm",
+            'get_model("yolox")',
+            "table-transformer-structure-recognition",
+            "load_agent",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.text)
+
+    def test_acquisition_precedes_offline_validation(self):
+        acquisition = self.text.find("PHASE 1")
+        offline = self.text.find("PHASE 2")
+        manifest = self.text.find("PHASE 3")
+
+        self.assertGreaterEqual(acquisition, 0, "PHASE 1 marker missing")
+        self.assertLess(acquisition, offline, "PHASE 1 must precede PHASE 2")
+        self.assertLess(offline, manifest, "PHASE 2 must precede PHASE 3")
+
+    def test_offline_variables_exist(self):
+        self.assertIn("HF_HUB_OFFLINE", self.text)
+        self.assertIn("TRANSFORMERS_OFFLINE", self.text)
+
+    def test_offline_socket_guard_exists(self):
+        self.assertIn(
+            "Network access attempted during offline validation",
+            self.text,
+        )
+        self.assertIn("socket.create_connection", self.text)
+
+    def test_manifest_is_certified(self):
+        for token in (
+            "offline_validation",
+            "schema_version",
+            "sha256",
+            "unstructured_models_manifest.json",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.text)
+
+    def test_force_is_not_dead_parameter(self):
+        self.assertRegex(
+            self.text,
+            re.compile(r"if\s*\(\$Force\)", re.IGNORECASE),
         )

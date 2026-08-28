@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
+import importlib.util
+import json
 import platform
 import re
 import shutil
@@ -26,6 +29,12 @@ from src.benchmark.runtime_io import add_runtime_arguments
 PARSER_NAME = "unstructured"
 PARSER_DISPLAY_NAME = "Unstructured"
 UNSTRUCTURED_REQUIRED_VERSION = "0.27.1"
+UNSTRUCTURED_INFERENCE_REQUIRED_VERSION = "1.6.13"
+SPACY_MODEL_DISTRIBUTION = "en-core-web-sm"
+SPACY_MODEL_REQUIRED_VERSION = "3.8.0"
+MODEL_MANIFEST_RELATIVE_PATH = Path("manifests") / "unstructured_models_manifest.json"
+MODEL_MANIFEST_SCHEMA_VERSION = 1
+DEFAULT_MODEL_ROOT = Path("models/unstructured")
 
 _VALID_STRATEGIES = frozenset({"fast", "auto", "hi_res", "ocr_only"})
 _PROFILE_KEYS = frozenset({
@@ -326,7 +335,6 @@ def _find_tessdata_prefix() -> str | None:
 # ---------------------------------------------------------------------------
 
 def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any]:
-    import json, hashlib
     destination = output_root / "_source_inventory" / f"{input_path.stem}.json"
     if not destination.is_file():
         raise BenchmarkConfigurationError(
@@ -344,7 +352,6 @@ def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any
 
 
 def _sha256_file(path: Path) -> str:
-    import hashlib
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -469,6 +476,169 @@ def _build_metrics(
 
 
 # ---------------------------------------------------------------------------
+# Model manifest helpers
+# ---------------------------------------------------------------------------
+
+def _spacy_tree_digest(root: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    count = 0
+    for path in sorted(
+        item
+        for item in root.rglob("*")
+        if item.is_file()
+        and "__pycache__" not in item.parts
+        and item.suffix.lower() not in {".pyc", ".pyo"}
+    ):
+        relative = path.relative_to(root).as_posix()
+        file_hash = _sha256_file(path)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_hash.encode("ascii"))
+        digest.update(b"\n")
+        count += 1
+    return digest.hexdigest(), count
+
+
+def _verify_model_file_record(
+    *,
+    model_root: Path,
+    record: dict[str, Any],
+    label: str,
+) -> tuple[bool, str]:
+    try:
+        relative_path = record["path"]
+        expected_size = record["size_bytes"]
+        expected_sha = record["sha256"]
+    except KeyError as exc:
+        return False, f"{label}: missing manifest key {exc}"
+
+    resolved = (model_root / relative_path).resolve()
+    try:
+        resolved.relative_to(model_root.resolve())
+    except ValueError:
+        return False, f"{label}: path escapes model root"
+
+    if not resolved.is_file():
+        return False, f"{label}: file not found: {resolved}"
+
+    actual_size = resolved.stat().st_size
+    if actual_size != expected_size:
+        return False, f"{label}: size mismatch (expected {expected_size}, got {actual_size})"
+
+    actual_sha = _sha256_file(resolved)
+    if actual_sha != expected_sha:
+        return False, f"{label}: SHA-256 mismatch"
+
+    return True, f"{label}: OK"
+
+
+def _validate_unstructured_model_manifest(
+    model_root: Path,
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+
+    manifest_path = model_root / MODEL_MANIFEST_RELATIVE_PATH
+    if not manifest_path.is_file():
+        checks.append(make_check(
+            "Unstructured model manifest",
+            "fail",
+            f"not found: {manifest_path}",
+        ))
+        return checks
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        checks.append(make_check("Unstructured model manifest", "fail", str(exc)))
+        return checks
+
+    if manifest.get("schema_version") != MODEL_MANIFEST_SCHEMA_VERSION:
+        checks.append(make_check(
+            "Unstructured model manifest",
+            "fail",
+            f"unexpected schema_version: {manifest.get('schema_version')!r}",
+        ))
+        return checks
+
+    if not manifest.get("offline_validation"):
+        checks.append(make_check(
+            "Unstructured model manifest",
+            "fail",
+            "offline_validation is not True",
+        ))
+        return checks
+
+    checks.append(make_check("Unstructured model manifest", "pass", str(manifest_path)))
+
+    resources = manifest.get("resources", {})
+
+    layout = resources.get("layout", {})
+    layout_file = layout.get("file", {})
+    ok, detail = _verify_model_file_record(
+        model_root=model_root, record=layout_file, label="YOLOX layout"
+    )
+    checks.append(make_check("YOLOX layout file", "pass" if ok else "fail", detail))
+
+    table = resources.get("table", {})
+    table_files = table.get("files", [])
+    weight_files = [
+        r for r in table_files
+        if Path(r.get("path", "")).suffix.lower() in {".bin", ".safetensors"}
+    ]
+    if not weight_files:
+        checks.append(make_check(
+            "Table Transformer weights", "fail", "no .bin/.safetensors in manifest"
+        ))
+    else:
+        all_ok = True
+        for record in table_files:
+            ok, detail = _verify_model_file_record(
+                model_root=model_root, record=record, label="table"
+            )
+            if not ok:
+                all_ok = False
+                checks.append(make_check("Table Transformer weights", "fail", detail))
+                break
+        if all_ok:
+            checks.append(make_check(
+                "Table Transformer weights", "pass", f"{len(table_files)} files verified"
+            ))
+
+    spacy_record = resources.get("spacy", {})
+    wheel_record = spacy_record.get("wheel", {})
+    ok, detail = _verify_model_file_record(
+        model_root=model_root, record=wheel_record, label="spaCy wheel"
+    )
+    checks.append(make_check("spaCy wheel", "pass" if ok else "fail", detail))
+
+    spec = importlib.util.find_spec("en_core_web_sm")
+    if spec is None or not spec.submodule_search_locations:
+        checks.append(make_check("spaCy installed model", "fail", "en_core_web_sm not found"))
+    else:
+        spacy_root = Path(next(iter(spec.submodule_search_locations))).resolve()
+        actual_tree_sha, _ = _spacy_tree_digest(spacy_root)
+        expected_tree_sha = spacy_record.get("installed_tree_sha256", "")
+        if actual_tree_sha == expected_tree_sha:
+            checks.append(make_check("spaCy installed model", "pass", str(spacy_root)))
+        else:
+            checks.append(make_check(
+                "spaCy installed model", "fail", "installed tree SHA-256 mismatch"
+            ))
+
+    return checks
+
+
+def _assert_unstructured_models_ready(model_root: Path) -> None:
+    checks = _validate_unstructured_model_manifest(model_root)
+    failures = [c for c in checks if c.get("status") == "fail"]
+    if failures:
+        details = "; ".join(c.get("detail", c.get("name", "")) for c in failures)
+        raise BenchmarkConfigurationError(
+            f"Unstructured model manifest validation failed: {details}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
 
@@ -547,6 +717,21 @@ def preflight_profile(
     else:
         checks.append(make_check("unstructured version", "pass", installed))
 
+    inference_version = _package_version("unstructured-inference")
+    if inference_version is None:
+        checks.append(make_check(
+            "unstructured-inference version", "fail", "unstructured-inference not installed"
+        ))
+    elif inference_version != UNSTRUCTURED_INFERENCE_REQUIRED_VERSION:
+        checks.append(make_check(
+            "unstructured-inference version", "fail",
+            f"expected {UNSTRUCTURED_INFERENCE_REQUIRED_VERSION!r}, got {inference_version!r}",
+        ))
+    else:
+        checks.append(make_check(
+            "unstructured-inference version", "pass", inference_version
+        ))
+
     # Python version
     if sys.version_info[:2] != (3, 12):
         checks.append(make_check(
@@ -606,16 +791,15 @@ def preflight_profile(
             pdftoppm or "not in PATH",
         ))
 
-    # hi_res model check
-    if strategy == "hi_res":
-        model_root = model_root_override or Path("models/unstructured")
-        hf_hub = model_root / "huggingface" / "hub"
-        has_yolox = any(hf_hub.rglob("*.onnx")) if hf_hub.is_dir() else False
-        checks.append(make_check(
-            "yolox model",
-            "pass" if has_yolox else "fail",
-            str(hf_hub) if not has_yolox else "found",
-        ))
+    # model manifest check for profiles that require full local models
+    needs_full_models = (
+        profile_name == "full_cpu_local"
+        or strategy in {"hi_res", "auto"}
+        or profile.get("infer_table_structure") is True
+    )
+    if needs_full_models:
+        effective_model_root = model_root_override or DEFAULT_MODEL_ROOT
+        checks.extend(_validate_unstructured_model_manifest(effective_model_root))
 
     # adapter import
     try:
@@ -699,15 +883,16 @@ def main() -> None:
 
     # Set offline env before importing unstructured to prevent telemetry
     import os
-    os.environ.setdefault("HF_HOME", str(model_root / "huggingface"))
-    os.environ.setdefault("HF_HUB_CACHE", str(model_root / "huggingface" / "hub"))
+    os.environ["HF_HOME"] = str(model_root / "huggingface")
+    os.environ["HF_HUB_CACHE"] = str(model_root / "huggingface" / "hub")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["DO_NOT_TRACK"] = "1"
     os.environ["SCARF_NO_ANALYTICS"] = "1"
-    os.environ.setdefault("UNSTRUCTURED_DEFAULT_MODEL_NAME", "yolox")
-    os.environ.setdefault("UNSTRUCTURED_HI_RES_MODEL_NAME", "yolox")
-    os.environ.setdefault("OMP_THREAD_LIMIT", "1")
+    os.environ["UNSTRUCTURED_DEFAULT_MODEL_NAME"] = "yolox"
+    os.environ["UNSTRUCTURED_HI_RES_MODEL_NAME"] = "yolox"
+    os.environ["OMP_THREAD_LIMIT"] = "1"
 
     # Build partition kwargs from profile
     partition_kwargs: dict[str, Any] = {
@@ -744,6 +929,14 @@ def main() -> None:
     password = profile.get("password")
     if password:
         partition_kwargs["password"] = password
+
+    needs_full_models = (
+        args.profile == "full_cpu_local"
+        or strategy in {"hi_res", "auto"}
+        or profile.get("infer_table_structure") is True
+    )
+    if needs_full_models:
+        _assert_unstructured_models_ready(model_root)
 
     monitor = ResourceMonitor()
     pipeline_started = perf_counter()

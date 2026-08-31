@@ -97,23 +97,35 @@ if (-not (Test-Path $ValidateScript -PathType Leaf)) {
     )
 }
 
-# Verify docling version
+# Verify required runtime package versions
 $CheckVersion = @'
-import importlib.metadata, sys
-try:
-    v = importlib.metadata.version("docling")
-except importlib.metadata.PackageNotFoundError:
-    print(f"FAIL: docling not installed", file=sys.stderr)
-    sys.exit(1)
+import importlib.metadata
+import sys
 
-if v != "2.122.0":
-    print(
-        f"FAIL: expected docling==2.122.0, got {v!r}",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+expected = {
+    "docling": "2.122.0",
+    "transformers": "5.8.0",
+}
 
-print(f"OK: docling=={v}")
+for package, expected_version in expected.items():
+    try:
+        actual_version = importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        print(
+            f"FAIL: {package} not installed",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if actual_version != expected_version:
+        print(
+            f"FAIL: expected {package}=={expected_version}, "
+            f"got {actual_version!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(f"OK: {package}=={actual_version}")
 '@
 
 Invoke-PythonScriptChecked `

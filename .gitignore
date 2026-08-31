@@ -67,3 +67,6 @@ logs/*
 
 # Ignore files downloaded
 *:Zone.Identifier
+
+# Ignore files generated
+/*.pdf-*.png

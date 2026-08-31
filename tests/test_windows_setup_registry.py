@@ -331,9 +331,19 @@ class TestDoclingModelPreparation(unittest.TestCase):
         self.assertIn("ValidateOnly", self.text)
         self.assertIn("if (-not $ValidateOnly)", self.text)
 
+    def test_force_and_validate_only_are_mutually_exclusive(self):
+        self.assertIn(
+            "$Force -and $ValidateOnly",
+            self.text,
+        )
+        self.assertIn(
+            "mutually exclusive",
+            self.text,
+        )
+
     def test_manifest_checked_after_generation(self):
         self.assertIn("docling_models_manifest.json", self.text)
-        self.assertIn("Test-Path $ManifestPath", self.text)
+        self.assertIn("--check-manifest", self.text)
 
     def test_download_api_uses_torch_pt(self):
         self.assertIn('rapidocr_models=["torch:pt"]', self.text)

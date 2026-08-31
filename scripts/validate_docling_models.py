@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.metadata
 import json
 import os
@@ -27,9 +26,13 @@ _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from src.parsers.docling_v2 import (  # noqa: E402
+    FULL_CPU_LOCAL_REQUIRED_CAPABILITIES,
+    MANIFEST_FILENAME,
+    MANIFEST_SCHEMA_VERSION,
     CODE_FORMULA_ARTIFACT_DIRECTORY,
     GRANITE_CHART_V4_ARTIFACT_DIRECTORY,
     LAYOUT_ARTIFACT_DIRECTORY,
+    PARSER_NAME,
     PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY,
     RAPIDOCR_ARTIFACT_DIRECTORY,
     SMOLVLM_ARTIFACT_DIRECTORY,
@@ -43,13 +46,14 @@ from src.parsers.docling_v2 import (  # noqa: E402
     _validate_tableformer_artifacts,
     _build_pipeline_options,
     _resolve_profile_runtime,
+    sha256_file,
+    tree_digest,
+    validate_manifest,
 )
 from src.benchmark.config import get_profile  # noqa: E402
 
-MANIFEST_SCHEMA_VERSION = 1
-DOCLING_PARSER_NAME = "docling"
+DOCLING_PARSER_NAME = PARSER_NAME
 FULL_CPU_LOCAL_PROFILE = "full_cpu_local"
-MANIFEST_FILENAME = "docling_models_manifest.json"
 
 # HF env vars that must be active during offline validation
 _OFFLINE_ENV = {
@@ -95,41 +99,6 @@ def _block_network() -> None:
 
     socket.create_connection = blocked  # type: ignore[assignment]
     socket.socket = BlockedSocket  # type: ignore[misc]
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def tree_digest(root: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    count = 0
-    excluded_parts = {
-        ".cache",
-        "_hf_runtime",
-        "xet",
-        "__pycache__",
-    }
-    excluded_suffixes = {".pyc", ".pyo", ".lock", ".tmp"}
-    for path in sorted(
-        item
-        for item in root.rglob("*")
-        if item.is_file()
-        and not any(p in excluded_parts for p in item.parts)
-        and item.suffix.lower() not in excluded_suffixes
-    ):
-        relative = path.relative_to(root).as_posix()
-        file_hash = sha256_file(path)
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(file_hash.encode("ascii"))
-        digest.update(b"\n")
-        count += 1
-    return digest.hexdigest(), count
 
 
 def file_record(path: Path, model_root: Path) -> dict:
@@ -190,7 +159,10 @@ def validate_structural(model_root: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Level B — component load (offline)
+# Level B — lightweight component validation (offline)
+# NOTE: Level B is a lightweight check. Level C (pipeline init) is the
+# definitive certification gate. The manifest is only written after Level C
+# passes.
 # ---------------------------------------------------------------------------
 
 def validate_components(model_root: Path) -> list[dict]:
@@ -416,51 +388,6 @@ def build_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Manifest validation (for preflight --validate-only check)
-# ---------------------------------------------------------------------------
-
-def validate_manifest(manifest_path: Path, model_root: Path) -> tuple[bool, str]:
-    if not manifest_path.is_file():
-        return False, f"manifest not found: {manifest_path}"
-
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return False, f"cannot read manifest: {exc}"
-
-    schema = manifest.get("schema_version")
-    if schema != MANIFEST_SCHEMA_VERSION:
-        return False, f"unsupported schema_version: {schema!r}"
-
-    if manifest.get("parser") != DOCLING_PARSER_NAME:
-        return False, f"parser mismatch: {manifest.get('parser')!r}"
-
-    offline = manifest.get("offline_validation", {})
-    if not offline.get("passed"):
-        return False, "offline_validation.passed is not True"
-
-    if not offline.get("pipeline_initialized"):
-        return False, "pipeline_initialized is not True"
-
-    # Check that model directories still exist
-    capabilities = manifest.get("capabilities", {})
-    missing = []
-    for cap_name, cap_data in capabilities.items():
-        if not isinstance(cap_data, dict):
-            continue
-        if not cap_data.get("enabled", True):
-            continue
-        subdir = cap_data.get("directory")
-        if subdir and not (model_root / subdir).is_dir():
-            missing.append(subdir)
-
-    if missing:
-        return False, "model directories removed: " + ", ".join(missing)
-
-    return True, "manifest valid"
-
-
-# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -494,11 +421,50 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip Level C pipeline initialization.",
     )
+    parser.add_argument(
+        "--check-manifest",
+        action="store_true",
+        help="Re-validate an existing manifest without running any model gates.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    if args.check_manifest:
+        manifest_path = _REPO_ROOT / "models" / "docling" / "manifests" / MANIFEST_FILENAME
+        if args.model_root:
+            model_root = args.model_root.resolve()
+        else:
+            model_root = (_REPO_ROOT / "models" / "docling" / "docling" / "models").resolve()
+        print("[Phase 3] Verifying certified manifest...")
+        ok, detail = validate_manifest(manifest_path, model_root)
+        if ok:
+            print(f"[PASS] {detail}")
+            print(f"Manifest: {manifest_path}")
+        else:
+            print(f"[FAIL] {detail}", file=sys.stderr)
+            sys.exit(3)
+        return
+
+    if (
+        not args.validate_only
+        and (
+            args.skip_component_load
+            or args.skip_pipeline_init
+        )
+    ):
+        print(
+            (
+                "[FAIL] A certification manifest requires "
+                "full Level A + Level B + Level C validation. "
+                "Do not use skip options when generating "
+                "the manifest."
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(4)
 
     default_root = _REPO_ROOT / "models" / "docling" / "docling" / "models"
     model_root = (args.model_root or default_root).resolve()
@@ -549,7 +515,7 @@ def main() -> None:
             )
         else:
             print("[Level B] Skipped (--skip-component-load)\n")
-            component_pass = True
+            component_pass = False
 
         # Level C — pipeline initialization
         pipeline_ok = False
@@ -561,7 +527,7 @@ def main() -> None:
             print(f"\nLevel C: {status}\n")
         else:
             print("[Level C] Skipped (--skip-pipeline-init)\n")
-            pipeline_ok = True
+            pipeline_ok = False
 
         all_pass = structural_pass and component_pass and pipeline_ok
 

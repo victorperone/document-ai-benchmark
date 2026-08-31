@@ -10,6 +10,8 @@ Groups:
   5. Downloader selection (download_models call)
   6. ValidateOnly flow
   7. Manifest validation
+  8. Skip semantics (validate_docling_models.py)
+  9. Preflight manifest check
 """
 from __future__ import annotations
 
@@ -47,6 +49,13 @@ def _stub_if_missing(name: str, **attrs) -> None:
 
 _stub_if_missing("torch")
 _stub_if_missing("tiktoken")
+_stub_if_missing(
+    "psutil",
+    Process=MagicMock,
+    AccessDenied=RuntimeError,
+    NoSuchProcess=RuntimeError,
+    cpu_count=MagicMock(return_value=1),
+)
 _stub_if_missing("docling")
 _stub_if_missing("docling.datamodel")
 _stub_if_missing("docling.datamodel.accelerator_options",
@@ -76,10 +85,38 @@ _stub_if_missing("docling.utils.model_downloader",
 # Also stub transformers which docling_v2 may pull in indirectly
 _stub_if_missing("transformers")
 
+# Stubs for docling.models.stages (RapidOCR internal API)
+_RAPID_OCR_RESOLVED = MagicMock()
+_RAPID_OCR_RESOLVED.ppocr_version = "v6"
+_RAPID_OCR_RESOLVED.rapidocr_lang_token = "pt"
+
+_RAPID_OCR_MODULE = MagicMock()
+_RAPID_OCR_MODULE.RapidOcrModel._model_repo_folder = "RapidOcr"
+_RAPID_OCR_MODULE._resolve_rapidocr.return_value = _RAPID_OCR_RESOLVED
+_RAPID_OCR_MODULE._backend_to_engine_type.return_value = MagicMock()
+_RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {}  # Overridden per test
+
+sys.modules["docling.models"] = MagicMock()
+sys.modules["docling.models.stages"] = MagicMock()
+sys.modules["docling.models.stages.ocr"] = MagicMock()
+sys.modules["docling.models.stages.ocr.rapid_ocr_model"] = _RAPID_OCR_MODULE
+
+# Update pipeline options stub with proper preset result
+_PRESET_RESULT = MagicMock()
+_PRESET_RESULT.repo_id = "docling-project/DocumentFigureClassifier-v2.5"
+_PRESET_RESULT.repo_cache_folder = ("docling-project--DocumentFigureClassifier-v2.5")
+_PIPELINE_OPTIONS_MODULE = sys.modules["docling.datamodel.pipeline_options"]
+_PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions = MagicMock()
+_PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.return_value = _PRESET_RESULT
+
 from src.parsers.docling_v2 import (
     CODE_FORMULA_ARTIFACT_DIRECTORY,
+    FULL_CPU_LOCAL_REQUIRED_CAPABILITIES,
     GRANITE_CHART_V4_ARTIFACT_DIRECTORY,
     LAYOUT_ARTIFACT_DIRECTORY,
+    MANIFEST_FILENAME,
+    MANIFEST_SCHEMA_VERSION,
+    PARSER_NAME,
     PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY,
     RAPIDOCR_ARTIFACT_DIRECTORY,
     SMOLVLM_ARTIFACT_DIRECTORY,
@@ -91,6 +128,8 @@ from src.parsers.docling_v2 import (
     _validate_rapidocr_artifacts,
     _validate_smolvlm_artifacts,
     _validate_tableformer_artifacts,
+    tree_digest as _tree_digest,
+    validate_manifest,
 )
 from src.benchmark.config import BenchmarkConfigurationError
 
@@ -177,6 +216,54 @@ def _make_full_artifacts(base: Path) -> None:
     _make_full_classifier(base / PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY)
     _make_full_code_formula(base / CODE_FORMULA_ARTIFACT_DIRECTORY)
     _make_full_granite(base / GRANITE_CHART_V4_ARTIFACT_DIRECTORY)
+
+
+_CAP_SUBDIRS: dict[str, str] = {
+    "layout": LAYOUT_ARTIFACT_DIRECTORY,
+    "table_structure": TABLEFORMER_ARTIFACT_DIRECTORY,
+    "ocr": RAPIDOCR_ARTIFACT_DIRECTORY,
+    "picture_description": SMOLVLM_ARTIFACT_DIRECTORY,
+    "picture_classification": PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY,
+    "chart_extraction": GRANITE_CHART_V4_ARTIFACT_DIRECTORY,
+    "formula_code_enrichment": CODE_FORMULA_ARTIFACT_DIRECTORY,
+}
+
+
+def _build_full_valid_manifest(base: Path, manifest_path: Path) -> None:
+    """Create all 7 capability dirs and write a manifest with correct digests."""
+    _make_full_artifacts(base)
+    try:
+        docling_ver = importlib.metadata.version("docling")
+    except Exception:
+        docling_ver = "2.122.0"
+    capabilities: dict = {}
+    for cap_name in FULL_CPU_LOCAL_REQUIRED_CAPABILITIES:
+        subdir = _CAP_SUBDIRS[cap_name]
+        cap_dir = base / subdir
+        digest, count = _tree_digest(cap_dir)
+        capabilities[cap_name] = {
+            "enabled": True,
+            "directory": subdir,
+            "present": True,
+            "tree_digest": digest,
+            "file_count": count,
+            "weight_files": [],
+        }
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "parser": PARSER_NAME,
+        "docling_version": docling_ver,
+        "profile": "full_cpu_local",
+        "offline_validation": {
+            "passed": True,
+            "structural_pass": True,
+            "component_pass": True,
+            "pipeline_initialized": True,
+        },
+        "capabilities": capabilities,
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -392,27 +479,56 @@ class TestPictureClassifierValidator(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.base = Path(self._tmp.name)
-        self.model_dir = self.base / PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
+        # Default: preset returns known repo_id
+        _PRESET_RESULT.repo_id = "docling-project/DocumentFigureClassifier-v2.5"
+        _PRESET_RESULT.repo_cache_folder = ("docling-project--DocumentFigureClassifier-v2.5")
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.side_effect = None
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.return_value = _PRESET_RESULT
 
     def tearDown(self):
         self._tmp.cleanup()
+
+    def _resolved_dir(self) -> Path:
+        return self.base / "docling-project--DocumentFigureClassifier-v2.5"
 
     def test_missing_directory(self):
         ok, detail = _validate_picture_classifier_artifacts(self.base)
         self.assertFalse(ok)
         self.assertIn("missing model directory", detail)
 
+    def test_fallback_when_preset_raises(self):
+        # If preset raises, fall back to constant
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.side_effect = ImportError("no docling")
+        fallback_dir = self.base / PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
+        fallback_dir.mkdir(parents=True)
+        _touch(fallback_dir / "config.json")
+        _touch(fallback_dir / "model.safetensors")
+        ok, detail = _validate_picture_classifier_artifacts(self.base)
+        self.assertTrue(ok)
+
     def test_missing_config_json(self):
-        self.model_dir.mkdir(parents=True)
-        _touch(self.model_dir / "model.safetensors")
+        d = self._resolved_dir()
+        d.mkdir(parents=True)
+        _touch(d / "model.safetensors")
         ok, detail = _validate_picture_classifier_artifacts(self.base)
         self.assertFalse(ok)
         self.assertIn("config.json", detail)
 
     def test_pass(self):
-        _make_full_classifier(self.model_dir)
-        ok, _ = _validate_picture_classifier_artifacts(self.base)
+        d = self._resolved_dir()
+        _make_full_classifier(d)
+        ok, detail = _validate_picture_classifier_artifacts(self.base)
         self.assertTrue(ok)
+
+    def test_directory_name_derived_from_preset(self):
+        # Preset returns a different repo_id → different directory expected
+        _PRESET_RESULT.repo_id = "myorg/MyClassifier-v3"
+        _PRESET_RESULT.repo_cache_folder = ("myorg--MyClassifier-v3")
+        d = self.base / "myorg--MyClassifier-v3"
+        _make_full_classifier(d)
+        ok, detail = _validate_picture_classifier_artifacts(self.base)
+        self.assertTrue(ok)
+        self.assertIn("myorg--MyClassifier-v3", detail)
 
 
 class TestTableFormerValidator(unittest.TestCase):
@@ -494,48 +610,118 @@ class TestRapidOCRValidator(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.base = Path(self._tmp.name)
-        self.model_dir = self.base / RAPIDOCR_ARTIFACT_DIRECTORY
+        self.model_dir = self.base / "RapidOcr"
+        # Reset rapidocr module mock to known state
+        _RAPID_OCR_MODULE._resolve_rapidocr.return_value = _RAPID_OCR_RESOLVED
+        _RAPID_OCR_MODULE._backend_to_engine_type.return_value = MagicMock()
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {}
+        _RAPID_OCR_MODULE._rapidocr_artifacts.side_effect = None
 
     def tearDown(self):
         self._tmp.cleanup()
+
+    def _make_artifact(self, *file_paths: Path):
+        art = MagicMock()
+        art.files = list(file_paths)
+        return art
+
+    def _setup_full_pass(self):
+        """Create files and configure mocks for a full PASS."""
+        self.model_dir.mkdir(parents=True)
+        det = self.model_dir / "det_model.pth"
+        cls_ = self.model_dir / "cls_model.pth"
+        rec = self.model_dir / "rec_model.pth"
+        for f in (det, cls_, rec):
+            f.write_bytes(b"x" * 1024)
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {
+            "det": self._make_artifact(det),
+            "cls": self._make_artifact(cls_),
+            "rec": self._make_artifact(rec),
+        }
 
     def test_missing_directory(self):
         ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertFalse(ok)
         self.assertIn("missing model directory", detail)
 
-    def test_no_pth_files(self):
+    def test_resolve_failure(self):
         self.model_dir.mkdir(parents=True)
-        (self.model_dir / "ppocrv6_dict.txt").write_text("dict", encoding="utf-8")
+        _RAPID_OCR_MODULE._rapidocr_artifacts.side_effect = RuntimeError("resolve failed")
         ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertFalse(ok)
-        self.assertIn(".pth", detail)
+        self.assertIn("failed to resolve", detail)
+        _RAPID_OCR_MODULE._rapidocr_artifacts.side_effect = None
 
-    def test_missing_detection_model(self):
+    def test_missing_det_role(self):
         self.model_dir.mkdir(parents=True)
-        _touch(self.model_dir / "PP-OCRv6_rec_small.pth")
+        cls_ = self.model_dir / "cls_model.pth"
+        rec = self.model_dir / "rec_model.pth"
+        for f in (cls_, rec):
+            f.write_bytes(b"x" * 1024)
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {
+            "cls": self._make_artifact(cls_),
+            "rec": self._make_artifact(rec),
+        }
         ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertFalse(ok)
-        self.assertIn("detection", detail.lower())
+        self.assertIn("missing roles", detail)
+        self.assertIn("det", detail)
 
-    def test_missing_recognition_model(self):
+    def test_missing_rec_role(self):
         self.model_dir.mkdir(parents=True)
-        _touch(self.model_dir / "PP-OCRv6_det_small.pth")
+        det = self.model_dir / "det_model.pth"
+        cls_ = self.model_dir / "cls_model.pth"
+        for f in (det, cls_):
+            f.write_bytes(b"x" * 1024)
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {
+            "det": self._make_artifact(det),
+            "cls": self._make_artifact(cls_),
+        }
         ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertFalse(ok)
-        self.assertIn("recognition", detail.lower())
+        self.assertIn("missing roles", detail)
+        self.assertIn("rec", detail)
 
-    def test_zero_byte_pth(self):
-        _make_full_rapidocr(self.model_dir)
-        (self.model_dir / "PP-OCRv6_det_small.pth").write_bytes(b"")
+    def test_missing_file(self):
+        self._setup_full_pass()
+        # Remove det file after setting up mocks
+        (self.model_dir / "det_model.pth").unlink()
         ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertFalse(ok)
-        self.assertIn("empty", detail.lower())
+        self.assertIn("missing", detail)
+        self.assertIn("det_model.pth", detail)
 
-    def test_pass(self):
-        _make_full_rapidocr(self.model_dir)
-        ok, _ = _validate_rapidocr_artifacts(self.base)
+    def test_empty_file(self):
+        self._setup_full_pass()
+        (self.model_dir / "cls_model.pth").write_bytes(b"")
+        ok, detail = _validate_rapidocr_artifacts(self.base)
+        self.assertFalse(ok)
+        self.assertIn("empty", detail)
+        self.assertIn("cls_model.pth", detail)
+
+    def test_pass_with_dictionary(self):
+        self.model_dir.mkdir(parents=True)
+        det = self.model_dir / "det.pth"
+        cls_ = self.model_dir / "cls.pth"
+        rec = self.model_dir / "rec.pth"
+        dict_f = self.model_dir / "dict.txt"
+        for f in (det, cls_, rec, dict_f):
+            f.write_bytes(b"x" * 1024)
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {
+            "det": self._make_artifact(det),
+            "cls": self._make_artifact(cls_),
+            "rec": self._make_artifact(rec, dict_f),
+        }
+        ok, detail = _validate_rapidocr_artifacts(self.base)
         self.assertTrue(ok)
+        self.assertIn("torch:pt", detail)
+
+    def test_pass_backend_lang_in_message(self):
+        self._setup_full_pass()
+        ok, detail = _validate_rapidocr_artifacts(self.base)
+        self.assertTrue(ok)
+        self.assertIn("backend=torch", detail)
+        self.assertIn("lang=pt", detail)
 
 
 class TestLayoutValidator(unittest.TestCase):
@@ -602,6 +788,13 @@ class TestCapabilityGating(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.base = Path(self._tmp.name)
+        # Reset rapidocr mock state
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {}
+        _RAPID_OCR_MODULE._rapidocr_artifacts.side_effect = None
+        _PRESET_RESULT.repo_id = "docling-project/DocumentFigureClassifier-v2.5"
+        _PRESET_RESULT.repo_cache_folder = ("docling-project--DocumentFigureClassifier-v2.5")
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.side_effect = None
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.return_value = _PRESET_RESULT
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -973,11 +1166,11 @@ class TestPrepareDoclingPs1Structure(unittest.TestCase):
 
     def test_manifest_verified_after_generation(self):
         self.assertIn("docling_models_manifest.json", self.text)
-        self.assertIn("Test-Path $ManifestPath", self.text)
+        self.assertIn("--check-manifest", self.text)
 
 
 # ---------------------------------------------------------------------------
-# Group 7: Manifest validation (validate_docling_models.py)
+# Group 7: Manifest validation (fail-closed for full_cpu_local)
 # ---------------------------------------------------------------------------
 
 class TestManifestValidation(unittest.TestCase):
@@ -990,101 +1183,431 @@ class TestManifestValidation(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _import_validate_manifest(self):
-        from scripts.validate_docling_models import validate_manifest
-        return validate_manifest
+    def _write_raw(self, content: dict) -> None:
+        self.manifest_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
 
-    def _write_manifest(self, **overrides) -> dict:
-        base_manifest = {
-            "schema_version": 1,
-            "parser": "docling",
-            "docling_version": "2.122.0",
+    def _base_valid_header(self) -> dict:
+        try:
+            docling_ver = importlib.metadata.version("docling")
+        except Exception:
+            docling_ver = "2.122.0"
+        return {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "parser": PARSER_NAME,
+            "docling_version": docling_ver,
             "profile": "full_cpu_local",
             "offline_validation": {
                 "passed": True,
+                "structural_pass": True,
+                "component_pass": True,
                 "pipeline_initialized": True,
             },
-            "capabilities": {
-                "layout": {
-                    "enabled": True,
-                    "directory": LAYOUT_ARTIFACT_DIRECTORY,
-                    "present": True,
-                }
-            },
         }
-        base_manifest.update(overrides)
-        self.manifest_path.write_text(
-            json.dumps(base_manifest, indent=2), encoding="utf-8"
-        )
-        return base_manifest
+
+    # --- header-level failures (before capability checks) ---
 
     def test_manifest_not_found(self):
-        validate_manifest = self._import_validate_manifest()
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
         self.assertIn("not found", detail)
 
     def test_invalid_json(self):
-        validate_manifest = self._import_validate_manifest()
         self.manifest_path.write_text("not json", encoding="utf-8")
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
 
     def test_wrong_schema_version(self):
-        validate_manifest = self._import_validate_manifest()
-        self._write_manifest(schema_version=99)
+        m = self._base_valid_header()
+        m["schema_version"] = 99
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
         self.assertIn("schema_version", detail)
 
     def test_wrong_parser(self):
-        validate_manifest = self._import_validate_manifest()
-        self._write_manifest(parser="unstructured")
+        m = self._base_valid_header()
+        m["parser"] = "unstructured"
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
         self.assertIn("parser", detail)
 
-    def test_offline_validation_false(self):
-        validate_manifest = self._import_validate_manifest()
-        self._write_manifest(
-            offline_validation={"passed": False, "pipeline_initialized": False}
-        )
+    def test_wrong_profile(self):
+        m = self._base_valid_header()
+        m["profile"] = "minimal"
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
+        self.assertIn("profile", detail)
+
+    def test_offline_validation_passed_false(self):
+        m = self._base_valid_header()
+        m["offline_validation"]["passed"] = False
+        m["capabilities"] = {}
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("passed", detail)
+
+    def test_structural_pass_false(self):
+        m = self._base_valid_header()
+        m["offline_validation"]["structural_pass"] = False
+        m["capabilities"] = {}
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("structural_pass", detail)
+
+    def test_component_pass_false(self):
+        m = self._base_valid_header()
+        m["offline_validation"]["component_pass"] = False
+        m["capabilities"] = {}
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("component_pass", detail)
 
     def test_pipeline_initialized_false(self):
-        validate_manifest = self._import_validate_manifest()
-        self._write_manifest(
-            offline_validation={"passed": True, "pipeline_initialized": False}
-        )
+        m = self._base_valid_header()
+        m["offline_validation"]["pipeline_initialized"] = False
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
         self.assertIn("pipeline_initialized", detail)
 
-    def test_model_directory_removed(self):
-        validate_manifest = self._import_validate_manifest()
-        # Point to directory that doesn't exist
-        self._write_manifest(
-            capabilities={
-                "layout": {
-                    "enabled": True,
-                    "directory": "nonexistent--model-dir",
-                    "present": True,
-                }
-            }
-        )
+    # --- capability-level failures ---
+
+    def test_capabilities_empty(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
         self.assertFalse(ok)
-        self.assertIn("nonexistent--model-dir", detail)
+        self.assertIn("required capability missing", detail)
 
-    def test_valid_manifest_with_existing_dirs(self):
-        validate_manifest = self._import_validate_manifest()
-        # Create the model dir so the check passes
-        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
-        layout_dir.mkdir(parents=True)
-        self._write_manifest()
+    def test_required_capability_missing(self):
+        # Remove "layout" (first in required list) → immediate fail
+        m = self._base_valid_header()
+        m["capabilities"] = {}
+        self._write_raw(m)
         ok, detail = validate_manifest(self.manifest_path, self.base)
-        self.assertTrue(ok, f"Expected pass but got: {detail}")
+        self.assertFalse(ok)
+        self.assertIn("required capability missing", detail)
+        self.assertIn("layout", detail)
+
+    def test_capability_entry_not_dict(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {"layout": "not-a-dict"}
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("entry is not an object", detail)
+
+    def test_capability_enabled_false(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {"enabled": False, "directory": LAYOUT_ARTIFACT_DIRECTORY, "present": True}
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("enabled is not true", detail)
+
+    def test_capability_present_false(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {"enabled": True, "directory": LAYOUT_ARTIFACT_DIRECTORY, "present": False}
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("present is not true", detail)
+
+    def test_capability_directory_empty(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {"enabled": True, "directory": "", "present": True}
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("directory is missing", detail)
+
+    def test_capability_directory_not_existing(self):
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {"enabled": True, "directory": "nonexistent--dir", "present": True}
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("nonexistent--dir", detail)
+
+    def test_capability_tree_digest_missing(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                # no tree_digest
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("tree_digest is missing", detail)
+
+    def test_capability_file_count_missing(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        real_digest, _ = _tree_digest(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                "tree_digest": real_digest,
+                # no file_count
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("file_count is missing", detail)
+
+    def test_capability_file_count_zero(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        real_digest, _ = _tree_digest(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                "tree_digest": real_digest,
+                "file_count": 0,
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("file_count must be > 0", detail)
+
+    def test_tree_digest_mismatch(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        _, real_count = _tree_digest(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                "tree_digest": "deadbeef" * 8,
+                "file_count": real_count,
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("tree digest mismatch", detail)
+        self.assertIn("layout", detail)
+
+    def test_file_count_mismatch(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        real_digest, real_count = _tree_digest(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                "tree_digest": real_digest,
+                "file_count": real_count + 99,
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("file_count mismatch", detail)
+
+    def test_missing_certified_weight(self):
+        layout_dir = self.base / LAYOUT_ARTIFACT_DIRECTORY
+        _make_full_layout(layout_dir)
+        real_digest, real_count = _tree_digest(layout_dir)
+        m = self._base_valid_header()
+        m["capabilities"] = {
+            "layout": {
+                "enabled": True,
+                "directory": LAYOUT_ARTIFACT_DIRECTORY,
+                "present": True,
+                "tree_digest": real_digest,
+                "file_count": real_count,
+                "weight_files": [
+                    f"{LAYOUT_ARTIFACT_DIRECTORY}/model.safetensors",
+                    f"{LAYOUT_ARTIFACT_DIRECTORY}/nonexistent_shard.safetensors",
+                ],
+            }
+        }
+        self._write_raw(m)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertFalse(ok)
+        self.assertIn("missing certified weight", detail)
+
+    def test_valid_manifest_all_capabilities(self):
+        _build_full_valid_manifest(self.base, self.manifest_path)
+        ok, detail = validate_manifest(self.manifest_path, self.base)
+        self.assertTrue(ok, f"Expected PASS but got: {detail}")
+
+
+# ---------------------------------------------------------------------------
+# Group 8: Skip semantics (validate_docling_models.py)
+# ---------------------------------------------------------------------------
+
+class TestSkipSemantics(unittest.TestCase):
+    """Verify that skip flags cannot produce component_pass=True or pipeline_initialized=True."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.script_path = ROOT / "scripts" / "validate_docling_models.py"
+        cls.available = cls.script_path.exists()
+        cls.text = cls.script_path.read_text(encoding="utf-8") if cls.available else ""
+
+    def setUp(self):
+        if not self.available:
+            self.skipTest("validate_docling_models.py not found")
+
+    def test_skip_component_sets_pass_false_not_true(self):
+        # When Level B is skipped, component_pass must NOT be set to True
+        # The text must NOT contain code that sets component_pass = True when skipped
+        # The allowed pattern is component_pass = False when skipped
+        self.assertNotIn(
+            "component_pass = True  # when skipped",
+            self.text,
+        )
+        # The guard must be present
+        self.assertIn("skip_component_load", self.text)
+
+    def test_skip_pipeline_sets_false(self):
+        self.assertIn("skip_pipeline_init", self.text)
+
+    def test_manifest_generation_blocked_with_skips(self):
+        # The script must have a guard that aborts manifest generation when skips are used
+        self.assertIn("sys.exit(4)", self.text)
+
+    def test_check_manifest_flag_exists(self):
+        self.assertIn("--check-manifest", self.text)
+        self.assertIn("check_manifest", self.text)
+
+    def test_level_b_documented_as_lightweight(self):
+        self.assertIn("lightweight", self.text.lower())
+
+
+# ---------------------------------------------------------------------------
+# Group 9: Preflight manifest check
+# ---------------------------------------------------------------------------
+
+class TestPreflightManifest(unittest.TestCase):
+    """Verify that preflight_profile checks the certified manifest."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self._tmp.name)
+        # Artifacts live at base/docling/docling/models so that
+        # artifacts_path.parent.parent = base/docling (writable in tests)
+        self.artifacts = self.base / "docling" / "docling" / "models"
+        self.artifacts.mkdir(parents=True, exist_ok=True)
+        # Reset mocks to known state for preflight tests
+        _RAPID_OCR_MODULE._rapidocr_artifacts.return_value = {}
+        _RAPID_OCR_MODULE._rapidocr_artifacts.side_effect = None
+        _PRESET_RESULT.repo_id = "docling-project/DocumentFigureClassifier-v2.5"
+        _PRESET_RESULT.repo_cache_folder = "docling-project--DocumentFigureClassifier-v2.5"
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.side_effect = None
+        _PIPELINE_OPTIONS_MODULE.DocumentPictureClassifierOptions.from_preset.return_value = _PRESET_RESULT
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _manifest_path(self) -> Path:
+        """Return the manifest path that preflight_profile will compute."""
+        return self.artifacts.parent.parent / "manifests" / MANIFEST_FILENAME
+
+    def _write_invalid_manifest(self, manifest_path: Path, **overrides) -> None:
+        """Write a structurally invalid manifest (for tests that check early failures)."""
+        try:
+            docling_ver = importlib.metadata.version("docling")
+        except Exception:
+            docling_ver = "2.122.0"
+        content: dict = {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "parser": PARSER_NAME,
+            "docling_version": docling_ver,
+            "profile": "full_cpu_local",
+            "offline_validation": {
+                "passed": True,
+                "structural_pass": True,
+                "component_pass": True,
+                "pipeline_initialized": True,
+            },
+            "capabilities": {},
+        }
+        content.update(overrides)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
+
+    def test_preflight_result_has_certified_manifest_check(self):
+        from src.parsers.docling_v2 import preflight_profile
+        _make_full_artifacts(self.artifacts)
+        result = preflight_profile("full_cpu_local", model_artifacts_override=self.artifacts)
+        check_names = [c["name"] for c in result.get("checks", [])]
+        self.assertIn("certified manifest", check_names)
+
+    def test_preflight_fails_without_manifest(self):
+        from src.parsers.docling_v2 import preflight_profile
+        _make_full_artifacts(self.artifacts)
+        result = preflight_profile("full_cpu_local", model_artifacts_override=self.artifacts)
+        manifest_check = next(
+            (c for c in result.get("checks", []) if c["name"] == "certified manifest"),
+            None,
+        )
+        self.assertIsNotNone(manifest_check)
+        self.assertEqual(manifest_check["status"], "fail")
+        self.assertIn("manifest not found", manifest_check.get("detail", ""))
+
+    def test_preflight_passes_with_valid_manifest(self):
+        from src.parsers.docling_v2 import preflight_profile
+        manifest_path = self._manifest_path()
+        _build_full_valid_manifest(self.artifacts, manifest_path)
+        result = preflight_profile("full_cpu_local", model_artifacts_override=self.artifacts)
+        manifest_check = next(
+            (c for c in result.get("checks", []) if c["name"] == "certified manifest"),
+            None,
+        )
+        self.assertIsNotNone(manifest_check)
+        self.assertEqual(manifest_check["status"], "pass")
+
+    def test_preflight_fails_with_wrong_profile_in_manifest(self):
+        from src.parsers.docling_v2 import preflight_profile
+        _make_full_artifacts(self.artifacts)
+        manifest_path = self._manifest_path()
+        self._write_invalid_manifest(manifest_path, profile="minimal")
+        result = preflight_profile("full_cpu_local", model_artifacts_override=self.artifacts)
+        manifest_check = next(
+            (c for c in result.get("checks", []) if c["name"] == "certified manifest"),
+            None,
+        )
+        self.assertIsNotNone(manifest_check)
+        self.assertEqual(manifest_check["status"], "fail")
 
 
 if __name__ == "__main__":

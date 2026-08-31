@@ -84,7 +84,20 @@ RAPIDOCR_ARTIFACT_DIRECTORY = "RapidOcr"
 # DocumentPictureClassifierOptions preset
 # "document_figure_classifier_v2".
 PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY = (
-    "ds4sd--DocumentFigureClassifier"
+    "docling-project--DocumentFigureClassifier-v2.5"
+)
+
+MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_FILENAME = "docling_models_manifest.json"
+
+FULL_CPU_LOCAL_REQUIRED_CAPABILITIES = (
+    "layout",
+    "table_structure",
+    "ocr",
+    "picture_description",
+    "picture_classification",
+    "chart_extraction",
+    "formula_code_enrichment",
 )
 
 
@@ -402,21 +415,40 @@ def _validate_code_formula_artifacts(
 def _validate_picture_classifier_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
-    model_dir = (
-        artifacts_path
-        / PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
-    )
-
-    if not model_dir.is_dir():
-        return (
-            False,
-            f"missing model directory: {model_dir}",
+    try:
+        from docling.datamodel.pipeline_options import (  # type: ignore
+            DocumentPictureClassifierOptions,
+        )
+        opts = DocumentPictureClassifierOptions.from_preset(
+            "document_figure_classifier_v2"
+        )
+        repo_cache_folder = getattr(
+            opts,
+            "repo_cache_folder",
+            None,
         )
 
-    if not (model_dir / "config.json").is_file():
-        return False, "missing required file: config.json"
+        dir_name = (
+            repo_cache_folder
+            if isinstance(repo_cache_folder, str)
+            and repo_cache_folder
+            else PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
+        )
+    except Exception:
+        dir_name = PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
 
-    return _validate_model_weights(model_dir)
+    model_dir = artifacts_path / dir_name
+
+    if not model_dir.is_dir():
+        return False, f"missing model directory: {dir_name}"
+
+    if not (model_dir / "config.json").is_file():
+        return False, f"missing required file: config.json in {dir_name}"
+
+    ok, detail = _validate_model_weights(model_dir)
+    if not ok:
+        return False, f"{dir_name}: {detail}"
+    return True, f"picture classifier verified: {dir_name}"
 
 
 def _validate_tableformer_artifacts(
@@ -480,58 +512,77 @@ def _validate_tableformer_artifacts(
 def _validate_rapidocr_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
-    model_dir = (
-        artifacts_path / RAPIDOCR_ARTIFACT_DIRECTORY
-    )
+    try:
+        from docling.models.stages.ocr.rapid_ocr_model import (  # type: ignore
+            RapidOcrModel,
+            _backend_to_engine_type,
+            _rapidocr_artifacts,
+            _resolve_rapidocr,
+        )
+    except ImportError as exc:
+        return False, f"cannot import RapidOCR internals: {exc}"
 
-    if not model_dir.is_dir():
-        return (
-            False,
-            f"missing model directory: {model_dir}",
+    backend = "torch"
+    lang = "pt"
+
+    try:
+        model_folder = RapidOcrModel._model_repo_folder
+    except AttributeError:
+        model_folder = RAPIDOCR_ARTIFACT_DIRECTORY
+
+    target_dir = artifacts_path / model_folder
+
+    if not target_dir.is_dir():
+        return False, f"missing model directory: {model_folder}"
+
+    try:
+        resolved = _resolve_rapidocr(lang, backend)
+        engine = _backend_to_engine_type(backend)
+        artifacts = _rapidocr_artifacts(
+            target_dir,
+            engine,
+            resolved.ppocr_version,
+            resolved.rapidocr_lang_token,
+            need_det=True,
+            need_cls=True,
+            need_rec=True,
+        )
+    except Exception as exc:
+        return False, f"failed to resolve RapidOCR torch:pt artifacts: {exc}"
+
+    required_roles = {"det", "cls", "rec"}
+    missing_roles = required_roles - set(artifacts)
+    if missing_roles:
+        return False, (
+            f"RapidOCR artifacts incomplete for backend={backend} lang={lang}: "
+            f"missing roles: {sorted(missing_roles)}"
         )
 
-    pth_files = sorted(model_dir.glob("*.pth"))
-    if not pth_files:
-        return (
-            False,
-            f"no .pth model files in {model_dir}",
+    missing_files: list[str] = []
+    empty_files: list[str] = []
+    for _role, artifact in artifacts.items():
+        for path in artifact.files:
+            if not path.is_file():
+                missing_files.append(path.name)
+            elif path.stat().st_size == 0:
+                empty_files.append(path.name)
+
+    if missing_files:
+        return False, (
+            f"RapidOCR artifacts incomplete for backend={backend} lang={lang}\n"
+            f"missing: {', '.join(missing_files)}"
+        )
+    if empty_files:
+        return False, (
+            f"RapidOCR artifacts have empty files for backend={backend} lang={lang}\n"
+            f"empty: {', '.join(empty_files)}"
         )
 
-    det_files = [
-        f for f in pth_files
-        if "det" in f.name.lower()
-    ]
-    rec_files = [
-        f for f in pth_files
-        if "rec" in f.name.lower()
-    ]
-
-    if not det_files:
-        return (
-            False,
-            "no detection model (.pth with 'det') found",
-        )
-
-    if not rec_files:
-        return (
-            False,
-            "no recognition model (.pth with 'rec') found",
-        )
-
-    empty = [
-        f.name
-        for f in pth_files
-        if f.stat().st_size <= 0
-    ]
-    if empty:
-        return (
-            False,
-            "empty model file(s): " + ", ".join(empty),
-        )
-
-    return (
-        True,
-        f"{len(pth_files)} .pth file(s) verified at {model_dir}",
+    ppocr_version = getattr(resolved, "ppocr_version", "unknown")
+    rec_lang = getattr(resolved, "rapidocr_lang_token", "unknown")
+    return True, (
+        f"RapidOCR torch:pt artifacts verified: backend={backend} lang={lang} "
+        f"ppocr_version={ppocr_version} rec_lang={rec_lang}"
     )
 
 
@@ -556,6 +607,129 @@ def _validate_layout_artifacts(
             return False, f"missing required file: {name}"
 
     return _validate_model_weights(model_dir)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tree_digest(root: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    count = 0
+    excluded_parts = {".cache", "_hf_runtime", "xet", "__pycache__"}
+    excluded_suffixes = {".pyc", ".pyo", ".lock", ".tmp"}
+    for path in sorted(
+        item
+        for item in root.rglob("*")
+        if item.is_file()
+        and not any(p in excluded_parts for p in item.parts)
+        and item.suffix.lower() not in excluded_suffixes
+    ):
+        relative = path.relative_to(root).as_posix()
+        file_hash = sha256_file(path)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_hash.encode("ascii"))
+        digest.update(b"\n")
+        count += 1
+    return digest.hexdigest(), count
+
+
+def validate_manifest(
+    manifest_path: Path,
+    model_root: Path,
+) -> tuple[bool, str]:
+    if not manifest_path.is_file():
+        return False, f"manifest not found: {manifest_path}"
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"cannot read manifest: {exc}"
+
+    schema = manifest.get("schema_version")
+    if schema != MANIFEST_SCHEMA_VERSION:
+        return False, f"schema_version mismatch: {schema!r} != {MANIFEST_SCHEMA_VERSION}"
+
+    if manifest.get("parser") != PARSER_NAME:
+        return False, f"parser mismatch: {manifest.get('parser')!r}"
+
+    try:
+        installed_version = importlib.metadata.version("docling")
+    except importlib.metadata.PackageNotFoundError:
+        installed_version = None
+
+    manifest_version = manifest.get("docling_version")
+    if installed_version and manifest_version != installed_version:
+        return False, (
+            f"docling_version mismatch: "
+            f"manifest={manifest_version!r}, installed={installed_version!r}"
+        )
+
+    if manifest.get("profile") != "full_cpu_local":
+        return False, f"profile mismatch: {manifest.get('profile')!r}"
+
+    offline = manifest.get("offline_validation", {})
+    if not offline.get("passed"):
+        return False, "offline_validation.passed is not True"
+    if not offline.get("structural_pass"):
+        return False, "offline_validation.structural_pass is not True"
+    if not offline.get("component_pass"):
+        return False, "offline_validation.component_pass is not True"
+    if not offline.get("pipeline_initialized"):
+        return False, "offline_validation.pipeline_initialized is not True"
+
+    capabilities = manifest.get("capabilities", {})
+
+    for cap_name in FULL_CPU_LOCAL_REQUIRED_CAPABILITIES:
+        if cap_name not in capabilities:
+            return False, f"required capability missing: {cap_name}"
+
+        cap_data = capabilities[cap_name]
+        if not isinstance(cap_data, dict):
+            return False, f"capability {cap_name}: entry is not an object"
+
+        if not cap_data.get("enabled"):
+            return False, f"capability {cap_name}: enabled is not true"
+
+        if not cap_data.get("present"):
+            return False, f"capability {cap_name}: present is not true"
+
+        subdir = cap_data.get("directory")
+        if not subdir or not isinstance(subdir, str):
+            return False, f"capability {cap_name}: directory is missing"
+
+        cap_dir = model_root / subdir
+        if not cap_dir.is_dir():
+            return False, f"capability {cap_name}: model directory removed: {subdir}"
+
+        stored_digest = cap_data.get("tree_digest")
+        if not stored_digest or not isinstance(stored_digest, str):
+            return False, f"capability {cap_name}: tree_digest is missing"
+
+        stored_count = cap_data.get("file_count")
+        if stored_count is None:
+            return False, f"capability {cap_name}: file_count is missing"
+        if not isinstance(stored_count, int) or stored_count <= 0:
+            return False, f"capability {cap_name}: file_count must be > 0"
+
+        current_digest, current_count = tree_digest(cap_dir)
+        if current_digest != stored_digest:
+            return False, f"tree digest mismatch for {cap_name}"
+        if current_count != stored_count:
+            return False, f"file_count mismatch for {cap_name}"
+
+        stored_weight_files = cap_data.get("weight_files", [])
+        for rel_path in stored_weight_files:
+            abs_path = model_root / rel_path
+            if not abs_path.is_file():
+                return False, f"missing certified weight: {rel_path}"
+
+    return True, "manifest valid"
 
 
 def _normalize_device(value: str) -> AcceleratorDevice:
@@ -1935,6 +2109,30 @@ def preflight_profile(
                 "formula/code model CodeFormulaV2",
                 "pass" if formula_ok else "fail",
                 formula_detail,
+            )
+        )
+
+    # --------------------------------------------------
+    # Certified manifest
+    # --------------------------------------------------
+
+    if profile_name == "full_cpu_local":
+        manifest_path = (
+            artifacts_path.parent.parent
+            / "manifests"
+            / MANIFEST_FILENAME
+        )
+
+        manifest_ok, manifest_detail = validate_manifest(
+            manifest_path,
+            artifacts_path,
+        )
+
+        checks.append(
+            make_check(
+                "certified manifest",
+                "pass" if manifest_ok else "fail",
+                manifest_detail,
             )
         )
 

@@ -49,6 +49,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if ($Force -and $ValidateOnly) {
+    throw (
+        "[docling-models] -Force and -ValidateOnly are mutually exclusive. " +
+        "-Force removes artifacts; -ValidateOnly is read-only."
+    )
+}
+
 . "$PSScriptRoot\_helpers.ps1"
 
 Assert-WindowsLongPathsEnabled
@@ -98,10 +105,15 @@ try:
 except importlib.metadata.PackageNotFoundError:
     print(f"FAIL: docling not installed", file=sys.stderr)
     sys.exit(1)
+
 if v != "2.122.0":
-    print(f"WARN: expected docling==2.122.0, got {v!r}")
-else:
-    print(f"OK: docling=={v}")
+    print(
+        f"FAIL: expected docling==2.122.0, got {v!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(f"OK: docling=={v}")
 '@
 
 Invoke-PythonScriptChecked `
@@ -256,37 +268,47 @@ print("DOCLING MODEL ACQUISITION: PASS")
     Write-Host ""
     Write-Host "[docling-models] PHASE 2 - offline validation" -ForegroundColor Cyan
 
-    Invoke-NativeChecked `
-        -Cmd $Python `
-        -Args @(
-            $ValidateScript,
-            '--model-root', $ModelRoot,
-            '--validate-only'
-        )
-
-    # ============================================================
-    # PHASE 3 - deterministic manifest.
-    # ============================================================
-    Write-Host ""
-    Write-Host "[docling-models] PHASE 3 - manifest" -ForegroundColor Cyan
-
-    Invoke-NativeChecked `
-        -Cmd $Python `
-        -Args @(
-            $ValidateScript,
-            '--model-root', $ModelRoot,
-            '--skip-component-load',
-            '--skip-pipeline-init'
-        )
-
-    if (-not (Test-Path $ManifestPath -PathType Leaf)) {
-        throw (
-            "[docling-models] Manifest was not created: $ManifestPath"
-        )
+    if ($ValidateOnly) {
+        Invoke-NativeChecked `
+            -Cmd $Python `
+            -Args @(
+                $ValidateScript,
+                '--model-root', $ModelRoot,
+                '--validate-only'
+            )
+    }
+    else {
+        Invoke-NativeChecked `
+            -Cmd $Python `
+            -Args @(
+                $ValidateScript,
+                '--model-root', $ModelRoot,
+                '--force'
+            )
     }
 
+    # ============================================================
+    # PHASE 3 - manifest verification.
+    # ============================================================
+
     Write-Host ""
-    Write-Host "[docling-models] Completed successfully." -ForegroundColor Green
+    Write-Host (
+        "[docling-models] PHASE 3 - manifest verification"
+    ) -ForegroundColor Cyan
+
+    Invoke-NativeChecked `
+        -Cmd $Python `
+        -Args @(
+            $ValidateScript,
+            '--model-root', $ModelRoot,
+            '--check-manifest'
+        )
+
+    Write-Host ""
+    Write-Host (
+        "[docling-models] Completed successfully."
+    ) -ForegroundColor Green
+
     Write-Host "Manifest: $ManifestPath"
 }
 finally {

@@ -62,6 +62,10 @@ SMOLVLM_ARTIFACT_DIRECTORY = (
     "HuggingFaceTB--SmolVLM-256M-Instruct"
 )
 
+GRANITE_CHART_V4_ARTIFACT_DIRECTORY = (
+    "ibm-granite--granite-vision-4.1-4b"
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -127,6 +131,120 @@ def _package_version(name: str) -> str | None:
     except importlib.metadata.PackageNotFoundError:
         return None
 
+def _validate_granite_chart_v4_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path
+        / GRANITE_CHART_V4_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    required_files = (
+        "config.json",
+        "preprocessor_config.json",
+        "model.safetensors.index.json",
+    )
+
+    missing_files = [
+        name
+        for name in required_files
+        if not (model_dir / name).is_file()
+    ]
+
+    if missing_files:
+        return (
+            False,
+            "missing required file(s): "
+            + ", ".join(missing_files),
+        )
+
+    index_path = (
+        model_dir
+        / "model.safetensors.index.json"
+    )
+
+    try:
+        index_data = json.loads(
+            index_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ) as exc:
+        return (
+            False,
+            (
+                "invalid model.safetensors.index.json: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        )
+
+    weight_map = index_data.get("weight_map")
+
+    if not isinstance(weight_map, dict) or not weight_map:
+        return (
+            False,
+            (
+                "model.safetensors.index.json "
+                "does not contain a valid weight_map"
+            ),
+        )
+
+    shards = sorted(
+        {
+            str(value)
+            for value in weight_map.values()
+            if value
+        }
+    )
+
+    if not shards:
+        return (
+            False,
+            "no model shards declared by weight_map",
+        )
+
+    missing_shards = [
+        shard
+        for shard in shards
+        if not (model_dir / shard).is_file()
+    ]
+
+    if missing_shards:
+        return (
+            False,
+            "missing shard(s): "
+            + ", ".join(missing_shards),
+        )
+
+    empty_shards = [
+        shard
+        for shard in shards
+        if (model_dir / shard).stat().st_size <= 0
+    ]
+
+    if empty_shards:
+        return (
+            False,
+            "empty shard(s): "
+            + ", ".join(empty_shards),
+        )
+
+    return (
+        True,
+        (
+            f"{len(shards)} shard(s) verified "
+            f"at {model_dir}"
+        ),
+    )
 
 def _normalize_device(value: str) -> AcceleratorDevice:
     if value == "cpu":
@@ -782,6 +900,28 @@ def _build_pipeline_options(
             f"{model_artifacts_path}"
         )
 
+    if bool(
+        profile.get(
+            "chart_extraction",
+            False,
+        )
+    ):
+        (
+            granite_ok,
+            granite_detail,
+        ) = _validate_granite_chart_v4_artifacts(
+            model_artifacts_path
+        )
+
+        if not granite_ok:
+            raise BenchmarkConfigurationError(
+                (
+                    "Docling Granite Vision V4 "
+                    "artifacts are incomplete: "
+                    f"{granite_detail}"
+                )
+            )
+
     options = PdfPipelineOptions(
         artifacts_path=model_artifacts_path,
     )
@@ -1049,6 +1189,27 @@ def preflight_profile(
             str(artifacts_path),
         )
     )
+
+    if bool(
+        profile.get(
+            "chart_extraction",
+            False,
+        )
+    ):
+        (
+            granite_ok,
+            granite_detail,
+        ) = _validate_granite_chart_v4_artifacts(
+            artifacts_path
+        )
+
+        checks.append(
+            make_check(
+                "chart extraction Granite Vision V4",
+                "pass" if granite_ok else "fail",
+                granite_detail,
+            )
+        )
 
     # --------------------------------------------------
     # OCR

@@ -32,9 +32,23 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
     ),
     "docling": ParserRuntimeSpec(
         module="src.parsers.docling_v2",
-        model_args=("--model-artifacts-path", "{model_root}"),
-        model_env={**_COMMON_OFFLINE_ENV,},
-        preflight_kwargs={"model_artifacts_override": "{model_root}"},
+        model_args=(
+            "--model-artifacts-path",
+            "{model_root}",
+        ),
+        model_env={
+            **_COMMON_OFFLINE_ENV,
+            "HF_HOME": "{model_root}/_hf_runtime",
+            "HF_HUB_CACHE": (
+                "{model_root}/_hf_runtime/hub"
+            ),
+            "HF_XET_CACHE": (
+                "{model_root}/_hf_runtime/xet"
+            ),
+        },
+        preflight_kwargs={
+            "model_artifacts_override": "{model_root}"
+        },
     ),
     "paddleocr": ParserRuntimeSpec(
         module="src.parsers.paddleocr_v2",

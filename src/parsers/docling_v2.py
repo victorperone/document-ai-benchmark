@@ -66,6 +66,27 @@ GRANITE_CHART_V4_ARTIFACT_DIRECTORY = (
     "ibm-granite--granite-vision-4.1-4b"
 )
 
+CODE_FORMULA_ARTIFACT_DIRECTORY = (
+    "docling-project--CodeFormulaV2"
+)
+
+LAYOUT_ARTIFACT_DIRECTORY = (
+    "docling-project--docling-layout-heron"
+)
+
+TABLEFORMER_ARTIFACT_DIRECTORY = (
+    "docling-project--docling-models"
+)
+
+RAPIDOCR_ARTIFACT_DIRECTORY = "RapidOcr"
+
+# Derived from the HF naming convention for
+# DocumentPictureClassifierOptions preset
+# "document_figure_classifier_v2".
+PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY = (
+    "ds4sd--DocumentFigureClassifier"
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -245,6 +266,297 @@ def _validate_granite_chart_v4_artifacts(
             f"at {model_dir}"
         ),
     )
+
+def _validate_sharded_safetensors(
+    model_dir: Path,
+    index_path: Path,
+) -> tuple[bool, str]:
+    try:
+        index_data = json.loads(
+            index_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            False,
+            (
+                f"invalid {index_path.name}: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        )
+
+    weight_map = index_data.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        return (
+            False,
+            (
+                f"{index_path.name} does not "
+                "contain a valid weight_map"
+            ),
+        )
+
+    shards = sorted(
+        {str(v) for v in weight_map.values() if v}
+    )
+
+    if not shards:
+        return False, "no model shards declared by weight_map"
+
+    missing = [
+        s for s in shards
+        if not (model_dir / s).is_file()
+    ]
+    if missing:
+        return (
+            False,
+            "missing shard(s): " + ", ".join(missing),
+        )
+
+    empty = [
+        s for s in shards
+        if (model_dir / s).stat().st_size <= 0
+    ]
+    if empty:
+        return (
+            False,
+            "empty shard(s): " + ", ".join(empty),
+        )
+
+    return (
+        True,
+        f"{len(shards)} shard(s) verified at {model_dir}",
+    )
+
+
+def _validate_model_weights(
+    model_dir: Path,
+) -> tuple[bool, str]:
+    index_path = model_dir / "model.safetensors.index.json"
+    single_path = model_dir / "model.safetensors"
+
+    if index_path.is_file():
+        return _validate_sharded_safetensors(
+            model_dir,
+            index_path,
+        )
+
+    if single_path.is_file():
+        if single_path.stat().st_size <= 0:
+            return False, "model.safetensors is empty"
+        return (
+            True,
+            f"model.safetensors verified at {model_dir}",
+        )
+
+    return (
+        False,
+        (
+            "no model weights found "
+            "(model.safetensors or "
+            "model.safetensors.index.json)"
+        ),
+    )
+
+
+def _validate_smolvlm_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path / SMOLVLM_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    for name in (
+        "config.json",
+        "preprocessor_config.json",
+    ):
+        if not (model_dir / name).is_file():
+            return False, f"missing required file: {name}"
+
+    return _validate_model_weights(model_dir)
+
+
+def _validate_code_formula_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path / CODE_FORMULA_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    if not (model_dir / "config.json").is_file():
+        return False, "missing required file: config.json"
+
+    return _validate_model_weights(model_dir)
+
+
+def _validate_picture_classifier_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path
+        / PICTURE_CLASSIFIER_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    if not (model_dir / "config.json").is_file():
+        return False, "missing required file: config.json"
+
+    return _validate_model_weights(model_dir)
+
+
+def _validate_tableformer_artifacts(
+    artifacts_path: Path,
+    mode: str = "accurate",
+) -> tuple[bool, str]:
+    repo_dir = (
+        artifacts_path / TABLEFORMER_ARTIFACT_DIRECTORY
+    )
+
+    if not repo_dir.is_dir():
+        return (
+            False,
+            f"missing repository directory: {repo_dir}",
+        )
+
+    mode_dir = (
+        repo_dir / "model_artifacts" / "tableformer" / mode
+    )
+
+    if not mode_dir.is_dir():
+        return (
+            False,
+            (
+                f"missing tableformer/{mode} "
+                f"directory: {mode_dir}"
+            ),
+        )
+
+    config_path = mode_dir / "tm_config.json"
+    if not config_path.is_file():
+        return (
+            False,
+            f"missing tm_config.json in {mode_dir}",
+        )
+
+    weights = sorted(mode_dir.glob("*.safetensors"))
+    if not weights:
+        return (
+            False,
+            f"no .safetensors weights in {mode_dir}",
+        )
+
+    empty = [
+        w.name
+        for w in weights
+        if w.stat().st_size <= 0
+    ]
+    if empty:
+        return (
+            False,
+            "empty weight(s): " + ", ".join(empty),
+        )
+
+    return (
+        True,
+        f"{len(weights)} weight(s) verified at {mode_dir}",
+    )
+
+
+def _validate_rapidocr_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path / RAPIDOCR_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    pth_files = sorted(model_dir.glob("*.pth"))
+    if not pth_files:
+        return (
+            False,
+            f"no .pth model files in {model_dir}",
+        )
+
+    det_files = [
+        f for f in pth_files
+        if "det" in f.name.lower()
+    ]
+    rec_files = [
+        f for f in pth_files
+        if "rec" in f.name.lower()
+    ]
+
+    if not det_files:
+        return (
+            False,
+            "no detection model (.pth with 'det') found",
+        )
+
+    if not rec_files:
+        return (
+            False,
+            "no recognition model (.pth with 'rec') found",
+        )
+
+    empty = [
+        f.name
+        for f in pth_files
+        if f.stat().st_size <= 0
+    ]
+    if empty:
+        return (
+            False,
+            "empty model file(s): " + ", ".join(empty),
+        )
+
+    return (
+        True,
+        f"{len(pth_files)} .pth file(s) verified at {model_dir}",
+    )
+
+
+def _validate_layout_artifacts(
+    artifacts_path: Path,
+) -> tuple[bool, str]:
+    model_dir = (
+        artifacts_path / LAYOUT_ARTIFACT_DIRECTORY
+    )
+
+    if not model_dir.is_dir():
+        return (
+            False,
+            f"missing model directory: {model_dir}",
+        )
+
+    for name in (
+        "config.json",
+        "preprocessor_config.json",
+    ):
+        if not (model_dir / name).is_file():
+            return False, f"missing required file: {name}"
+
+    return _validate_model_weights(model_dir)
+
 
 def _normalize_device(value: str) -> AcceleratorDevice:
     if value == "cpu":
@@ -900,6 +1212,108 @@ def _build_pipeline_options(
             f"{model_artifacts_path}"
         )
 
+    layout_ok, layout_detail = _validate_layout_artifacts(
+        model_artifacts_path
+    )
+    if not layout_ok:
+        raise BenchmarkConfigurationError(
+            "Docling layout model artifacts are incomplete: "
+            f"{layout_detail}"
+        )
+
+    if bool(
+        profile.get(
+            "picture_description",
+            False,
+        )
+    ):
+        (
+            smolvlm_ok,
+            smolvlm_detail,
+        ) = _validate_smolvlm_artifacts(
+            model_artifacts_path
+        )
+        if not smolvlm_ok:
+            raise BenchmarkConfigurationError(
+                "Docling SmolVLM artifacts are incomplete: "
+                f"{smolvlm_detail}"
+            )
+
+    if bool(
+        profile.get(
+            "picture_classification",
+            False,
+        )
+    ):
+        (
+            classifier_ok,
+            classifier_detail,
+        ) = _validate_picture_classifier_artifacts(
+            model_artifacts_path
+        )
+        if not classifier_ok:
+            raise BenchmarkConfigurationError(
+                "Docling picture classifier artifacts "
+                f"are incomplete: {classifier_detail}"
+            )
+
+    if bool(
+        profile.get("formula_enrichment", False)
+    ) or bool(
+        profile.get("code_enrichment", False)
+    ):
+        (
+            formula_ok,
+            formula_detail,
+        ) = _validate_code_formula_artifacts(
+            model_artifacts_path
+        )
+        if not formula_ok:
+            raise BenchmarkConfigurationError(
+                "Docling CodeFormulaV2 artifacts are incomplete: "
+                f"{formula_detail}"
+            )
+
+    if bool(
+        profile.get(
+            "table_structure",
+            True,
+        )
+    ):
+        table_mode = str(
+            profile.get("table_mode", "accurate")
+        )
+        (
+            tableformer_ok,
+            tableformer_detail,
+        ) = _validate_tableformer_artifacts(
+            model_artifacts_path,
+            mode=table_mode,
+        )
+        if not tableformer_ok:
+            raise BenchmarkConfigurationError(
+                "Docling TableFormer artifacts are incomplete: "
+                f"{tableformer_detail}"
+            )
+
+    if bool(
+        profile.get(
+            "ocr_enabled",
+            False,
+        )
+    ):
+        (
+            rapidocr_ok,
+            rapidocr_detail,
+        ) = _validate_rapidocr_artifacts(
+            model_artifacts_path
+        )
+        if not rapidocr_ok:
+            raise BenchmarkConfigurationError(
+                "Docling RapidOCR artifacts are incomplete: "
+                f"{rapidocr_detail}"
+            )
+
     if bool(
         profile.get(
             "chart_extraction",
@@ -1212,6 +1626,22 @@ def preflight_profile(
         )
 
     # --------------------------------------------------
+    # Layout model (always required for PDF pipeline)
+    # --------------------------------------------------
+
+    (
+        layout_ok,
+        layout_detail,
+    ) = _validate_layout_artifacts(artifacts_path)
+    checks.append(
+        make_check(
+            "layout model",
+            "pass" if layout_ok else "fail",
+            layout_detail,
+        )
+    )
+
+    # --------------------------------------------------
     # OCR
     # --------------------------------------------------
 
@@ -1309,6 +1739,18 @@ def preflight_profile(
             )
         )
 
+        (
+            rapidocr_ok,
+            rapidocr_detail,
+        ) = _validate_rapidocr_artifacts(artifacts_path)
+        checks.append(
+            make_check(
+                "ocr model RapidOCR",
+                "pass" if rapidocr_ok else "fail",
+                rapidocr_detail,
+            )
+        )
+
     # --------------------------------------------------
     # Table mode
     # --------------------------------------------------
@@ -1323,6 +1765,22 @@ def preflight_profile(
                 "table_mode",
                 "fail",
                 f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    if bool(profile.get("table_structure", True)):
+        (
+            tableformer_ok,
+            tableformer_detail,
+        ) = _validate_tableformer_artifacts(
+            artifacts_path,
+            mode=table_mode_str,
+        )
+        checks.append(
+            make_check(
+                "table structure model",
+                "pass" if tableformer_ok else "fail",
+                tableformer_detail,
             )
         )
 
@@ -1426,16 +1884,57 @@ def preflight_profile(
             )
         )
 
-        smolvlm_path = (
-            artifacts_path
-            / SMOLVLM_ARTIFACT_DIRECTORY
-        )
-
+        (
+            smolvlm_ok,
+            smolvlm_detail,
+        ) = _validate_smolvlm_artifacts(artifacts_path)
         checks.append(
             make_check(
-                "picture description model",
-                "pass" if smolvlm_path.is_dir() else "fail",
-                str(smolvlm_path),
+                "picture description model SmolVLM",
+                "pass" if smolvlm_ok else "fail",
+                smolvlm_detail,
+            )
+        )
+
+    # --------------------------------------------------
+    # Picture classification
+    # --------------------------------------------------
+
+    if bool(profile.get("picture_classification", False)):
+        (
+            classifier_ok,
+            classifier_detail,
+        ) = _validate_picture_classifier_artifacts(
+            artifacts_path
+        )
+        checks.append(
+            make_check(
+                "picture classification model",
+                "pass" if classifier_ok else "fail",
+                classifier_detail,
+            )
+        )
+
+    # --------------------------------------------------
+    # Formula / code enrichment
+    # --------------------------------------------------
+
+    if bool(
+        profile.get("formula_enrichment", False)
+    ) or bool(
+        profile.get("code_enrichment", False)
+    ):
+        (
+            formula_ok,
+            formula_detail,
+        ) = _validate_code_formula_artifacts(
+            artifacts_path
+        )
+        checks.append(
+            make_check(
+                "formula/code model CodeFormulaV2",
+                "pass" if formula_ok else "fail",
+                formula_detail,
             )
         )
 

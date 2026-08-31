@@ -12,6 +12,11 @@ EXPECTED_SETUP_SCRIPTS = [
     "setup_xberg.ps1",
 ]
 
+EXPECTED_PREPARATION_SCRIPTS = [
+    "prepare_unstructured_models.ps1",
+    "prepare_docling_models.ps1",
+]
+
 EXPECTED_SUPPORT_SCRIPTS = [
     "_helpers.ps1",
     "check_envs.ps1",
@@ -23,6 +28,12 @@ EXPECTED_SUPPORT_SCRIPTS = [
 class TestSetupScriptsExist(unittest.TestCase):
     def test_all_setup_scripts_exist(self):
         for name in EXPECTED_SETUP_SCRIPTS:
+            with self.subTest(script=name):
+                path = SCRIPTS_DIR / name
+                self.assertTrue(path.exists(), f"Missing: {path}")
+
+    def test_preparation_scripts_exist(self):
+        for name in EXPECTED_PREPARATION_SCRIPTS:
             with self.subTest(script=name):
                 path = SCRIPTS_DIR / name
                 self.assertTrue(path.exists(), f"Missing: {path}")
@@ -262,3 +273,85 @@ class TestUnstructuredModelPreparation(unittest.TestCase):
             self.text,
             re.compile(r"if\s*\(\$Force\)", re.IGNORECASE),
         )
+
+
+class TestDoclingModelPreparation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (
+            SCRIPTS_DIR / "prepare_docling_models.ps1"
+        ).read_text(encoding="utf-8")
+
+    def _position(self, token: str) -> int:
+        position = self.text.find(token)
+        self.assertGreaterEqual(position, 0, f"Missing token: {token!r}")
+        return position
+
+    def test_has_required_header(self):
+        self.assertTrue(
+            self.text.startswith("#Requires -Version 5.1"),
+            "Script must begin with #Requires -Version 5.1",
+        )
+        self.assertIn("Set-StrictMode -Version Latest", self.text)
+        self.assertIn("$ErrorActionPreference = 'Stop'", self.text)
+
+    def test_acquisition_precedes_offline_validation(self):
+        p1 = self.text.find("PHASE 1")
+        p2 = self.text.find("PHASE 2")
+        p3 = self.text.find("PHASE 3")
+        self.assertGreaterEqual(p1, 0, "PHASE 1 marker missing")
+        self.assertLess(p1, p2, "PHASE 1 must precede PHASE 2")
+        self.assertLess(p2, p3, "PHASE 2 must precede PHASE 3")
+
+    def test_offline_variables_exist(self):
+        self.assertIn("HF_HUB_OFFLINE", self.text)
+        self.assertIn("TRANSFORMERS_OFFLINE", self.text)
+
+    def test_offline_validation_delegates_to_python_helper(self):
+        self.assertIn("validate_docling_models.py", self.text)
+        self.assertIn("Invoke-NativeChecked", self.text)
+
+    def test_hf_env_is_docling_specific(self):
+        self.assertIn("HF_HOME", self.text)
+        self.assertIn("HF_HUB_CACHE", self.text)
+        self.assertIn("HF_XET_CACHE", self.text)
+        self.assertIn(r"models\docling\huggingface", self.text)
+
+    def test_env_isolation_with_finally(self):
+        self.assertIn("OriginalEnvironment", self.text)
+        self.assertIn("finally", self.text)
+
+    def test_force_parameter_is_used(self):
+        self.assertRegex(
+            self.text,
+            re.compile(r"if\s*\(\$Force\b", re.IGNORECASE),
+        )
+
+    def test_validate_only_skips_acquisition(self):
+        self.assertIn("ValidateOnly", self.text)
+        self.assertIn("if (-not $ValidateOnly)", self.text)
+
+    def test_manifest_checked_after_generation(self):
+        self.assertIn("docling_models_manifest.json", self.text)
+        self.assertIn("Test-Path $ManifestPath", self.text)
+
+    def test_download_api_uses_torch_pt(self):
+        self.assertIn('rapidocr_models=["torch:pt"]', self.text)
+
+    def test_download_force_false_by_default(self):
+        self.assertIn("force=False", self.text)
+
+    def test_uses_invoke_python_script_checked(self):
+        self.assertIn("Invoke-PythonScriptChecked", self.text)
+
+    def test_docling_version_checked(self):
+        self.assertIn("2.122.0", self.text)
+        self.assertIn("importlib.metadata", self.text)
+
+    def test_disk_space_reported(self):
+        self.assertIn("Get-PSDrive", self.text)
+
+    def test_telemetry_disabled(self):
+        self.assertIn("HF_HUB_DISABLE_TELEMETRY", self.text)
+        self.assertIn("DO_NOT_TRACK", self.text)
+        self.assertIn("SCARF_NO_ANALYTICS", self.text)

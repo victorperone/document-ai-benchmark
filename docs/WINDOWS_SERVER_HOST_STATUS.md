@@ -408,3 +408,65 @@ no parser requires a remote API during execution
 ```
 
 After this milestone, development can move from runtime stabilization to difficult document validation and, later, the formal comparative benchmark.
+
+
+## Windows host validation milestone
+
+Validated on 2026-09-01.
+
+Validation commit:
+
+    001ca76
+
+Environment:
+
+    Windows Server
+    Windows PowerShell 5.1
+    runtime=host
+    suite=windows_full_cpu_local_all_host
+
+Validation document:
+
+    TC_007646_2021.pdf
+    48 pages
+
+Results:
+
+    preflight: PASS
+    jobs completed: 7
+    jobs failed: 0
+    jobs aborted: 0
+    batch exit code: 0
+
+All seven parsers produced their expected metrics.json and
+document.md artifacts.
+
+The validated parsers were:
+
+    PyMuPDF
+    Docling
+    MinerU
+    PaddleOCR
+    LiteParse
+    Unstructured
+    Xberg
+
+All required model artifacts were resolved locally.
+
+The runtime was configured with offline Hugging Face behavior,
+telemetry disabled, parser specific local model configuration,
+and remote services disabled where supported.
+
+No remote API use or model download was observed in the
+validation logs.
+
+This validation does not constitute operating system level
+network isolation certification.
+
+### Registered Warnings
+
+PyMuPDF: DPI automaticamente reduzido em páginas grandes
+Docling: avisos de OCR vazio e tied weights
+PaddleOCR: PP-Chart2Table com embed_tokens recém inicializado
+Xberg: mensagens "Empty page!!"
+PowerShell: outros scripts auxiliares ainda contêm Unicode

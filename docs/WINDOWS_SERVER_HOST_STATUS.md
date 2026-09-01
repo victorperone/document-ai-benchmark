@@ -463,6 +463,28 @@ validation logs.
 This validation does not constitute operating system level
 network isolation certification.
 
+### LiteParse visual enrichment validation note
+
+The Windows host smoke run successfully validated the LiteParse full_cpu_local parser runtime, its local dependencies, Transformers 5.16.1 compatibility, Tesseract integration, local SmolVLM model discovery, and final artifact generation.
+
+However, the validation document did not exercise the image enrichment pipeline.
+
+The LiteParse metrics reported:
+
+images_detected         : 0
+images_extracted        : 0
+images_ocr_attempted    : 0
+images_with_usable_text : 0
+images_described        : 0
+
+Therefore, this milestone does not claim that real SmolVLM image inference has been validated on the Windows Server.
+
+A dedicated visual document smoke test should be performed in a later task using a PDF that is known to trigger LiteParse image extraction and description.
+
+This does not block the Windows host runtime milestone because LiteParse itself completed the shared document successfully using the full_cpu_local profile and produced the expected output artifacts.
+
+
+
 ### Registered Warnings
 
 PyMuPDF: DPI automaticamente reduzido em páginas grandes

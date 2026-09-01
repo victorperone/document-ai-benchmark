@@ -21,7 +21,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Scripts = $PSScriptRoot
-$ForceArg = if ($Force) { @('-Force') } else { @() }
+$ForceArg = @()
+if ($Force) {
+    $ForceArg = @('-Force')
+}
 
 Write-Host "=== Setting up all parser venvs ==="
 

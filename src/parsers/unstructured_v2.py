@@ -13,6 +13,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Any
 
@@ -1012,27 +1013,19 @@ def main() -> None:
         profile.get("extract_image_block_types", [])
     )
 
+    image_temp_dir: TemporaryDirectory | None = None
+
     if image_block_types:
-        image_output_dir = paths.output_dir / "figures"
-
-        # A real re-run must not mix crops from a previous execution.
-        # --force in run_batch bypasses resume, but does not delete
-        # the parser output directory.
-        if image_output_dir.exists():
-            shutil.rmtree(image_output_dir)
-
-        image_output_dir.mkdir(
-            parents=True,
-            exist_ok=True,
+        image_temp_dir = TemporaryDirectory(
+            prefix="unstructured_images_",
         )
 
         partition_kwargs[
             "extract_image_block_types"
         ] = image_block_types
-
         partition_kwargs[
             "extract_image_block_output_dir"
-        ] = str(image_output_dir)
+        ] = image_temp_dir.name
 
     for _pm_kwarg in (
         "pdfminer_line_margin", "pdfminer_char_margin",
@@ -1098,6 +1091,9 @@ def main() -> None:
     except Exception:
         monitor.stop()
         raise
+    finally:
+        if image_temp_dir is not None:
+            image_temp_dir.cleanup()
 
     pipeline_seconds = perf_counter() - pipeline_started
 

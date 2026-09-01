@@ -115,7 +115,7 @@
           "parser_header": true,
           "parser_footer": true,
           "force_text": true,
-          "write_images": true,
+          "write_images": false,
           "embed_images": false,
           "page_separators": true
         }

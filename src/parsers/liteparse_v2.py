@@ -37,6 +37,7 @@ from src.benchmark.runtime_io import add_runtime_arguments
 PARSER_NAME = "liteparse"
 PARSER_DISPLAY_NAME = "LiteParse"
 LITEPARSE_REQUIRED_VERSION = "2.13.0"
+TRANSFORMERS_REQUIRED_VERSION = "5.16.1"
 
 SMOLVLM_ARTIFACT_DIRECTORY = "HuggingFaceTB--SmolVLM-256M-Instruct"
 DEFAULT_MODEL_ARTIFACTS = Path("/models/liteparse/smolvlm")
@@ -226,10 +227,17 @@ def _describe_image_with_smolvlm(
     image_bytes: bytes,
     model_root: Path,
     prompt: str,
-) -> str | None:
-    model_dir = model_root / SMOLVLM_ARTIFACT_DIRECTORY
+) -> str:
+    model_dir = (
+        model_root
+        / SMOLVLM_ARTIFACT_DIRECTORY
+    )
+
     if not model_dir.is_dir():
-        return None
+        raise RuntimeError(
+            "SmolVLM model directory is missing: "
+            f"{model_dir}"
+        )
 
     model_key = str(model_dir)
 
@@ -237,7 +245,7 @@ def _describe_image_with_smolvlm(
         import torch
         from PIL import Image
         from transformers import (
-            AutoModelForVision2Seq,
+            AutoModelForImageTextToText,
             AutoProcessor,
         )
 
@@ -246,33 +254,68 @@ def _describe_image_with_smolvlm(
                 str(model_dir),
                 local_files_only=True,
             )
-            model = AutoModelForVision2Seq.from_pretrained(
-                str(model_dir),
-                local_files_only=True,
-                torch_dtype=torch.float32,
-            ).to("cpu")
-            _smolvlm_cache[model_key] = (processor, model)
 
-        processor, model = _smolvlm_cache[model_key]
+            model = (
+                AutoModelForImageTextToText
+                .from_pretrained(
+                    str(model_dir),
+                    local_files_only=True,
+                    dtype=torch.float32,
+                )
+                .to("cpu")
+            )
+            model.eval()
 
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            _smolvlm_cache[model_key] = (
+                processor,
+                model,
+            )
+
+        processor, model = (
+            _smolvlm_cache[model_key]
+        )
+
+        image = (
+            Image.open(
+                io.BytesIO(image_bytes)
+            )
+            .convert("RGB")
+        )
+
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": prompt},
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
                 ],
             }
         ]
 
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
+        # Build the textual chat template separately and
+        # explicitly provide the in-memory PIL image. This
+        # guarantees that the visual tensor is actually passed
+        # to SmolVLM instead of leaving a bare image placeholder.
+        prompt_text = (
+            processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+        )
+
+        inputs = processor(
+            text=prompt_text,
+            images=[image],
             return_tensors="pt",
-            return_dict=True,
         ).to("cpu")
+
+        input_length = int(
+            inputs["input_ids"].shape[1]
+        )
 
         with torch.no_grad():
             generated = model.generate(
@@ -281,22 +324,36 @@ def _describe_image_with_smolvlm(
                 do_sample=False,
             )
 
-        full_text = processor.decode(
-            generated[0],
-            skip_special_tokens=True,
+        generated_only = generated[
+            :,
+            input_length:,
+        ]
+
+        descriptions = (
+            processor.batch_decode(
+                generated_only,
+                skip_special_tokens=True,
+            )
         )
 
-        # Extract the assistant's reply after the prompt
-        parts = full_text.split("Assistant:", 1)
-        if len(parts) == 2:
-            return parts[1].strip()
+        description = (
+            descriptions[0].strip()
+            if descriptions
+            else ""
+        )
 
-        # Fallback: strip the user prompt prefix
-        lines = full_text.strip().splitlines()
-        return lines[-1].strip() if lines else None
+        if not description:
+            raise RuntimeError(
+                "SmolVLM returned an empty description."
+            )
 
-    except Exception:
-        return None
+        return description
+
+    except Exception as exc:
+        raise RuntimeError(
+            "SmolVLM image description failed: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -319,32 +376,69 @@ def _process_document_images(
     model_root: Path,
     ocr_language: str = "por+eng",
 ) -> dict[str, dict[str, Any]]:
-    """Process all extracted images: OSD → OCR → optional SmolVLM.
+    """Process extracted images with OCR and optional SmolVLM."""
 
-    Returns a dict keyed by image path/name to enrichment data.
-    """
     image_description_enabled = bool(
-        profile.get("image_description", False)
-    )
-    description_prompt = str(
         profile.get(
-            "image_description_prompt",
-            "Describe the image concisely and factually.",
+            "image_description",
+            False,
         )
     )
 
-    enrichments: dict[str, dict[str, Any]] = {}
-    hash_to_enrichment: dict[str, dict[str, Any]] = {}
+    fallback_only = bool(
+        profile.get(
+            "image_description_fallback_only",
+            False,
+        )
+    )
+
+    description_prompt = str(
+        profile.get(
+            "image_description_prompt",
+            (
+                "Describe the image concisely "
+                "and factually."
+            ),
+        )
+    )
+
+    enrichments: dict[
+        str,
+        dict[str, Any],
+    ] = {}
+
+    hash_to_enrichment: dict[
+        str,
+        dict[str, Any],
+    ] = {}
 
     for img_obj in all_images:
-        img_path_attr = getattr(img_obj, "path", None)
-        img_name = getattr(img_obj, "name", None) or ""
+        img_path_attr = getattr(
+            img_obj,
+            "path",
+            None,
+        )
+        img_name = (
+            getattr(
+                img_obj,
+                "name",
+                None,
+            )
+            or ""
+        )
 
-        # Locate the image file
         if img_path_attr:
-            img_file = Path(img_path_attr)
-        elif img_name and image_output_dir.exists():
-            img_file = image_output_dir / img_name
+            img_file = Path(
+                img_path_attr
+            )
+        elif (
+            img_name
+            and image_output_dir.exists()
+        ):
+            img_file = (
+                image_output_dir
+                / img_name
+            )
         else:
             continue
 
@@ -352,56 +446,125 @@ def _process_document_images(
             continue
 
         key = str(img_file)
-        file_hash = _image_file_hash(img_file)
+        file_hash = _image_file_hash(
+            img_file
+        )
 
-        # Reuse enrichment for exact duplicates
-        if file_hash in hash_to_enrichment:
-            enrichment = dict(hash_to_enrichment[file_hash])
-            enrichment["duplicate"] = True
+        if (
+            file_hash
+            in hash_to_enrichment
+        ):
+            enrichment = dict(
+                hash_to_enrichment[
+                    file_hash
+                ]
+            )
+            enrichment[
+                "duplicate"
+            ] = True
             enrichments[key] = enrichment
             continue
 
-        image_bytes = img_file.read_bytes()
-
-        # OSD + rotation
-        corrected_bytes, rotation = _detect_and_correct_orientation(
-            image_bytes
+        image_bytes = (
+            img_file.read_bytes()
         )
 
-        # OCR
-        ocr_text = _ocr_image_bytes(corrected_bytes, lang=ocr_language)
-        has_usable_text = _is_usable_text(ocr_text)
+        corrected_bytes, rotation = (
+            _detect_and_correct_orientation(
+                image_bytes
+            )
+        )
 
-        enrichment: dict[str, Any] = {
+        ocr_text = _ocr_image_bytes(
+            corrected_bytes,
+            lang=ocr_language,
+        )
+
+        has_usable_text = (
+            _is_usable_text(
+                ocr_text
+            )
+        )
+
+        enrichment: dict[
+            str,
+            Any,
+        ] = {
             "file": key,
             "hash": file_hash,
             "rotation_applied": rotation,
             "ocr_attempted": True,
-            "ocr_text": ocr_text if has_usable_text else None,
-            "has_usable_text": has_usable_text,
+            "ocr_text": (
+                ocr_text
+                if has_usable_text
+                else None
+            ),
+            "has_usable_text": (
+                has_usable_text
+            ),
             "image_description": None,
+            "model": None,
             "duplicate": False,
         }
 
-        if has_usable_text:
-            enrichment["kind"] = "image_text"
-            enrichment["engine"] = "tesseract"
-        elif image_description_enabled:
-            description = _describe_image_with_smolvlm(
-                corrected_bytes,
-                model_root,
-                description_prompt,
+        should_describe = (
+            image_description_enabled
+            and (
+                not fallback_only
+                or not has_usable_text
             )
-            if description:
-                enrichment["kind"] = "image_description"
-                enrichment["model"] = SMOLVLM_ARTIFACT_DIRECTORY
-                enrichment["image_description"] = description
-            else:
-                enrichment["kind"] = "none"
+        )
+
+        description: str | None = None
+
+        if should_describe:
+            description = (
+                _describe_image_with_smolvlm(
+                    corrected_bytes,
+                    model_root,
+                    description_prompt,
+                )
+            )
+            enrichment[
+                "image_description"
+            ] = description
+            enrichment[
+                "model"
+            ] = (
+                SMOLVLM_ARTIFACT_DIRECTORY
+            )
+
+        if (
+            has_usable_text
+            and description
+        ):
+            enrichment["kind"] = (
+                "image_text_and_description"
+            )
+            enrichment["engine"] = (
+                "tesseract"
+            )
+
+        elif has_usable_text:
+            enrichment["kind"] = (
+                "image_text"
+            )
+            enrichment["engine"] = (
+                "tesseract"
+            )
+
+        elif description:
+            enrichment["kind"] = (
+                "image_description"
+            )
+
         else:
             enrichment["kind"] = "none"
 
-        hash_to_enrichment[file_hash] = enrichment
+        hash_to_enrichment[
+            file_hash
+        ] = enrichment
+
         enrichments[key] = enrichment
 
     return enrichments
@@ -540,7 +703,10 @@ def _build_page_text_with_enrichments(
 
         kind = enrichment.get("kind", "none")
 
-        if kind == "image_text":
+        if kind in {
+            "image_text",
+            "image_text_and_description",
+        }:
             text = enrichment.get("ocr_text", "")
             if text:
                 # OCR text is part of the document content — no synthetic label.
@@ -750,9 +916,9 @@ def _build_metrics(
         1 for e in all_enrichments if e.get("has_usable_text", False)
     )
     images_described = sum(
-        1 for e in all_enrichments
-        if e.get("kind") == "image_description"
-        and e.get("image_description")
+        1
+        for e in all_enrichments
+        if e.get("image_description")
     )
 
     source_summary = {
@@ -780,6 +946,12 @@ def _build_metrics(
             "resolved_config": profile,
             "versions": {
                 "liteparse": liteparse_version,
+                "transformers": _package_version(
+                    "transformers"
+                ),
+                "torch": _package_version(
+                    "torch"
+                ),
                 "tesseract": _get_tesseract_version(),
             },
             "python_version": platform.python_version(),
@@ -996,6 +1168,66 @@ def preflight_profile(
     else:
         checks.append(
             make_check("liteparse version", "pass", installed_version)
+        )
+
+    # Transformers runtime required by local SmolVLM
+    transformers_version = _package_version(
+        "transformers"
+    )
+
+    if (
+        transformers_version
+        != TRANSFORMERS_REQUIRED_VERSION
+    ):
+        checks.append(
+            make_check(
+                "transformers version",
+                "fail",
+                (
+                    "expected "
+                    f"{TRANSFORMERS_REQUIRED_VERSION!r}, "
+                    f"got {transformers_version!r}"
+                ),
+            )
+        )
+    else:
+        checks.append(
+            make_check(
+                "transformers version",
+                "pass",
+                transformers_version,
+            )
+        )
+
+    try:
+        from transformers import (
+            AutoModelForImageTextToText,
+            AutoProcessor,
+        )
+
+        _ = (
+            AutoModelForImageTextToText,
+            AutoProcessor,
+        )
+
+    except Exception as exc:
+        checks.append(
+            make_check(
+                "smolvlm transformers API",
+                "fail",
+                (
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
+                ),
+            )
+        )
+    else:
+        checks.append(
+            make_check(
+                "smolvlm transformers API",
+                "pass",
+                "AutoModelForImageTextToText",
+            )
         )
 
     # CPU only

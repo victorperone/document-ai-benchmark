@@ -83,25 +83,25 @@ if ($Limit -gt 0) {
     $BaseArgs += '--limit', $Limit
 }
 
-# ── Dry run ───────────────────────────────────────────────────────────────────
+# -- Dry run -------------------------------------------------------------------
 if ($DryRun) {
     Write-Host ""
-    Write-Host "=== Benchmark A — DRY RUN ===" -ForegroundColor Cyan
+    Write-Host "=== Benchmark A - DRY RUN ===" -ForegroundColor Cyan
     & $CorePython @BaseArgs '--dry-run'
     exit $LASTEXITCODE
 }
 
-# ── Preflight only ────────────────────────────────────────────────────────────
+# -- Preflight only ------------------------------------------------------------
 if ($PreflightOnly) {
     Write-Host ""
-    Write-Host "=== Benchmark A — PREFLIGHT ===" -ForegroundColor Cyan
+    Write-Host "=== Benchmark A - PREFLIGHT ===" -ForegroundColor Cyan
     & $CorePython @BaseArgs '--preflight'
     exit $LASTEXITCODE
 }
 
-# ── Full run: preflight then inference ────────────────────────────────────────
+# -- Full run: preflight then inference ----------------------------------------
 Write-Host ""
-Write-Host "=== Benchmark A — PREFLIGHT (mandatory) ===" -ForegroundColor Cyan
+Write-Host "=== Benchmark A - PREFLIGHT (mandatory) ===" -ForegroundColor Cyan
 & $CorePython @BaseArgs '--preflight'
 $PreflightExit = $LASTEXITCODE
 
@@ -113,6 +113,6 @@ if ($PreflightExit -ne 0) {
 }
 
 Write-Host ""
-Write-Host "=== Benchmark A — BATCH ===" -ForegroundColor Cyan
+Write-Host "=== Benchmark A - BATCH ===" -ForegroundColor Cyan
 & $CorePython @BaseArgs
 exit $LASTEXITCODE

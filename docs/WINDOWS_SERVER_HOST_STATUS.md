@@ -7,7 +7,7 @@ This document records the current operational state of native Windows Server exe
 It is a temporary development and validation checkpoint for the branch:
 
 ```text
-fix/docling-windows-runtime
+server/windows-native
 ```
 
 It does not redefine the default runtime architecture of the project.
@@ -162,7 +162,7 @@ git status --short
 Expected result:
 
 ```text
-branch = fix/docling-windows-runtime
+branch = server/windows-native
 working tree = clean
 ```
 
@@ -492,3 +492,56 @@ Docling: avisos de OCR vazio e tied weights
 PaddleOCR: PP-Chart2Table com embed_tokens recém inicializado
 Xberg: mensagens "Empty page!!"
 PowerShell: outros scripts auxiliares ainda contêm Unicode
+
+
+## Schema v3 artifact contract — status
+
+### Introdução do contrato
+
+A partir do commit seguinte ao milestone de validação (001ca76), o projeto
+iniciou a fase de qualidade de extração.
+
+O schema 2 gravava `raw.md` com texto normalizado, mascarando a qualidade
+real do parser. O schema 3 separa:
+
+```text
+raw.md              — saída nativa do parser (sem normalização)
+document.md         — saída normalizada (sem conteúdo derivado)
+document.enriched.md — conteúdo enriquecido com blocos derived:start
+native/             — bundle de arquivos nativos do parser (ex: MinerU)
+```
+
+### Commit 1 concluído — contrato base
+
+Arquivos alterados:
+
+```text
+src/benchmark/artifact_contract.py  (novo)
+src/benchmark/paths.py              (+enriched_markdown, native_dir, ...)
+src/benchmark/artifact_policy.py    (+document.enriched.md, +native)
+src/benchmark/artifacts.py         (nova assinatura finalize_artifacts)
+src/benchmark/config.py             (schema_version check: 2 → 3)
+src/benchmark/post_validation.py    (METRICS_SCHEMA_VERSION: 2 → 3)
+config/benchmark_profiles.json      (schema_version: 2 → 3)
+tests/_support.py                   (schema_version: 3, novos artefatos)
+parser_tests/*/test_serialization.py (schema_version: 3)
+src/parsers/pymupdf_v2.py           (ParserArtifactInput, schema_version: 3)
+src/parsers/mineru_v2.py            (ParserArtifactInput, schema_version: 3)
+src/parsers/docling_v2.py           (ParserArtifactInput, schema_version: 3)
+src/parsers/paddleocr_v2.py         (ParserArtifactInput, schema_version: 3)
+src/parsers/liteparse_v2.py         (ParserArtifactInput, schema_version: 3)
+src/parsers/unstructured_v2.py      (ParserArtifactInput, schema_version: 3)
+src/parsers/xberg_v2.py             (ParserArtifactInput, schema_version: 3)
+```
+
+Todos os 7 adaptadores usam `raw_origin_kind = "adapter_assembled_declared"`
+neste commit transitório. A extração de markdown nativo por parser ocorre
+nos commits seguintes.
+
+### Próximo passo
+
+```text
+Commit 2: feat(pymupdf): enforce portuguese OCR at 150 dpi
+```
+
+Corrige DPI padrão (300 → 150) e idioma padrão ("eng" → "por") no PyMuPDF.

@@ -4,6 +4,10 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from src.benchmark.artifact_contract import (
+    ParserArtifactInput,
+    join_page_texts,
+)
 from src.benchmark.artifact_policy import (
     ArtifactPolicy,
 )
@@ -63,13 +67,7 @@ def finalize_artifacts(
     source_file: str,
     parser_name: str,
     profile_name: str,
-    page_texts: list[str],
-    parser_page_elements: list[
-        dict[str, Any]
-    ],
-    parser_native_pages: list[
-        dict[str, Any]
-    ],
+    artifact_input: ParserArtifactInput,
     tokenizer_name: str,
     normalization_config: dict[
         str,
@@ -78,26 +76,15 @@ def finalize_artifacts(
     artifact_policy: ArtifactPolicy,
 ) -> dict[str, Any]:
     page_count = len(
-        page_texts
+        artifact_input.parser_page_elements
     )
 
-    if (
-        len(parser_page_elements)
-        != page_count
-    ):
+    if len(artifact_input.parser_native_pages) != page_count:
         raise ValueError(
-            "parser_page_elements "
-            "length mismatch"
+            "parser_native_pages length mismatch"
         )
 
-    if (
-        len(parser_native_pages)
-        != page_count
-    ):
-        raise ValueError(
-            "parser_native_pages "
-            "length mismatch"
-        )
+    source_pages = artifact_input.source_page_markdown or []
 
     paths.output_dir.mkdir(
         parents=True,
@@ -105,13 +92,13 @@ def finalize_artifacts(
     )
 
     # --------------------------------------------------------
-    # Normalization
+    # Normalization (source pages → document.md)
     # --------------------------------------------------------
 
     started = perf_counter()
 
     normalized = normalize_pages(
-        page_texts,
+        source_pages,
         normalization_config,
     )
 
@@ -126,24 +113,28 @@ def finalize_artifacts(
 
     started = perf_counter()
 
+    short_line_threshold = int(
+        normalization_config[
+            "short_line_character_threshold"
+        ]
+    )
+    min_rep_fraction = float(
+        normalization_config[
+            "minimum_repeated_page_fraction"
+        ]
+    )
+    min_rep_count = int(
+        normalization_config[
+            "minimum_repeated_page_count"
+        ]
+    )
+
     raw_noise = analyze_noise(
         normalized.raw_markdown,
-        page_texts=page_texts,
-        short_line_threshold=int(
-            normalization_config[
-                "short_line_character_threshold"
-            ]
-        ),
-        minimum_repeated_page_fraction=float(
-            normalization_config[
-                "minimum_repeated_page_fraction"
-            ]
-        ),
-        minimum_repeated_page_count=int(
-            normalization_config[
-                "minimum_repeated_page_count"
-            ]
-        ),
+        page_texts=source_pages,
+        short_line_threshold=short_line_threshold,
+        minimum_repeated_page_fraction=min_rep_fraction,
+        minimum_repeated_page_count=min_rep_count,
     )
 
     clean_noise = analyze_noise(
@@ -151,21 +142,9 @@ def finalize_artifacts(
         page_texts=(
             normalized.clean_page_texts
         ),
-        short_line_threshold=int(
-            normalization_config[
-                "short_line_character_threshold"
-            ]
-        ),
-        minimum_repeated_page_fraction=float(
-            normalization_config[
-                "minimum_repeated_page_fraction"
-            ]
-        ),
-        minimum_repeated_page_count=int(
-            normalization_config[
-                "minimum_repeated_page_count"
-            ]
-        ),
+        short_line_threshold=short_line_threshold,
+        minimum_repeated_page_fraction=min_rep_fraction,
+        minimum_repeated_page_count=min_rep_count,
     )
 
     raw_content = (
@@ -180,10 +159,10 @@ def finalize_artifacts(
         )
     )
 
+    native_content = artifact_input.native_markdown or ""
+
     token_metrics = build_token_metrics(
-        raw_text=(
-            normalized.raw_markdown
-        ),
+        raw_text=native_content,
         clean_text=(
             normalized.clean_markdown
         ),
@@ -210,9 +189,12 @@ def finalize_artifacts(
     if artifact_policy.includes(
         "document.jsonl"
     ):
-        for index in range(
-            page_count
-        ):
+        for index in range(page_count):
+            page_source = (
+                source_pages[index]
+                if index < len(source_pages)
+                else ""
+            )
             records.append(
                 {
                     "document_id": (
@@ -236,7 +218,7 @@ def finalize_artifacts(
                     ),
 
                     "raw_markdown": (
-                        page_texts[index]
+                        page_source
                     ),
 
                     "clean_markdown": (
@@ -244,16 +226,20 @@ def finalize_artifacts(
                         .clean_page_texts[
                             index
                         ]
+                        if index < len(normalized.clean_page_texts)
+                        else ""
                     ),
 
                     "parser_elements": (
-                        parser_page_elements[
+                        artifact_input
+                        .parser_page_elements[
                             index
                         ]
                     ),
 
                     "parser_native": (
-                        parser_native_pages[
+                        artifact_input
+                        .parser_native_pages[
                             index
                         ]
                     ),
@@ -270,7 +256,7 @@ def finalize_artifacts(
         "raw.md"
     ):
         paths.raw_markdown.write_text(
-            normalized.raw_markdown,
+            native_content,
             encoding="utf-8",
         )
 
@@ -279,6 +265,19 @@ def finalize_artifacts(
     ):
         paths.clean_markdown.write_text(
             normalized.clean_markdown,
+            encoding="utf-8",
+        )
+
+    enriched_selected = artifact_policy.includes(
+        "document.enriched.md"
+    )
+
+    if enriched_selected:
+        enriched_text = join_page_texts(
+            artifact_input.enriched_page_markdown or []
+        )
+        paths.enriched_markdown.write_text(
+            enriched_text,
             encoding="utf-8",
         )
 
@@ -337,6 +336,11 @@ def finalize_artifacts(
         path=paths.clean_markdown,
     )
 
+    enriched_bytes = _written_size(
+        selected=enriched_selected,
+        path=paths.enriched_markdown,
+    )
+
     jsonl_bytes = _written_size(
         selected=jsonl_selected,
         path=paths.document_jsonl,
@@ -355,6 +359,11 @@ def finalize_artifacts(
         )
         for page
         in normalized.clean_page_texts
+    )
+
+    page_mapping_complete = (
+        artifact_input.page_mapping_status
+        == "complete"
     )
 
     return {
@@ -420,6 +429,34 @@ def finalize_artifacts(
             empty_output_pages
         ),
 
+        "artifacts": {
+            "raw": {
+                "origin_kind": (
+                    artifact_input.raw_origin_kind
+                ),
+                "origin_details": (
+                    artifact_input.raw_origin_details
+                ),
+                "bytes": raw_bytes,
+            },
+            "clean": {
+                "bytes": clean_bytes,
+            },
+            "enriched": {
+                "present": enriched_selected,
+                "bytes": enriched_bytes,
+            },
+        },
+
+        "quality_eligibility": {
+            "source_text": bool(native_content),
+            "page_mapping_complete": page_mapping_complete,
+            "formal_quality_eligible": (
+                bool(native_content)
+                and page_mapping_complete
+            ),
+        },
+
         "output": {
             "selected_artifacts": (
                 artifact_policy
@@ -465,6 +502,16 @@ def finalize_artifacts(
 
             "clean_markdown_bytes": (
                 clean_bytes
+            ),
+
+            "enriched_markdown": (
+                str(paths.enriched_markdown)
+                if enriched_selected
+                else None
+            ),
+
+            "enriched_markdown_bytes": (
+                enriched_bytes
             ),
 
             "document_jsonl_bytes": (

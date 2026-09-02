@@ -10,10 +10,15 @@ class BenchmarkPaths:
 
     raw_markdown: Path
     clean_markdown: Path
+    enriched_markdown: Path
     document_jsonl: Path
     metrics_json: Path
     removed_content_jsonl: Path
     run_log: Path
+
+    native_dir: Path
+    native_manifest_json: Path
+    native_assets_dir: Path
 
 
 def build_output_paths(
@@ -37,6 +42,8 @@ def build_output_paths(
             exist_ok=True,
         )
 
+    native_dir = output_dir / "native"
+
     return BenchmarkPaths(
         output_dir=output_dir,
 
@@ -46,6 +53,10 @@ def build_output_paths(
 
         clean_markdown=(
             output_dir / "document.md"
+        ),
+
+        enriched_markdown=(
+            output_dir / "document.enriched.md"
         ),
 
         document_jsonl=(
@@ -63,5 +74,15 @@ def build_output_paths(
 
         run_log=(
             output_dir / "run.log"
+        ),
+
+        native_dir=native_dir,
+
+        native_manifest_json=(
+            native_dir / "manifest.json"
+        ),
+
+        native_assets_dir=(
+            native_dir / "assets"
         ),
     )

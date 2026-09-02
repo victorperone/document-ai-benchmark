@@ -10,7 +10,7 @@ PARSER_NAME = "paddleocr"
 def _minimal_metrics() -> dict:
     return {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": "2026-08-27T00:00:00+00:00",
             "reference_tokenizer": "o200k_base",
         },
@@ -74,9 +74,9 @@ class TestMetricsJsonSerializable(unittest.TestCase):
         byte_paths = _find_bytes(_minimal_metrics())
         self.assertEqual(byte_paths, [], f"Bytes found at: {byte_paths}")
 
-    def test_schema_version_is_2(self):
+    def test_schema_version_is_3(self):
         metrics = _minimal_metrics()
-        self.assertEqual(metrics["benchmark"]["schema_version"], 2)
+        self.assertEqual(metrics["benchmark"]["schema_version"], 3)
 
 
 class TestPaddleocrNativeBlock(unittest.TestCase):

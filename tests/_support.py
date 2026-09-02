@@ -121,6 +121,7 @@ def write_metrics(
 _ARTIFACT_OUTPUT_KEY = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "metrics.json": "metrics_json",
     "removed_content.jsonl": "removed_content_jsonl",
@@ -129,6 +130,7 @@ _ARTIFACT_OUTPUT_KEY = {
 _ARTIFACT_BYTES_KEY = {
     "raw.md": "raw_markdown_bytes",
     "document.md": "clean_markdown_bytes",
+    "document.enriched.md": "enriched_markdown_bytes",
     "document.jsonl": "document_jsonl_bytes",
     "removed_content.jsonl": "removed_content_jsonl_bytes",
 }
@@ -202,6 +204,16 @@ def make_valid_job_output(
         p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         written["removed_content.jsonl"] = p
 
+    if artifact_policy.includes("document.enriched.md"):
+        p = out_dir / "document.enriched.md"
+        p.write_text("# Enriched document\n", encoding="utf-8")
+        written["document.enriched.md"] = p
+
+    if artifact_policy.includes("native"):
+        native_dir = out_dir / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        written["native"] = native_dir
+
     artifact_sel = artifact_policy.as_list()
     out_block: dict = {"selected_artifacts": artifact_sel}
     for artifact in artifact_sel:
@@ -214,7 +226,7 @@ def make_valid_job_output(
 
     if artifact_policy.includes("metrics.json"):
         metrics_data = {
-            "benchmark": {"schema_version": 2},
+            "benchmark": {"schema_version": 3},
             "run": {
                 "parser": parser,
                 "profile": profile,

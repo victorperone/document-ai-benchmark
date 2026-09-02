@@ -17,6 +17,7 @@ from collections import Counter
 from typing import Any
 
 from src.benchmark.artifact_policy import ArtifactPolicy
+from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
 from src.benchmark.artifacts import finalize_artifacts
 from src.benchmark.config import (
     get_normalization_config,
@@ -485,19 +486,25 @@ def main() -> None:
             page_count,
         )
 
+        artifact_input = ParserArtifactInput(
+            native_markdown=join_page_texts(page_texts),
+            source_page_markdown=page_texts,
+            enriched_page_markdown=None,
+            page_mapping_status="complete",
+            parser_page_elements=parser_page_elements,
+            parser_native_pages=parser_native_pages,
+            derived_content_by_page=[[] for _ in page_texts],
+            raw_origin_kind="adapter_assembled_declared",
+            raw_origin_details="page_texts join",
+        )
+
         artifact_result = finalize_artifacts(
             paths=paths,
             document_id=input_path.stem,
             source_file=input_path.name,
             parser_name=PARSER_NAME,
             profile_name=args.profile,
-            page_texts=page_texts,
-            parser_page_elements=(
-                parser_page_elements
-            ),
-            parser_native_pages=(
-                parser_native_pages
-            ),
+            artifact_input=artifact_input,
             tokenizer_name=tokenizer_name,
             normalization_config=(
                 normalization_config
@@ -788,7 +795,7 @@ def main() -> None:
 
     metrics = {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": (
                 datetime.now(
                     timezone.utc

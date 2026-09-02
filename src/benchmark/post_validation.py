@@ -7,22 +7,25 @@ from src.benchmark.artifact_policy import ArtifactPolicy
 from src.benchmark.paths import build_output_paths
 
 SCHEMA_VERSION = 1
-METRICS_SCHEMA_VERSION = 2
+METRICS_SCHEMA_VERSION = 3
 
 _ARTIFACT_PATH_ATTR: dict[str, str] = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "metrics.json": "metrics_json",
     "removed_content.jsonl": "removed_content_jsonl",
     "run.log": "run_log",
+    "native": "native_dir",
 }
 
-_TEXT_READABLE: frozenset[str] = frozenset({"raw.md", "document.md", "run.log"})
+_TEXT_READABLE: frozenset[str] = frozenset({"raw.md", "document.md", "document.enriched.md", "run.log"})
 
 _ARTIFACT_OUTPUT_KEY: dict[str, str] = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "removed_content.jsonl": "removed_content_jsonl",
     "run.log": "run_log",
@@ -32,6 +35,7 @@ _ARTIFACT_OUTPUT_KEY: dict[str, str] = {
 _ARTIFACT_BYTES_KEY: dict[str, str] = {
     "raw.md": "raw_markdown_bytes",
     "document.md": "clean_markdown_bytes",
+    "document.enriched.md": "enriched_markdown_bytes",
     "document.jsonl": "document_jsonl_bytes",
     "removed_content.jsonl": "removed_content_jsonl_bytes",
 }
@@ -94,6 +98,12 @@ def validate_post_execution(
             continue
         artifact_path = getattr(paths, _ARTIFACT_PATH_ATTR[artifact])
         check_name = f"artifact {artifact}"
+        if artifact == "native":
+            if not artifact_path.exists() or not artifact_path.is_dir():
+                checks.append(make_check(check_name, "fail", "directory not found"))
+            else:
+                checks.append(make_check(check_name, "pass"))
+            continue
         if not artifact_path.exists() or not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
@@ -185,6 +195,12 @@ def validate_resume_candidate(
         if path_attr is None:
             continue
         artifact_path = getattr(paths, path_attr)
+        if artifact == "native":
+            if not artifact_path.exists() or not artifact_path.is_dir():
+                checks.append(make_check(check_name, "fail", "directory not found"))
+            else:
+                checks.append(make_check(check_name, "pass"))
+            continue
         if not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue

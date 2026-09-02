@@ -17,7 +17,7 @@ if ($Force -and (Test-Path $VenvPath)) {
 }
 
 if (-not (Test-Path $VenvPath)) {
-    Invoke-NativeChecked python @('-m', 'venv', $VenvPath)
+    Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
 }
 
 # Install CPU-only PyTorch first (same version as liteparse for model compat)
@@ -28,9 +28,10 @@ Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
 )
 
 # Install paddlepaddle CPU wheel before paddleocr to avoid version conflicts
+# Pin to same version as the paddleocr venv for runtime consistency
 Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
     '-m', 'pip', 'install',
-    'paddlepaddle',
+    'paddlepaddle==3.2.0',
     '-i', 'https://www.paddlepaddle.org.cn/packages/stable/cpu/'
 )
 

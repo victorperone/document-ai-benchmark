@@ -22,14 +22,23 @@ import traceback
 from typing import Any
 
 
-def _load_paddleocr(language: str) -> Any:
+def _load_paddleocr(
+    language: str,
+    det_model_dir: str | None = None,
+    rec_model_dir: str | None = None,
+) -> Any:
     from paddleocr import PaddleOCR  # type: ignore[import]
-    return PaddleOCR(
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        lang=language,
-        show_log=False,
-    )
+    kwargs: dict[str, Any] = {
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "lang": language,
+        "show_log": False,
+    }
+    if det_model_dir:
+        kwargs["det_model_dir"] = det_model_dir
+    if rec_model_dir:
+        kwargs["rec_model_dir"] = rec_model_dir
+    return PaddleOCR(**kwargs)
 
 
 def _load_smolvlm(model_path: str) -> tuple[Any, Any]:
@@ -174,10 +183,12 @@ def main() -> None:
 
     language = config.get("language", "por")
     smolvlm_model_path = config.get("smolvlm_model_path", "")
+    det_model_dir = config.get("det_model_dir") or None
+    rec_model_dir = config.get("rec_model_dir") or None
 
     try:
         print(json.dumps({"status": "loading_ocr"}), flush=True)
-        ocr_engine = _load_paddleocr(language)
+        ocr_engine = _load_paddleocr(language, det_model_dir=det_model_dir, rec_model_dir=rec_model_dir)
 
         print(json.dumps({"status": "loading_vlm"}), flush=True)
         smolvlm_processor, smolvlm_model = _load_smolvlm(smolvlm_model_path)

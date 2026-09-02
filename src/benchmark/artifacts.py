@@ -271,7 +271,9 @@ def finalize_artifacts(
     if enriched_written:
         paths.enriched_markdown.write_text(enriched_text, encoding="utf-8")
 
-    if jsonl_selected:
+    jsonl_available = mapping_complete
+    jsonl_written = jsonl_selected and jsonl_available
+    if jsonl_written:
         write_jsonl(paths.document_jsonl, records)
 
     if removed_selected:
@@ -285,7 +287,7 @@ def finalize_artifacts(
     raw_bytes = _written_size(selected=raw_selected, path=paths.raw_markdown)
     clean_bytes = _written_size(selected=clean_selected, path=paths.clean_markdown)
     enriched_bytes = _written_size(selected=enriched_written, path=paths.enriched_markdown)
-    jsonl_bytes = _written_size(selected=jsonl_selected, path=paths.document_jsonl)
+    jsonl_bytes = _written_size(selected=jsonl_written, path=paths.document_jsonl)
     removed_bytes = _written_size(selected=removed_selected, path=paths.removed_content_jsonl)
 
     empty_output_pages = sum(
@@ -352,13 +354,13 @@ def finalize_artifacts(
             },
             "document_jsonl": {
                 "selected": jsonl_selected,
-                "available": mapping_complete,
-                "present": jsonl_selected and mapping_complete,
-                "records": len(records) if (jsonl_selected and mapping_complete) else None,
-                "bytes": jsonl_bytes,
+                "available": jsonl_available,
+                "present": jsonl_written,
+                "records": len(records) if jsonl_written else None,
+                "bytes": jsonl_bytes if jsonl_written else None,
                 "sha256": (
                     _sha256_of_file(paths.document_jsonl)
-                    if (jsonl_selected and mapping_complete)
+                    if jsonl_written
                     else None
                 ),
             },
@@ -377,7 +379,7 @@ def finalize_artifacts(
 
             "clean_markdown": str(paths.clean_markdown) if clean_selected else None,
 
-            "document_jsonl": str(paths.document_jsonl) if jsonl_selected else None,
+            "document_jsonl": str(paths.document_jsonl) if jsonl_written else None,
 
             "removed_content_jsonl": (
                 str(paths.removed_content_jsonl) if removed_selected else None

@@ -622,10 +622,17 @@ def _text_items_to_text(text_items: list[Any]) -> str:
 def _extract_page_texts(
     result: Any,
     page_count: int,
-) -> list[str]:
-    """Extract per-page text strings from a LiteParse result."""
+) -> tuple[list[str], set[int]]:
+    """Extract per-page text strings from a LiteParse result.
+
+    Returns:
+        texts: one string per page (empty string when page has no text or is missing)
+        mapped_pages: set of page numbers that were actually present in the lib result,
+                      regardless of whether their text was empty.
+    """
     pages = getattr(result, "pages", None) or []
     page_map: dict[int, str] = {}
+    mapped_pages: set[int] = set()
 
     for page in pages:
         page_num = int(getattr(page, "page_num", 0) or 0)
@@ -638,10 +645,12 @@ def _extract_page_texts(
             # Fallback: use any text attribute on the page object
             page_text = str(getattr(page, "text", "") or "")
         page_map[page_num] = page_text
+        mapped_pages.add(page_num)
 
     # If no per-page data is available, page_mapping_status will be
     # set to "unavailable" by the caller — no character-split fabrication.
-    return [page_map.get(i + 1, "") for i in range(page_count)]
+    texts = [page_map.get(i + 1, "") for i in range(page_count)]
+    return texts, mapped_pages
 
 
 class MergeDecision:
@@ -1677,12 +1686,13 @@ def main() -> None:
                         raw_text, encoding="utf-8"
                     )
 
-                native_page_texts = _extract_page_texts(
+                native_page_texts, native_mapped_pages = _extract_page_texts(
                     native_result, page_count
                 )
 
                 # ── Selective OCR for pages that need it ──────────────────
                 ocr_page_texts: dict[int, str] = {}
+                ocr_mapped_pages: set[int] = set()
 
                 if ocr_enabled and pages_needing_ocr:
                     target_str = ",".join(
@@ -1695,7 +1705,7 @@ def main() -> None:
 
                     ocr_parser = _liteparse.LiteParse(**ocr_config)
                     ocr_result = ocr_parser.parse(input_path)
-                    ocr_page_texts_raw = _extract_page_texts(
+                    ocr_page_texts_raw, ocr_mapped_pages = _extract_page_texts(
                         ocr_result, page_count
                     )
                     for pn in pages_needing_ocr:
@@ -1710,10 +1720,12 @@ def main() -> None:
                     page_count,
                 )
 
-                # Determine page mapping status
-                has_per_page_data = any(merged_page_texts)
+                # Determine page mapping status based on actual lib coverage,
+                # not on whether text content is non-empty.
+                all_expected = set(range(1, page_count + 1))
+                effective_mapped = native_mapped_pages | ocr_mapped_pages
                 page_mapping_status = (
-                    "complete" if has_per_page_data else "unavailable"
+                    "complete" if effective_mapped >= all_expected else "unavailable"
                 )
 
                 # ── Collect all images ────────────────────────────────────
@@ -1786,50 +1798,43 @@ def main() -> None:
                         page_image_counter[page_num] = idx + 1
                         rid = _region_id(page_num, idx, file_hash)
 
-                        derived_item: dict[str, Any] = {
-                            "region_id": rid,
-                            "page_number": page_num,
-                            "sha256": file_hash,
-                            "storage_policy": "transient",
-                            "deleted_after_processing": True,
-                            "status": (
-                                "success"
-                                if enrichment.get("kind", "none") != "none"
-                                else "no_content"
-                            ),
-                            "ocr_engine": enrichment.get("engine", "tesseract"),
-                            "has_usable_text": enrichment.get(
-                                "has_usable_text", False
-                            ),
-                        }
-                        if enrichment.get("image_description"):
-                            derived_item["description_model"] = enrichment.get(
-                                "model", ""
-                            )
-                        derived_content_by_page[page_num - 1].append(derived_item)
+                        ocr_text_val = (enrichment.get("ocr_text") or "").strip() or None
+                        desc_val = (enrichment.get("image_description") or "").strip() or None
+                        has_useful_ocr = bool(ocr_text_val and enrichment.get("has_usable_text"))
 
-                        # Insert derived:start block if description available
-                        if (
-                            image_description_enabled
-                            and enrichment.get("image_description")
-                        ):
-                            description = enrichment["image_description"]
-                            ocr_snippet = enrichment.get("ocr_text") or ""
+                        if desc_val:
+                            derived_item: dict[str, Any] = {
+                                "type": "image_description",
+                                "source": "liteparse",
+                                "region_id": rid,
+                                "page_number": page_num,
+                                "sha256": file_hash,
+                                "storage_policy": "transient",
+                                "deleted_after_processing": True,
+                                "status": "success",
+                                "ocr_engine": enrichment.get("engine", "tesseract"),
+                                "description_model": enrichment.get("model", ""),
+                                "ocr_text": ocr_text_val,
+                                "text": desc_val,
+                            }
+                            derived_content_by_page[page_num - 1].append(derived_item)
+
+                            # VLM description block
                             block_lines = [
                                 "<!-- derived:start",
-                                "type=visual_description",
+                                "type=image_description",
                                 f"page={page_num}",
                                 f"region_id={rid}",
                                 "engine=smolvlm",
                                 f"model={enrichment.get('model', '')}",
                                 "-->",
                             ]
-                            if ocr_snippet.strip():
+                            if ocr_text_val:
                                 block_lines.append(
-                                    f"> **Texto OCR:** {ocr_snippet.strip()}"
+                                    f"> **Texto OCR:** {ocr_text_val}"
                                 )
                             block_lines.append(
-                                f"> **Descrição visual:** {description.strip()}"
+                                f"> **Descrição visual:** {desc_val}"
                             )
                             block_lines.append("<!-- derived:end -->")
                             block = "\n".join(block_lines)
@@ -1838,16 +1843,48 @@ def main() -> None:
                                 + "\n\n"
                                 + block
                             )
+                        elif has_useful_ocr:
+                            # OCR-only derived item (no VLM description)
+                            derived_item = {
+                                "type": "image_ocr",
+                                "source": "liteparse",
+                                "region_id": rid,
+                                "page_number": page_num,
+                                "sha256": file_hash,
+                                "storage_policy": "transient",
+                                "deleted_after_processing": True,
+                                "status": "success",
+                                "ocr_engine": enrichment.get("engine", "tesseract"),
+                                "text": ocr_text_val,
+                            }
+                            derived_content_by_page[page_num - 1].append(derived_item)
 
-                has_descriptions = any(
-                    any(
-                        item.get("description_model")
-                        for item in page_items
-                    )
+                            # OCR-only block
+                            block_lines = [
+                                "<!-- derived:start",
+                                "type=image_ocr",
+                                f"page={page_num}",
+                                f"region_id={rid}",
+                                f"engine={enrichment.get('engine', 'tesseract')}",
+                                "-->",
+                                f"> **Texto OCR:** {ocr_text_val}",
+                                "<!-- derived:end -->",
+                            ]
+                            block = "\n".join(block_lines)
+                            enriched_page_texts[page_num - 1] = (
+                                enriched_page_texts[page_num - 1].rstrip()
+                                + "\n\n"
+                                + block
+                            )
+
+                # enriched_page_markdown is available when any derived text was produced
+                # (either VLM description or usable OCR-only)
+                has_derived_text = any(
+                    any(item.get("text") for item in page_items)
                     for page_items in derived_content_by_page
                 )
                 enriched_page_markdown = (
-                    enriched_page_texts if has_descriptions else None
+                    enriched_page_texts if has_derived_text else None
                 )
 
                 # ── Structured output ─────────────────────────────────────

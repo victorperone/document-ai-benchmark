@@ -38,6 +38,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -58,6 +60,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -78,6 +82,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -98,6 +104,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -119,6 +127,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -140,6 +150,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -160,6 +172,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
           "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
           "visual_failure_fatal": false,
           "visual_persist_images": false
         },
@@ -179,7 +193,9 @@
           "visual_enrichment_enabled": true,
           "visual_render_dpi": 150,
           "visual_ocr_language": "por",
-          "visual_description_model": "HuggingFaceTB/SmolVLM-256M-Instruct",
+          "visual_description_model": "models/liteparse/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
+          "visual_det_model_dir": "models/liteparse/paddleocr/det",
+          "visual_rec_model_dir": "models/liteparse/paddleocr/rec",
           "visual_failure_fatal": false,
           "visual_persist_images": false
         }
@@ -1554,6 +1570,36 @@
       [
         "pymupdf",
         "full_cpu_local"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_local"
+      ]
+    ],
+    "windows_enriched_visual_cpu_v3": [
+      [
+        "pymupdf",
+        "full_cpu_local_visual"
       ],
       [
         "docling",

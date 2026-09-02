@@ -72,6 +72,39 @@ _TESSDATA_CANDIDATES = (
 )
 
 
+def _resolve_visual_worker_python(project_root: Path) -> Path:
+    """Resolve the Python executable for the visual-enrichment worker.
+
+    Priority:
+    1. DOCUMENT_AI_VISUAL_WORKER_PYTHON env var (explicit override)
+    2. .venvs/visual-enrichment/Scripts/python.exe (Windows)
+    3. .venvs/visual-enrichment/bin/python (POSIX)
+
+    Raises RuntimeError if visual_enrichment_enabled=true but no worker Python found.
+    """
+    import os
+    env_val = os.environ.get("DOCUMENT_AI_VISUAL_WORKER_PYTHON")
+    if env_val:
+        candidate = Path(env_val)
+        if candidate.is_file():
+            return candidate
+        raise RuntimeError(
+            f"DOCUMENT_AI_VISUAL_WORKER_PYTHON is set but file not found: {env_val}"
+        )
+    for rel in (
+        Path(".venvs") / "visual-enrichment" / "Scripts" / "python.exe",
+        Path(".venvs") / "visual-enrichment" / "bin" / "python",
+    ):
+        candidate = project_root / rel
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "visual-enrichment venv not found. "
+        "Run scripts/windows/setup_visual_enrichment.ps1 or set "
+        "DOCUMENT_AI_VISUAL_WORKER_PYTHON to the correct Python executable."
+    )
+
+
 def _find_tessdata_prefix() -> str | None:
     import os
     prefix_env = os.environ.get("TESSDATA_PREFIX")
@@ -598,6 +631,8 @@ _PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
         "visual_render_dpi",
         "visual_ocr_language",
         "visual_description_model",
+        "visual_det_model_dir",
+        "visual_rec_model_dir",
         "visual_failure_fatal",
         "visual_persist_images",
     }
@@ -873,6 +908,103 @@ def preflight_profile(
                     "pass" if lang_ok else "fail",
                     f"{ocr_language_val}.traineddata",
                 )
+            )
+
+    # --------------------------------------------------
+    # Visual enrichment preflight (when enabled in profile)
+    # --------------------------------------------------
+
+    if profile.get("visual_enrichment_enabled"):
+        _project_root = Path(__file__).parent.parent.parent
+
+        # Worker Python executable
+        try:
+            worker_python = _resolve_visual_worker_python(_project_root)
+            checks.append(
+                make_check(
+                    "visual_worker_python",
+                    "pass",
+                    str(worker_python),
+                )
+            )
+        except RuntimeError as exc:
+            checks.append(
+                make_check("visual_worker_python", "fail", str(exc))
+            )
+            # Cannot validate further without a working Python
+            return make_result(PARSER_NAME, profile_name, checks)
+
+        # SmolVLM model path
+        _model_raw = str(profile.get("visual_description_model", ""))
+        if not _model_raw:
+            checks.append(
+                make_check(
+                    "visual_description_model",
+                    "fail",
+                    "visual_description_model is empty — required when visual_enrichment_enabled=true",
+                )
+            )
+        else:
+            _model_candidate = _project_root / _model_raw
+            _model_resolved = _model_candidate if _model_candidate.is_dir() else Path(_model_raw)
+            if _model_resolved.is_dir():
+                checks.append(
+                    make_check(
+                        "visual_description_model",
+                        "pass",
+                        str(_model_resolved),
+                    )
+                )
+            else:
+                checks.append(
+                    make_check(
+                        "visual_description_model",
+                        "fail",
+                        f"model directory not found: {_model_raw!r} "
+                        f"(checked {_model_resolved})",
+                    )
+                )
+
+        # PaddleOCR det/rec model dirs (optional — only validate if explicitly set)
+        for _dir_key in ("visual_det_model_dir", "visual_rec_model_dir"):
+            _dir_val = str(profile.get(_dir_key) or "")
+            if _dir_val:
+                _dir_candidate = _project_root / _dir_val
+                _dir_resolved = _dir_candidate if _dir_candidate.is_dir() else Path(_dir_val)
+                checks.append(
+                    make_check(
+                        _dir_key,
+                        "pass" if _dir_resolved.is_dir() else "fail",
+                        str(_dir_resolved) if _dir_resolved.is_dir()
+                        else f"directory not found: {_dir_val!r}",
+                    )
+                )
+
+        # Worker imports (subprocess probe — fast, no model loading)
+        try:
+            import subprocess as _sp
+            probe_result = _sp.run(
+                [str(worker_python), "-c",
+                 "from paddleocr import PaddleOCR; "
+                 "from transformers import AutoProcessor; "
+                 "import torch; print('ok')"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if probe_result.returncode == 0 and "ok" in probe_result.stdout:
+                checks.append(make_check("visual_worker_imports", "pass"))
+            else:
+                checks.append(
+                    make_check(
+                        "visual_worker_imports",
+                        "fail",
+                        (probe_result.stderr or probe_result.stdout or "").strip()[:300],
+                    )
+                )
+        except Exception as exc:
+            checks.append(
+                make_check("visual_worker_imports", "fail", str(exc))
             )
 
     return make_result(PARSER_NAME, profile_name, checks)
@@ -1204,29 +1336,59 @@ def main() -> None:
         visual_language = str(
             profile.get("visual_ocr_language", "por")
         )
-        visual_model = str(
-            profile.get("visual_description_model", "")
+        _visual_model_raw = str(profile.get("visual_description_model", ""))
+        _project_root = Path(__file__).parent.parent.parent
+        _model_candidate = _project_root / _visual_model_raw
+        visual_model = (
+            str(_model_candidate.resolve())
+            if _model_candidate.is_dir()
+            else _visual_model_raw
         )
         visual_failure_fatal = bool(
             profile.get("visual_failure_fatal", False)
+        )
+        visual_render_dpi = int(
+            profile.get("visual_render_dpi") or 150
+        )
+        _det_raw = str(profile.get("visual_det_model_dir") or "")
+        _rec_raw = str(profile.get("visual_rec_model_dir") or "")
+        _root = Path(__file__).parent.parent.parent
+        visual_det_model_dir: str | None = None
+        visual_rec_model_dir: str | None = None
+        if _det_raw:
+            _det_cand = _root / _det_raw
+            visual_det_model_dir = str(_det_cand.resolve() if _det_cand.is_dir() else Path(_det_raw))
+        if _rec_raw:
+            _rec_cand = _root / _rec_raw
+            visual_rec_model_dir = str(_rec_cand.resolve() if _rec_cand.is_dir() else Path(_rec_raw))
+
+        worker_python = _resolve_visual_worker_python(
+            Path(__file__).parent.parent.parent
         )
 
         try:
             with VisualWorkerClient(
                 language=visual_language,
                 smolvlm_model_path=visual_model,
+                python_executable=str(worker_python),
                 resource_monitor=monitor,
+                det_model_dir=visual_det_model_dir,
+                rec_model_dir=visual_rec_model_dir,
             ) as worker:
-                enriched_page_markdown, derived_content_by_page, visual_metrics = (
-                    enrich_pages(
-                        document=document,
-                        native_pages=native_pages,
-                        page_texts=page_texts,
-                        worker_client=worker,
-                        language=visual_language,
-                        description_model=visual_model,
+                # Reopen PDF for visual enrichment — main document is already closed
+                import pymupdf as _pymupdf
+                with _pymupdf.open(input_path) as visual_document:
+                    enriched_page_markdown, derived_content_by_page, visual_metrics = (
+                        enrich_pages(
+                            document=visual_document,
+                            native_pages=native_pages,
+                            page_texts=page_texts,
+                            worker_client=worker,
+                            language=visual_language,
+                            description_model=visual_model,
+                            render_dpi=visual_render_dpi,
+                        )
                     )
-                )
         except Exception as _ve:
             visual_metrics = {
                 "enabled": True,

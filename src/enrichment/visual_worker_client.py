@@ -36,6 +36,8 @@ class VisualWorkerClient:
         smolvlm_model_path: str,
         python_executable: str | None = None,
         resource_monitor: Any | None = None,
+        det_model_dir: str | None = None,
+        rec_model_dir: str | None = None,
     ) -> None:
         self._language = language
         self._smolvlm_model_path = smolvlm_model_path
@@ -60,10 +62,14 @@ class VisualWorkerClient:
                 pass
 
         # Send config as first line
-        config = {
+        config: dict[str, Any] = {
             "language": language,
             "smolvlm_model_path": smolvlm_model_path,
         }
+        if det_model_dir:
+            config["det_model_dir"] = det_model_dir
+        if rec_model_dir:
+            config["rec_model_dir"] = rec_model_dir
         self._send_line(json.dumps(config))
 
         # Wait for "ready" signal

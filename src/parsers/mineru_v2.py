@@ -1435,25 +1435,39 @@ def _copy_mineru_bundle(
     _copy_entry(content_list_path, f"{document_id}_content_list.json")
     _copy_entry(middle_path, f"{document_id}_middle.json")
 
-    # Copy assets directory if present
+    # Copy assets directory preserving relative structure so markdown links stay valid.
+    # MinerU typically outputs images/ under native_root/document_id or native_root.
     assets_src = native_root / document_id / "images"
     if not assets_src.is_dir():
-        # MinerU may output assets under a different subpath
         assets_src = native_root / "images"
     if assets_src.is_dir():
-        for asset in assets_src.iterdir():
-            if not asset.is_file():
+        assets_src_resolved = assets_src.resolve()
+        # Determine relative prefix so that destination mirrors source structure.
+        # e.g. assets_src = .../auto/<doc_id>/images  →  copy to native/images/
+        assets_rel_root = assets_src.name  # "images"
+        for asset in assets_src.rglob("*"):
+            if asset.is_symlink() or not asset.is_file():
                 continue
-            dest_asset = assets_dest / asset.name
+            # Safety: ensure asset stays inside assets_src tree
+            try:
+                asset.resolve().relative_to(assets_src_resolved)
+            except ValueError:
+                continue
+            rel_to_assets = asset.relative_to(assets_src)
+            rel_in_bundle = Path(assets_rel_root) / rel_to_assets
+            dest_asset = destination / rel_in_bundle
             dest_asset.parent.mkdir(parents=True, exist_ok=True)
             _shutil.copy2(asset, dest_asset)
             sha = hashlib.sha256(dest_asset.read_bytes()).hexdigest()
             manifest_files.append({
-                "path": f"assets/{asset.name}",
+                "path": rel_in_bundle.as_posix(),
                 "sha256": sha,
                 "size_bytes": dest_asset.stat().st_size,
                 "source": "mineru",
             })
+
+    # Validate relative image links in the official markdown against the bundle
+    _validate_mineru_markdown_links(markdown_path, destination, document_id)
 
     manifest = {
         "schema_version": 1,
@@ -1466,6 +1480,51 @@ def _copy_mineru_bundle(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     return manifest
+
+
+import re as _re
+
+_MD_IMAGE_RE = _re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
+
+
+def _validate_mineru_markdown_links(
+    markdown_path: Path,
+    bundle_root: Path,
+    document_id: str,
+) -> None:
+    """Verify that all relative image links in the MinerU markdown exist in the bundle.
+
+    Raises RuntimeError if any declared local asset is missing after bundle copy.
+    Ignores http/https/data URIs.
+    """
+    try:
+        content = markdown_path.read_text(encoding="utf-8")
+    except Exception:
+        return
+
+    bundle_root_resolved = bundle_root.resolve()
+    missing: list[str] = []
+
+    for match in _MD_IMAGE_RE.finditer(content):
+        href = match.group(1).strip()
+        if href.startswith(("http://", "https://", "data:", "#")):
+            continue
+        # Resolve relative to bundle root (MinerU links are relative to the .md file)
+        candidate = (bundle_root / href).resolve()
+        try:
+            candidate.relative_to(bundle_root_resolved)
+        except ValueError:
+            missing.append(href)
+            continue
+        if not candidate.is_file():
+            missing.append(href)
+
+    if missing:
+        raise RuntimeError(
+            f"MinerU native bundle is incomplete — {len(missing)} image link(s) "
+            f"declared in {document_id}.md are missing from native/: "
+            + ", ".join(missing[:5])
+        )
 
 
 def run_mineru_native(

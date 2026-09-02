@@ -110,6 +110,15 @@ def validate_post_execution(
             if not enriched_present:
                 checks.append(make_check(check_name, "pass"))
                 continue
+        if artifact == "document.jsonl":
+            jsonl_block = (
+                (metrics.get("artifacts") or {}).get("document_jsonl", {})
+                if metrics else {}
+            )
+            jsonl_present = jsonl_block.get("present", True)  # conservative if no metrics
+            if not jsonl_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
         if not artifact_path.exists() or not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
@@ -213,6 +222,13 @@ def validate_resume_candidate(
                 metrics.get("artifacts", {}).get("enriched", {}).get("present", True)
             )
             if not enriched_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
+        if artifact == "document.jsonl":
+            jsonl_present = (
+                metrics.get("artifacts", {}).get("document_jsonl", {}).get("present", True)
+            )
+            if not jsonl_present:
                 checks.append(make_check(check_name, "pass"))
                 continue
         if not artifact_path.is_file():

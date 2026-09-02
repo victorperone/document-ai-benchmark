@@ -995,29 +995,13 @@ def _build_picture_description_blocks(
     ]
 
     picture_index_by_page: list[int] = [0] * page_count
-    has_descriptions = False
+    has_derived = False
 
     for item, _level in document.iterate_items():
         if type(item).__name__ != "PictureItem":
             continue
 
         meta = getattr(item, "meta", None)
-        if meta is None:
-            continue
-
-        description = getattr(meta, "description", None)
-        if description is None:
-            continue
-
-        desc_text = None
-        if hasattr(description, "text"):
-            desc_text = getattr(description, "text", None)
-        elif hasattr(description, "model_dump"):
-            dumped = description.model_dump(mode="json", exclude_none=True)
-            desc_text = dumped.get("text") or dumped.get("content")
-
-        if not desc_text:
-            continue
 
         provenance = getattr(item, "prov", None) or []
         page_numbers = sorted({
@@ -1031,54 +1015,109 @@ def _build_picture_description_blocks(
             continue
 
         self_ref = _cref_value(getattr(item, "self_ref", None))
-        engine_name = "smolvlm"
-        model_name = ""
-        if hasattr(description, "provenance"):
-            prov_obj = description.provenance
-            if prov_obj is not None:
-                engine_name = str(
-                    getattr(prov_obj, "source", None) or engine_name
-                )
-                model_name = str(
-                    getattr(prov_obj, "model_name", None) or model_name
-                )
-
         page_number = page_numbers[0]
         idx = picture_index_by_page[page_number - 1]
         picture_index_by_page[page_number - 1] += 1
         region_id = f"p{page_number}-picture-{idx}"
 
-        derived_entry: dict[str, Any] = {
-            "region_id": region_id,
-            "type": "visual_description",
-            "page_number": page_number,
-            "self_ref": self_ref,
-            "engine": engine_name,
-            "model": model_name,
-            "storage_policy": "inline",
-        }
-        derived_content_by_page[page_number - 1].append(derived_entry)
+        # --- Description ---
+        description = getattr(meta, "description", None) if meta is not None else None
+        if description is not None:
+            desc_text = None
+            if hasattr(description, "text"):
+                desc_text = getattr(description, "text", None)
+            elif hasattr(description, "model_dump"):
+                dumped = description.model_dump(mode="json", exclude_none=True)
+                desc_text = dumped.get("text") or dumped.get("content")
 
-        derived_block = (
-            f"<!-- derived:start\n"
-            f"type=visual_description\n"
-            f"page={page_number}\n"
-            f"region_id={region_id}\n"
-            f"engine={engine_name}\n"
-            f"model={model_name}\n"
-            f"-->\n"
-            f"> **Descrição visual:** {desc_text.strip()}\n"
-            f"<!-- derived:end -->"
-        )
+            if desc_text:
+                engine_name = "smolvlm"
+                model_name = ""
+                if hasattr(description, "provenance"):
+                    prov_obj = description.provenance
+                    if prov_obj is not None:
+                        engine_name = str(
+                            getattr(prov_obj, "source", None) or engine_name
+                        )
+                        model_name = str(
+                            getattr(prov_obj, "model_name", None) or model_name
+                        )
 
-        # Append derived block to the page text
-        base = page_texts[page_number - 1]
-        page_texts[page_number - 1] = (
-            base + ("\n\n" if base else "") + derived_block
-        )
-        has_descriptions = True
+                derived_content_by_page[page_number - 1].append({
+                    "type": "picture_description",
+                    "source": "docling",
+                    "region_id": region_id,
+                    "page_number": page_number,
+                    "self_ref": self_ref,
+                    "engine": engine_name,
+                    "model": model_name,
+                    "storage_policy": "inline",
+                    "text": desc_text.strip(),
+                })
 
-    if not has_descriptions:
+                derived_block = (
+                    f"<!-- derived:start\n"
+                    f"type=picture_description\n"
+                    f"page={page_number}\n"
+                    f"region_id={region_id}\n"
+                    f"engine={engine_name}\n"
+                    f"model={model_name}\n"
+                    f"-->\n"
+                    f"> **Descrição visual:** {desc_text.strip()}\n"
+                    f"<!-- derived:end -->"
+                )
+                base = page_texts[page_number - 1]
+                page_texts[page_number - 1] = (
+                    base + ("\n\n" if base else "") + derived_block
+                )
+                has_derived = True
+
+        # --- Classification ---
+        classification = getattr(meta, "classification", None) if meta is not None else None
+        if classification is not None and hasattr(classification, "model_dump"):
+            payload = classification.model_dump(mode="json", exclude_none=True)
+            # Build human-readable label from classification payload
+            label_parts = []
+            for key in ("predicted_class", "class_name", "label", "category"):
+                val = payload.get(key)
+                if val and isinstance(val, str):
+                    label_parts.append(val)
+                    break
+            conf = payload.get("confidence") or payload.get("score")
+            if conf is not None:
+                try:
+                    label_parts.append(f"{float(conf):.2f}")
+                except (TypeError, ValueError):
+                    pass
+            label_text = " — ".join(label_parts) if label_parts else str(payload)
+
+            derived_content_by_page[page_number - 1].append({
+                "type": "picture_classification",
+                "source": "docling",
+                "region_id": region_id,
+                "page_number": page_number,
+                "self_ref": self_ref,
+                "storage_policy": "inline",
+                "text": label_text,
+                "metadata": payload,
+            })
+
+            classification_block = (
+                f"<!-- derived:start\n"
+                f"type=picture_classification\n"
+                f"page={page_number}\n"
+                f"region_id={region_id}\n"
+                f"-->\n"
+                f"> **Classificação visual:** {label_text}\n"
+                f"<!-- derived:end -->"
+            )
+            base = page_texts[page_number - 1]
+            page_texts[page_number - 1] = (
+                base + ("\n\n" if base else "") + classification_block
+            )
+            has_derived = True
+
+    if not has_derived:
         return None, derived_content_by_page
 
     return list(page_texts), derived_content_by_page

@@ -1,5 +1,5 @@
 paddleocr==3.7.0
-paddlepaddle
+paddlepaddle==3.2.0
 Pillow>=10.3.0
 transformers==5.16.1
 accelerate>=0.27.0

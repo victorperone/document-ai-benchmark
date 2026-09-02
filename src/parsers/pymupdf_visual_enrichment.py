@@ -42,7 +42,7 @@ def _region_id(page_number: int, index: int, image_bytes: bytes) -> str:
     return f"p{page_number}-picture-{index}-{sha_prefix}"
 
 
-def _render_region(document: Any, page_index: int, rect: tuple) -> bytes | None:
+def _render_region(document: Any, page_index: int, rect: tuple, render_dpi: int = _RENDER_DPI) -> bytes | None:
     """Render a page region to PNG bytes in memory. Returns None on failure."""
     try:
         import pymupdf  # type: ignore[import]
@@ -57,7 +57,7 @@ def _render_region(document: Any, page_index: int, rect: tuple) -> bytes | None:
         if region_area / page_area < _MIN_AREA_FRACTION:
             return None
 
-        scale = _RENDER_DPI / 72.0
+        scale = render_dpi / 72.0
         mat = pymupdf.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
         if pix.width < _MIN_WIDTH_PX:
@@ -110,7 +110,8 @@ def enrich_pages(
     worker_client: Any,
     language: str,
     description_model: str,
-) -> tuple[list[str], list[list[dict[str, Any]]], dict[str, Any]]:
+    render_dpi: int = _RENDER_DPI,
+) -> tuple[list[str] | None, list[list[dict[str, Any]]], dict[str, Any]]:
     """Run visual enrichment for all pages.
 
     Returns:
@@ -125,6 +126,7 @@ def enrich_pages(
     regions_detected = 0
     regions_processed = 0
     regions_failed = 0
+    successful_derived_blocks = 0
 
     for page_index, native in enumerate(native_pages):
         page_number = page_index + 1
@@ -146,7 +148,7 @@ def enrich_pages(
                 regions_failed += 1
                 continue
 
-            image_bytes = _render_region(document, page_index, rect)
+            image_bytes = _render_region(document, page_index, rect, render_dpi=render_dpi)
             if image_bytes is None:
                 regions_failed += 1
                 continue
@@ -172,7 +174,12 @@ def enrich_pages(
                 regions_failed += 1
                 continue
 
+            ocr_text_val = resp.ocr_text.strip() if resp.ocr_text else None
+            description_val = resp.description.strip() if resp.description else None
+
             derived_item: dict[str, Any] = {
+                "type": "image_description",
+                "source": "pymupdf",
                 "region_id": rid,
                 "page_number": page_number,
                 "box_class": box.get("class"),
@@ -184,13 +191,15 @@ def enrich_pages(
                 "ocr_model": resp.ocr_model,
                 "description_engine": resp.description_engine,
                 "description_model": resp.description_model,
+                "ocr_text": ocr_text_val or None,
+                "text": description_val or ocr_text_val or None,
             }
             if resp.error_detail:
                 derived_item["error_detail"] = resp.error_detail
 
             derived_by_page[page_index].append(derived_item)
 
-            if resp.status == "success" and (resp.description or resp.ocr_text):
+            if resp.status == "success" and (description_val or ocr_text_val):
                 block = _derived_block(
                     region_id=rid,
                     page_number=page_number,
@@ -200,6 +209,7 @@ def enrich_pages(
                     ocr_engine=resp.ocr_engine,
                 )
                 page_extra_blocks.append(block)
+                successful_derived_blocks += 1
 
             # Explicit cleanup — image_bytes released here
             del image_bytes
@@ -219,4 +229,7 @@ def enrich_pages(
         "images_persisted": 0,
         "temporary_files_created": 0,
     }
-    return enriched_pages, derived_by_page, metrics
+
+    # enriched_page_markdown is None when no useful derived text was produced
+    final_enriched = list(enriched_pages) if successful_derived_blocks > 0 else None
+    return final_enriched, derived_by_page, metrics

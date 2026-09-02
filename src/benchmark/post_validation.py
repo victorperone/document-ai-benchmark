@@ -99,18 +99,27 @@ def validate_post_execution(
         artifact_path = getattr(paths, _ARTIFACT_PATH_ATTR[artifact])
         check_name = f"artifact {artifact}"
         if artifact == "native":
-            if not artifact_path.exists() or not artifact_path.is_dir():
-                checks.append(make_check(check_name, "fail", "directory not found"))
-            else:
-                checks.append(make_check(check_name, "pass"))
+            checks.extend(_validate_native_dir(artifact_path, check_name))
             continue
+        if artifact == "document.enriched.md":
+            enriched_present = (
+                metrics.get("artifacts", {}).get("enriched", {}).get("present", True)
+                if metrics else True
+            )
+            if not enriched_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
         if not artifact_path.exists() or not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
         if artifact in _TEXT_READABLE:
             try:
-                artifact_path.read_text(encoding="utf-8")
-                checks.append(make_check(check_name, "pass"))
+                content = artifact_path.read_text(encoding="utf-8")
+                if artifact == "raw.md" and "<!-- derived:start" in content:
+                    checks.append(make_check(check_name, "fail",
+                        "raw.md contains derived:start marker — contamination detected"))
+                else:
+                    checks.append(make_check(check_name, "pass"))
             except (OSError, UnicodeDecodeError) as exc:
                 checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
         elif artifact == "document.jsonl":
@@ -196,11 +205,13 @@ def validate_resume_candidate(
             continue
         artifact_path = getattr(paths, path_attr)
         if artifact == "native":
-            if not artifact_path.exists() or not artifact_path.is_dir():
-                checks.append(make_check(check_name, "fail", "directory not found"))
-            else:
-                checks.append(make_check(check_name, "pass"))
+            checks.extend(_validate_native_dir(artifact_path, check_name))
             continue
+        if artifact == "document.enriched.md":
+            enriched_present = out_block.get("enriched_markdown") is not None
+            if not enriched_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
         if not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
@@ -257,6 +268,75 @@ def _check_source_inventory(
         return None
     checks.append(make_check(check_name, "pass"))
     return pages
+
+
+def _validate_native_dir(artifact_path: Path, check_name: str) -> list[dict]:
+    checks: list[dict] = []
+    if not artifact_path.is_dir():
+        checks.append(make_check(check_name, "fail", "directory not found"))
+        return checks
+
+    manifest_path = artifact_path / "manifest.json"
+    if not manifest_path.is_file():
+        checks.append(make_check(check_name, "fail", "manifest.json not found"))
+        return checks
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        checks.append(make_check(check_name, "fail", f"manifest.json unreadable: {exc}"))
+        return checks
+
+    if not isinstance(manifest.get("schema_version"), int):
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: schema_version missing or not int"))
+        return checks
+    if manifest.get("bundle_status") not in {"unavailable", "partial", "complete"}:
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: invalid bundle_status"))
+        return checks
+    if not isinstance(manifest.get("files"), list):
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: files must be list"))
+        return checks
+
+    native_root = artifact_path.resolve()
+    for i, entry in enumerate(manifest["files"]):
+        if not isinstance(entry, dict):
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: not a dict"))
+            return checks
+        rel = entry.get("path", "")
+        rel_path = Path(rel) if rel else None
+        if not rel or (rel_path is not None and rel_path.is_absolute()):
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: path must be non-empty relative"))
+            return checks
+        candidate = (artifact_path / rel).resolve()
+        if candidate == native_root or native_root not in candidate.parents:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: path escapes native/: {rel!r}"))
+            return checks
+        if not candidate.is_file():
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: declared file missing: {rel!r}"))
+            return checks
+        declared_size = entry.get("size_bytes")
+        if declared_size is not None and candidate.stat().st_size != declared_size:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: size mismatch for {rel!r}"))
+            return checks
+        declared_sha256 = entry.get("sha256")
+        if declared_sha256 is not None:
+            import hashlib as _hashlib
+            actual = _hashlib.sha256(candidate.read_bytes()).hexdigest()
+            if actual != declared_sha256:
+                checks.append(make_check(check_name, "fail",
+                    f"manifest.json files[{i}]: sha256 mismatch for {rel!r}"))
+                return checks
+
+    checks.append(make_check(check_name, "pass"))
+    return checks
 
 
 def _load_and_check_metrics(
@@ -338,6 +418,12 @@ def _load_and_check_metrics(
                 checks.append(make_check(f"metrics output.{out_key}", "warn",
                     "field set for artifact not in selection"))
         else:
+            if artifact == "document.enriched.md":
+                enriched_present = (
+                    metrics.get("artifacts", {}).get("enriched", {}).get("present", True)
+                )
+                if not enriched_present:
+                    continue
             val = out_block.get(out_key)
             if not isinstance(val, str) or not val:
                 checks.append(make_check(f"metrics output.{out_key}", "fail",

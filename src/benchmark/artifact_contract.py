@@ -3,13 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+VALID_PAGE_MAPPING_STATUS: frozenset[str] = frozenset({"complete", "unavailable"})
+# "partial" não é suportado — requer PageMarkdown(page_number, markdown) para mapeamento inequívoco.
+
+VALID_RAW_ORIGIN_KIND: frozenset[str] = frozenset({
+    "parser_native_exact",
+    "parser_native_per_page_join",
+    "adapter_assembled_declared",
+    "unavailable",
+})
+
 
 @dataclass(frozen=True)
 class ParserArtifactInput:
     native_markdown: str | None
     source_page_markdown: list[str] | None
     enriched_page_markdown: list[str] | None
-    page_mapping_status: str  # "complete" | "partial" | "unavailable"
+    page_mapping_status: str  # "complete" | "unavailable" — see VALID_PAGE_MAPPING_STATUS
     parser_page_elements: list[dict[str, Any]]
     parser_native_pages: list[dict[str, Any]]
     derived_content_by_page: list[list[dict[str, Any]]]

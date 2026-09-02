@@ -34,6 +34,7 @@ def build_token_metrics(
     *,
     raw_text: str,
     clean_text: str,
+    enriched_text: str | None = None,
     page_count: int,
     tokenizer_name: str,
     removed_records: list[
@@ -51,6 +52,12 @@ def build_token_metrics(
 
     clean_tokens = counter.count(
         clean_text
+    )
+
+    enriched_tokens = (
+        counter.count(enriched_text)
+        if enriched_text is not None
+        else None
     )
 
     tokens_removed = max(
@@ -111,6 +118,12 @@ def build_token_metrics(
             "clean_markdown_tokens": (
                 clean_tokens
             ),
+
+            "enriched_markdown_tokens": (
+                enriched_tokens
+            ),
+
+            "derived_tokens": None,
 
             "tokens_removed": (
                 tokens_removed

@@ -145,6 +145,7 @@ def make_valid_job_output(
     pages: int = 3,
     artifact_policy: ArtifactPolicy | None = None,
     removed_records: int = 2,
+    enriched_available: bool = True,
 ) -> tuple[Path, Path]:
     """Write a complete valid job output structure under output_root.
 
@@ -204,7 +205,7 @@ def make_valid_job_output(
         p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         written["removed_content.jsonl"] = p
 
-    if artifact_policy.includes("document.enriched.md"):
+    if artifact_policy.includes("document.enriched.md") and enriched_available:
         p = out_dir / "document.enriched.md"
         p.write_text("# Enriched document\n", encoding="utf-8")
         written["document.enriched.md"] = p
@@ -212,6 +213,16 @@ def make_valid_job_output(
     if artifact_policy.includes("native"):
         native_dir = out_dir / "native"
         native_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "schema_version": 1,
+            "parser": parser,
+            "profile": profile,
+            "bundle_status": "unavailable",
+            "files": [],
+        }
+        (native_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
         written["native"] = native_dir
 
     artifact_sel = artifact_policy.as_list()
@@ -219,12 +230,17 @@ def make_valid_job_output(
     for artifact in artifact_sel:
         out_key = _ARTIFACT_OUTPUT_KEY.get(artifact)
         if out_key:
-            out_block[out_key] = f"/outputs/{parser}/{doc_stem}/{profile}/{artifact}"
+            if artifact == "document.enriched.md" and not enriched_available:
+                out_block[out_key] = None
+            else:
+                out_block[out_key] = f"/outputs/{parser}/{doc_stem}/{profile}/{artifact}"
         bytes_key = _ARTIFACT_BYTES_KEY.get(artifact)
         if bytes_key and artifact in written:
             out_block[bytes_key] = written[artifact].stat().st_size
 
     if artifact_policy.includes("metrics.json"):
+        enriched_selected = artifact_policy.includes("document.enriched.md")
+        enriched_present = enriched_selected and enriched_available
         metrics_data = {
             "benchmark": {"schema_version": 3},
             "run": {
@@ -250,6 +266,13 @@ def make_valid_job_output(
                 "removed_records": removed_records
                 if artifact_policy.includes("removed_content.jsonl")
                 else 0,
+            },
+            "artifacts": {
+                "enriched": {
+                    "selected": enriched_selected,
+                    "available": enriched_available,
+                    "present": enriched_present,
+                },
             },
         }
         mp = out_dir / "metrics.json"

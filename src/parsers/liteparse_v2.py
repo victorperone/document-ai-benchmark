@@ -362,11 +362,15 @@ def _describe_image_with_smolvlm(
 
 
 def _image_file_hash(path: Path) -> str:
-    digest = hashlib.md5()
+    digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _region_id(page_num: int, index: int, file_hash: str) -> str:
+    return f"p{page_num}-image-{index}-{file_hash[:8]}"
 
 
 def _process_document_images(
@@ -635,33 +639,85 @@ def _extract_page_texts(
             page_text = str(getattr(page, "text", "") or "")
         page_map[page_num] = page_text
 
-    # If no per-page data, fall back to splitting result.text
-    if not page_map:
-        full_text = str(getattr(result, "text", "") or "")
-        if full_text and page_count > 0:
-            chunk = len(full_text) // page_count
-            for i in range(page_count):
-                start = i * chunk
-                end = start + chunk if i < page_count - 1 else len(full_text)
-                page_map[i + 1] = full_text[start:end]
-
+    # If no per-page data is available, page_mapping_status will be
+    # set to "unavailable" by the caller — no character-split fabrication.
     return [page_map.get(i + 1, "") for i in range(page_count)]
+
+
+class MergeDecision:
+    keep_native = "keep_native"
+    replace_empty_page = "replace_empty_page"
+    replace_garbled_page = "replace_garbled_page"
+    merge_missing_regions = "merge_missing_regions"
+    derived_only = "derived_only"
+
+
+def _alnum_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    alnum = sum(1 for c in text if c.isalnum())
+    return alnum / len(text)
+
+
+def _replacement_char_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return text.count("�") / len(text)
+
+
+def _decide_merge(native: str, ocr: str) -> str:
+    """Decide how to combine native and OCR text for a page."""
+    native_stripped = native.strip()
+    ocr_stripped = ocr.strip()
+
+    if not native_stripped:
+        return MergeDecision.replace_empty_page
+
+    if _replacement_char_ratio(native_stripped) > 0.05:
+        return MergeDecision.replace_garbled_page
+
+    if _alnum_ratio(native_stripped) < 0.15:
+        return MergeDecision.replace_garbled_page
+
+    # Native is good — only use OCR if it is substantially longer
+    ocr_longer = len(ocr_stripped) > len(native_stripped) * 1.3
+    if ocr_longer and _alnum_ratio(ocr_stripped) >= _alnum_ratio(native_stripped):
+        return MergeDecision.merge_missing_regions
+
+    return MergeDecision.keep_native
 
 
 def _merge_page_texts(
     native_texts: list[str],
     ocr_texts_by_page: dict[int, str],
     page_count: int,
-) -> list[str]:
-    """Merge native and OCR texts, preferring OCR for pages that needed it."""
+) -> tuple[list[str], list[str]]:
+    """Merge native and OCR texts using MergeDecision policy.
+
+    Returns (merged_texts, decisions) where decisions[i] is the MergeDecision
+    applied to page i+1.
+    """
     merged: list[str] = []
+    decisions: list[str] = []
     for i in range(page_count):
         page_num = i + 1
-        if page_num in ocr_texts_by_page:
-            merged.append(ocr_texts_by_page[page_num])
+        native = native_texts[i] if i < len(native_texts) else ""
+        if page_num not in ocr_texts_by_page:
+            merged.append(native)
+            decisions.append(MergeDecision.keep_native)
+            continue
+        ocr = ocr_texts_by_page[page_num]
+        decision = _decide_merge(native, ocr)
+        if decision in (
+            MergeDecision.replace_empty_page,
+            MergeDecision.replace_garbled_page,
+            MergeDecision.merge_missing_regions,
+        ):
+            merged.append(ocr)
         else:
-            merged.append(native_texts[i] if i < len(native_texts) else "")
-    return merged
+            merged.append(native)
+        decisions.append(decision)
+    return merged, decisions
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +943,7 @@ def _build_metrics(
     resources: dict[str, Any],
     tokenizer_name: str,
     artifact_selected_list: list[str],
+    merge_decisions: list[str] | None = None,
     run_log_path: Path | None,
     metrics_json_path: Path | None,
 ) -> dict[str, Any]:
@@ -985,6 +1042,18 @@ def _build_metrics(
                 "pages_needing_ocr": len(pages_needing_ocr),
                 "pages_rotated": len(pages_rotated),
                 "ocr_reason_counts": dict(reason_counter),
+                "pages_replaced_empty": sum(
+                    1 for d in (merge_decisions or [])
+                    if d == MergeDecision.replace_empty_page
+                ),
+                "pages_replaced_garbled": sum(
+                    1 for d in (merge_decisions or [])
+                    if d == MergeDecision.replace_garbled_page
+                ),
+                "pages_kept_native": sum(
+                    1 for d in (merge_decisions or [])
+                    if d == MergeDecision.keep_native
+                ),
                 "images_detected": images_detected,
                 "images_extracted": images_extracted,
                 "images_ocr_attempted": images_ocr_attempted,
@@ -1634,11 +1703,17 @@ def main() -> None:
                         if idx < len(ocr_page_texts_raw):
                             ocr_page_texts[pn] = ocr_page_texts_raw[idx]
 
-                # Merge native + OCR page texts
-                merged_page_texts = _merge_page_texts(
+                # Merge native + OCR page texts (with MergeDecision policy)
+                merged_page_texts, merge_decisions = _merge_page_texts(
                     native_page_texts,
                     ocr_page_texts,
                     page_count,
+                )
+
+                # Determine page mapping status
+                has_per_page_data = any(merged_page_texts)
+                page_mapping_status = (
+                    "complete" if has_per_page_data else "unavailable"
                 )
 
                 # ── Collect all images ────────────────────────────────────
@@ -1658,7 +1733,11 @@ def main() -> None:
                         ocr_language=ocr_language,
                     )
 
-                # ── Build page texts with enrichments ─────────────────────
+                # ── Build source page texts (normalization input) ──────────
+                # source_page_markdown = merged text without derived blocks
+                source_page_texts: list[str] = list(merged_page_texts)
+
+                # ── Build page texts with enrichments (for document.md base)
                 page_texts: list[str] = []
                 for i, text in enumerate(merged_page_texts):
                     page_num = i + 1
@@ -1672,6 +1751,104 @@ def main() -> None:
                         image_enrichments,
                     )
                     page_texts.append(enriched)
+
+                # ── Build derived_content_by_page and enriched_page_markdown
+                derived_content_by_page: list[list[dict[str, Any]]] = [
+                    [] for _ in range(page_count)
+                ]
+                enriched_page_texts: list[str] = list(page_texts)
+                image_description_enabled = bool(
+                    profile.get("image_description", False)
+                )
+
+                if image_enrichments:
+                    # Track per-image index per page for stable region_id
+                    page_image_counter: dict[int, int] = {}
+                    for img_obj in all_images:
+                        page_num = int(
+                            getattr(img_obj, "page_num", 0) or 0
+                        )
+                        if page_num < 1 or page_num > page_count:
+                            continue
+                        img_path_attr = getattr(img_obj, "path", None)
+                        img_name = getattr(img_obj, "name", None) or ""
+                        if img_path_attr:
+                            key = str(img_path_attr)
+                        elif img_name and image_output_dir.exists():
+                            key = str(image_output_dir / img_name)
+                        else:
+                            continue
+                        enrichment = image_enrichments.get(key)
+                        if not enrichment:
+                            continue
+                        file_hash = enrichment.get("hash", "")
+                        idx = page_image_counter.get(page_num, 0)
+                        page_image_counter[page_num] = idx + 1
+                        rid = _region_id(page_num, idx, file_hash)
+
+                        derived_item: dict[str, Any] = {
+                            "region_id": rid,
+                            "page_number": page_num,
+                            "sha256": file_hash,
+                            "storage_policy": "transient",
+                            "deleted_after_processing": True,
+                            "status": (
+                                "success"
+                                if enrichment.get("kind", "none") != "none"
+                                else "no_content"
+                            ),
+                            "ocr_engine": enrichment.get("engine", "tesseract"),
+                            "has_usable_text": enrichment.get(
+                                "has_usable_text", False
+                            ),
+                        }
+                        if enrichment.get("image_description"):
+                            derived_item["description_model"] = enrichment.get(
+                                "model", ""
+                            )
+                        derived_content_by_page[page_num - 1].append(derived_item)
+
+                        # Insert derived:start block if description available
+                        if (
+                            image_description_enabled
+                            and enrichment.get("image_description")
+                        ):
+                            description = enrichment["image_description"]
+                            ocr_snippet = enrichment.get("ocr_text") or ""
+                            block_lines = [
+                                "<!-- derived:start",
+                                "type=visual_description",
+                                f"page={page_num}",
+                                f"region_id={rid}",
+                                "engine=smolvlm",
+                                f"model={enrichment.get('model', '')}",
+                                "-->",
+                            ]
+                            if ocr_snippet.strip():
+                                block_lines.append(
+                                    f"> **Texto OCR:** {ocr_snippet.strip()}"
+                                )
+                            block_lines.append(
+                                f"> **Descrição visual:** {description.strip()}"
+                            )
+                            block_lines.append("<!-- derived:end -->")
+                            block = "\n".join(block_lines)
+                            enriched_page_texts[page_num - 1] = (
+                                enriched_page_texts[page_num - 1].rstrip()
+                                + "\n\n"
+                                + block
+                            )
+
+                has_descriptions = any(
+                    any(
+                        item.get("description_model")
+                        for item in page_items
+                    )
+                    for page_items in derived_content_by_page
+                )
+                enriched_page_markdown = (
+                    enriched_page_texts if has_descriptions else None
+                )
 
                 # ── Structured output ─────────────────────────────────────
                 parser_page_elements, parser_native_pages = (
@@ -1691,15 +1868,17 @@ def main() -> None:
     pipeline_seconds = perf_counter() - pipeline_started
 
     artifact_input = ParserArtifactInput(
-        native_markdown=join_page_texts(page_texts),
-        source_page_markdown=page_texts,
-        enriched_page_markdown=None,
-        page_mapping_status="complete",
+        native_markdown=raw_text,
+        source_page_markdown=(
+            source_page_texts if page_mapping_status == "complete" else None
+        ),
+        enriched_page_markdown=enriched_page_markdown,
+        page_mapping_status=page_mapping_status,
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
-        derived_content_by_page=[[] for _ in page_texts],
-        raw_origin_kind="adapter_assembled_declared",
-        raw_origin_details="page_texts join",
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="parser_native_exact",
+        raw_origin_details="result.text",
     )
 
     artifact_result = finalize_artifacts(
@@ -1731,6 +1910,7 @@ def main() -> None:
         resources=resources,
         tokenizer_name=tokenizer_name,
         artifact_selected_list=artifact_policy.as_list(),
+        merge_decisions=merge_decisions,
         run_log_path=(
             paths.run_log
             if artifact_policy.includes("run.log")

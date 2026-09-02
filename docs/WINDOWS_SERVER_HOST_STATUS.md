@@ -662,8 +662,45 @@ Alterações implementadas:
 - Métricas: `table_merge_enabled`, `native_bundle_valid` adicionados a
   `mineru_native`
 
+### Commits 7+8+9 concluídos (unificados) — LiteParse completo
+
+```text
+fix(liteparse): preserve native markdown, merge policy and visual enrichment contract
+```
+
+Alterações implementadas:
+
+**Native markdown (Commit 7):**
+- `ParserArtifactInput.native_markdown = raw_text` (= `result.text` direto)
+- `raw_origin_kind = "parser_native_exact"`, `raw_origin_details = "result.text"`
+- Removido fallback de divisão por caracteres em `_extract_page_texts`
+- `page_mapping_status = "unavailable"` quando não há dados por página
+
+**Merge policy (Commit 8):**
+- Adicionada classe `MergeDecision` com valores:
+  `keep_native`, `replace_empty_page`, `replace_garbled_page`,
+  `merge_missing_regions`, `derived_only`
+- `_decide_merge()`: compara alphanum ratio, replacement char ratio e
+  tamanho relativo antes de aceitar OCR
+- `_merge_page_texts()` retorna `(texts, decisions)` — substitui OCR
+  somente quando nativo é vazio, corrompido, ou OCR é substancialmente
+  melhor
+- Métricas: `pages_replaced_empty`, `pages_replaced_garbled`,
+  `pages_kept_native` adicionadas ao bloco `ocr`
+
+**Visual enrichment contract (Commit 9):**
+- `_image_file_hash` migrado de MD5 para SHA-256
+- `_region_id()` adicionado: `p<page>-image-<index>-<sha256_prefix>`
+- `derived_content_by_page` construído por página com `storage_policy=transient`,
+  `deleted_after_processing=true`, SHA-256 por imagem — sem paths temporários
+- `enriched_page_markdown` populado com blocos `derived:start` quando
+  `image_description=true` e descrição SmolVLM disponível
+- `source_page_texts` separado de `page_texts` (textos enriquecidos)
+  para que `source_page_markdown` na normalização não contenha blocos derivados
+
 ### Próximo passo
 
 ```text
-Commit 7: refactor(liteparse): preserve native markdown and page contract
+Fase concluída — todos os Commits 1-9 implementados.
+Aguardando validação no Windows Server.
 ```

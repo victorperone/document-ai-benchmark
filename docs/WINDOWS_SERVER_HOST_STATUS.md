@@ -698,9 +698,34 @@ Alterações implementadas:
 - `source_page_texts` separado de `page_texts` (textos enriquecidos)
   para que `source_page_markdown` na normalização não contenha blocos derivados
 
+---
+
+## Etapa 2 — Docling, PaddleOCR, Unstructured, Xberg
+
+### Commit D1+D2 — `feat(docling): heading hierarchy and table engine selection`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivo alterado:** `src/parsers/docling_v2.py`, `config/benchmark_profiles.json`
+
+**Heading hierarchy (D1):**
+- Bloco `HeadingHierarchyOptions` adicionado em `_build_pipeline_options()`
+  com import guardado por `try/except ImportError` (compatibilidade WSL sem docling)
+- Parâmetros configuráveis via perfil: `heading_hierarchy`, `heading_use_bookmarks`,
+  `heading_use_numbering`, `heading_use_style`, `heading_use_font_style`,
+  `heading_style_size_tolerance`, `heading_max_level`, `heading_bookmark_match_threshold`
+- Quando `heading_use_style=true`: `generate_parsed_pages=True` ativado automaticamente
+- Check `heading hierarchy support` adicionado ao `preflight_profile()`
+- Todos os 6 perfis do docling receberam as novas chaves com valores padrão conservadores
+
+**Table engine selection (D2):**
+- Nova chave `table_engine` nos perfis: `"tableformer_v1"` (padrão) ou `"tableformer_v2"`
+- Quando `table_engine="tableformer_v2"`: usa `TableStructureV2Options` com import guardado
+- Check `table engine v2 support` adicionado ao `preflight_profile()`
+- Novo perfil `ocr_auto_table_v2`: idêntico a `ocr_auto` mas com `table_engine="tableformer_v2"`
+
 ### Próximo passo
 
 ```text
-Fase concluída — todos os Commits 1-9 implementados.
-Aguardando validação no Windows Server.
+Implementar Commit D3+D4 (Docling enriched markdown e testes).
 ```

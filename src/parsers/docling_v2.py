@@ -1657,6 +1657,65 @@ def _build_pipeline_options(
         )
     )
 
+    # Heading hierarchy — introduced in docling ≥2.15; guarded import so the
+    # adapter compiles without docling installed (WSL dev environment).
+    if bool(profile.get("heading_hierarchy", False)):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                HeadingHierarchyOptions,
+            )
+            heading_opts = HeadingHierarchyOptions(
+                enabled=True,
+                use_bookmarks=bool(
+                    profile.get("heading_use_bookmarks", True)
+                ),
+                use_numbering=bool(
+                    profile.get("heading_use_numbering", True)
+                ),
+                use_style=bool(
+                    profile.get("heading_use_style", True)
+                ),
+                use_font_style=bool(
+                    profile.get("heading_use_font_style", True)
+                ),
+                style_size_tolerance=float(
+                    profile.get("heading_style_size_tolerance", 0.05)
+                ),
+                max_level=int(
+                    profile.get("heading_max_level", 6)
+                ),
+                bookmark_match_threshold=float(
+                    profile.get("heading_bookmark_match_threshold", 0.8)
+                ),
+            )
+            options.heading_hierarchy_options = heading_opts
+            # use_style requires parsed page images for font-size analysis
+            if bool(profile.get("heading_use_style", True)):
+                options.generate_parsed_pages = True
+        except ImportError:
+            pass  # not available in this docling version; skip silently
+
+    # TableFormer V2 — experimental; only activated when table_engine is
+    # explicitly set to "tableformer_v2" in the profile.
+    table_engine = str(
+        profile.get("table_engine", "tableformer_v1")
+    )
+    if (
+        options.do_table_structure
+        and table_engine == "tableformer_v2"
+    ):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                TableStructureV2Options,
+            )
+            options.table_structure_options = TableStructureV2Options(
+                do_cell_matching=bool(
+                    profile.get("table_cell_matching", True)
+                )
+            )
+        except ImportError:
+            pass  # V2 not available; V1 options already set above
+
     _configure_picture_description(
         options,
         profile,
@@ -1957,6 +2016,61 @@ def preflight_profile(
                 "pass" if tableformer_ok else "fail",
                 tableformer_detail,
             )
+        )
+
+    # --------------------------------------------------
+    # Heading hierarchy
+    # --------------------------------------------------
+
+    if bool(profile.get("heading_hierarchy", False)):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                HeadingHierarchyOptions,
+            )
+            checks.append(
+                make_check(
+                    "heading hierarchy support",
+                    "pass",
+                    "HeadingHierarchyOptions available",
+                )
+            )
+        except ImportError:
+            checks.append(
+                make_check(
+                    "heading hierarchy support",
+                    "fail",
+                    "HeadingHierarchyOptions not available in this docling version",
+                )
+            )
+
+    # --------------------------------------------------
+    # Table engine
+    # --------------------------------------------------
+
+    table_engine_str = str(profile.get("table_engine", "tableformer_v1"))
+    if table_engine_str == "tableformer_v2":
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                TableStructureV2Options,
+            )
+            checks.append(
+                make_check(
+                    "table engine v2 support",
+                    "pass",
+                    "TableStructureV2Options available",
+                )
+            )
+        except ImportError:
+            checks.append(
+                make_check(
+                    "table engine v2 support",
+                    "fail",
+                    "TableStructureV2Options not available in this docling version",
+                )
+            )
+    else:
+        checks.append(
+            make_check("table engine", "pass", table_engine_str)
         )
 
     # --------------------------------------------------

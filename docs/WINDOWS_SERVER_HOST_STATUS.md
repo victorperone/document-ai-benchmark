@@ -724,8 +724,36 @@ Alterações implementadas:
 - Check `table engine v2 support` adicionado ao `preflight_profile()`
 - Novo perfil `ocr_auto_table_v2`: idêntico a `ocr_auto` mas com `table_engine="tableformer_v2"`
 
+### Commit D3+D4 — `feat(docling): picture description enrichment and profile tests`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivo alterado:** `src/parsers/docling_v2.py`
+**Arquivos novos:** `parser_tests/docling/test_heading_table_profiles.py`, `parser_tests/docling/test_enriched_markdown.py`
+
+**Enriched markdown (D3):**
+- Nova função `_build_picture_description_blocks()`: itera `PictureItem` com `meta.description`,
+  constrói blocos `derived:start` por página com `region_id=p<page>-picture-<index>`
+- `build_docling_page_contract()` estendida para retornar também
+  `(enriched_page_markdown, derived_content_by_page)` — 7 valores no total
+- Nota: `enriched_page_texts` é uma cópia de `page_texts` — a lista original
+  (fonte de `source_page_markdown`) nunca recebe blocos `derived:start`
+- `ParserArtifactInput` atualizado:
+  - `enriched_page_markdown` passa o resultado (ou `None` se não há descrições)
+  - `derived_content_by_page` passa os metadados por página
+  - `raw_origin_kind="parser_native_per_page_join"` (era `"adapter_assembled_declared"`)
+  - `raw_origin_details="export_to_markdown per page"`
+
+**Testes (D4):**
+- `test_heading_table_profiles.py`: verifica presença de todas as chaves de heading
+  e table_engine em todos os 7 perfis; valores válidos; `ocr_auto_table_v2` usa v2
+- `test_enriched_markdown.py`: 10 casos com stubs — sem `torch`/`docling` instalado;
+  testa format de `region_id`, múltiplas imagens por página, texto nativo preservado,
+  imagem sem proveniência ignorada, `derived:start` não contamina `source_page_texts`
+- Ambos os arquivos só rodam no Windows Server (dependência `torch` no import do adapter)
+
 ### Próximo passo
 
 ```text
-Implementar Commit D3+D4 (Docling enriched markdown e testes).
+Implementar Commit P1+P2 (PaddleOCR CPU runtime e native results).
 ```

@@ -980,6 +980,110 @@ def _summary_from_counts(
     }
 
 
+def _build_picture_description_blocks(
+    document: Any,
+    page_count: int,
+    page_texts: list[str],
+) -> tuple[list[str] | None, list[list[dict[str, Any]]]]:
+    """Build enriched_page_markdown and derived_content_by_page from picture descriptions.
+
+    Returns (enriched_page_markdown, derived_content_by_page).
+    enriched_page_markdown is None when no descriptions exist.
+    """
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in range(page_count)
+    ]
+
+    picture_index_by_page: list[int] = [0] * page_count
+    has_descriptions = False
+
+    for item, _level in document.iterate_items():
+        if type(item).__name__ != "PictureItem":
+            continue
+
+        meta = getattr(item, "meta", None)
+        if meta is None:
+            continue
+
+        description = getattr(meta, "description", None)
+        if description is None:
+            continue
+
+        desc_text = None
+        if hasattr(description, "text"):
+            desc_text = getattr(description, "text", None)
+        elif hasattr(description, "model_dump"):
+            dumped = description.model_dump(mode="json", exclude_none=True)
+            desc_text = dumped.get("text") or dumped.get("content")
+
+        if not desc_text:
+            continue
+
+        provenance = getattr(item, "prov", None) or []
+        page_numbers = sorted({
+            int(prov.page_no)
+            for prov in provenance
+            if getattr(prov, "page_no", None) is not None
+            and 1 <= int(prov.page_no) <= page_count
+        })
+
+        if not page_numbers:
+            continue
+
+        self_ref = _cref_value(getattr(item, "self_ref", None))
+        engine_name = "smolvlm"
+        model_name = ""
+        if hasattr(description, "provenance"):
+            prov_obj = description.provenance
+            if prov_obj is not None:
+                engine_name = str(
+                    getattr(prov_obj, "source", None) or engine_name
+                )
+                model_name = str(
+                    getattr(prov_obj, "model_name", None) or model_name
+                )
+
+        page_number = page_numbers[0]
+        idx = picture_index_by_page[page_number - 1]
+        picture_index_by_page[page_number - 1] += 1
+        region_id = f"p{page_number}-picture-{idx}"
+
+        derived_entry: dict[str, Any] = {
+            "region_id": region_id,
+            "type": "visual_description",
+            "page_number": page_number,
+            "self_ref": self_ref,
+            "engine": engine_name,
+            "model": model_name,
+            "storage_policy": "inline",
+        }
+        derived_content_by_page[page_number - 1].append(derived_entry)
+
+        derived_block = (
+            f"<!-- derived:start\n"
+            f"type=visual_description\n"
+            f"page={page_number}\n"
+            f"region_id={region_id}\n"
+            f"engine={engine_name}\n"
+            f"model={model_name}\n"
+            f"-->\n"
+            f"> **Descrição visual:** {desc_text.strip()}\n"
+            f"<!-- derived:end -->"
+        )
+
+        # Append derived block to the page text
+        base = page_texts[page_number - 1]
+        page_texts[page_number - 1] = (
+            base + ("\n\n" if base else "") + derived_block
+        )
+        has_descriptions = True
+
+    if not has_descriptions:
+        return None, derived_content_by_page
+
+    return list(page_texts), derived_content_by_page
+
+
 def build_docling_page_contract(
     document: Any,
     page_count: int,
@@ -989,6 +1093,8 @@ def build_docling_page_contract(
     list[dict[str, Any]],
     dict[str, Any],
     set[int],
+    list[str] | None,
+    list[list[dict[str, Any]]],
 ]:
     page_texts: list[str] = []
     native_pages: list[dict[str, Any]] = [
@@ -1121,12 +1227,24 @@ def build_docling_page_contract(
         global_counts
     )
 
+    enriched_page_texts = list(page_texts)
+    (
+        enriched_page_markdown,
+        derived_content_by_page,
+    ) = _build_picture_description_blocks(
+        document,
+        page_count,
+        enriched_page_texts,
+    )
+
     return (
         page_texts,
         parser_page_elements,
         native_pages,
         parser_summary,
         observed_pages,
+        enriched_page_markdown,
+        derived_content_by_page,
     )
 
 
@@ -2483,6 +2601,8 @@ def main() -> None:
         parser_native_pages,
         parser_summary,
         observed_pages,
+        enriched_page_markdown,
+        derived_content_by_page,
     ) = build_docling_page_contract(
         document,
         page_count,
@@ -2491,13 +2611,13 @@ def main() -> None:
     artifact_input = ParserArtifactInput(
         native_markdown=join_page_texts(page_texts),
         source_page_markdown=page_texts,
-        enriched_page_markdown=None,
+        enriched_page_markdown=enriched_page_markdown,
         page_mapping_status="complete",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
-        derived_content_by_page=[[] for _ in page_texts],
-        raw_origin_kind="adapter_assembled_declared",
-        raw_origin_details="page_texts join",
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="parser_native_per_page_join",
+        raw_origin_details="export_to_markdown per page",
     )
 
     artifact_result = finalize_artifacts(

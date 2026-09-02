@@ -57,6 +57,13 @@ _PROFILE_KEYS = frozenset({
     "strip_repeating_text", "include_watermarks",
     # Layout
     "layout_enabled",
+    "layout_strategy", "layout_apply_heuristics",
+    "layout_acceleration_provider", "layout_confidence_threshold",
+    "layout_enable_chart_understanding",
+    # Table / markdown diagnostics
+    "allow_single_column_tables",
+    # QR extraction
+    "qr_codes",
     # Downstream (disabled in primary profiles)
     "chunking_enabled", "token_reduction_mode",
     # Isolation
@@ -231,7 +238,7 @@ def _build_xberg_config(
             extract_annotations=bool(profile.get("extract_annotations", False)),
             top_margin_fraction=0.0 if include_headers else None,
             bottom_margin_fraction=0.0 if include_footers else None,
-            allow_single_column_tables=False,
+            allow_single_column_tables=bool(profile.get("allow_single_column_tables", False)),
             ocr_inline_images=bool(profile.get("ocr_inline_images", False)),
             extract_form_fields=bool(profile.get("extract_form_fields", True)),
             reading_order=bool(profile.get("reading_order", False)),
@@ -302,12 +309,34 @@ def _build_xberg_config(
             f"Xberg 1.0.14 ContentFilterConfig contract mismatch: {exc}"
         ) from exc
 
-    # --- Layout guard --------------------------------------------------------
-    if bool(profile.get("layout_enabled", False)):
-        raise XbergConfigurationError(
-            "Xberg layout_enabled=True is not yet offline-certified in this branch. "
-            "Prepare and manifest the Xberg layout/table models before enabling this profile."
-        )
+    # --- LayoutDetectionConfig -----------------------------------------------
+    layout_cfg = None
+    layout_enabled = bool(profile.get("layout_enabled", False))
+    if layout_enabled:
+        AccelerationConfig = getattr(xberg, "AccelerationConfig", None)
+        LayoutDetectionConfig = getattr(xberg, "LayoutDetectionConfig", None)
+        if AccelerationConfig is None or LayoutDetectionConfig is None:
+            raise XbergConfigurationError(
+                "xberg.AccelerationConfig or xberg.LayoutDetectionConfig not found "
+                "— layout requires Xberg 1.0.14 with layout support."
+            )
+        acceleration_provider = str(profile.get("layout_acceleration_provider", "cpu"))
+        try:
+            acceleration = AccelerationConfig(provider=acceleration_provider, device_id=None)
+            layout_cfg = LayoutDetectionConfig(
+                strategy=profile.get("layout_strategy") or None,
+                confidence_threshold=profile.get("layout_confidence_threshold") or None,
+                apply_heuristics=bool(profile.get("layout_apply_heuristics", True)),
+                table_model=None,
+                acceleration=acceleration,
+                enable_chart_understanding=bool(
+                    profile.get("layout_enable_chart_understanding", False)
+                ),
+            )
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 LayoutDetectionConfig contract mismatch: {exc}"
+            ) from exc
 
     # --- Root config dict (ExtractionConfig is a TypedDict in 1.0.14) --------
     root_config: dict[str, Any] = {
@@ -329,8 +358,8 @@ def _build_xberg_config(
         "result_format": str(profile.get("result_format", "unified")),
         "escape_markdown": bool(profile.get("escape_markdown", True)),
         "table_anchors": bool(profile.get("table_anchors", False)),
-        "layout": None,
-        "use_layout_for_markdown": False,
+        "layout": layout_cfg,
+        "use_layout_for_markdown": layout_enabled,
         "include_document_structure": bool(profile.get("include_document_structure", False)),
         "max_concurrent_extractions": 1,
         "structured_extraction": None,
@@ -339,7 +368,7 @@ def _build_xberg_config(
         "summarization": None,
         "translation": None,
         "captioning": None,
-        "qr_codes": False,
+        "qr_codes": bool(profile.get("qr_codes", False)),
     }
 
     if ocr_enabled:
@@ -515,6 +544,108 @@ def _page_native(page_obj: Any) -> dict[str, Any]:
         if safe is not None:
             record[attr] = safe
     return record
+
+
+def _collect_qr_results(document: Any, page_count: int) -> list[dict[str, Any]]:
+    """Collect QR code results from an Xberg ExtractedDocument.
+
+    Returns a flat list of {page_number, payload, bbox, format} records.
+    Payloads are kept as plain text; URL values are NOT fetched.
+    """
+    records: list[dict[str, Any]] = []
+
+    for attr in ("qr_codes", "qr_results", "barcodes"):
+        items = getattr(document, attr, None)
+        if isinstance(items, (list, tuple)):
+            for item in items:
+                page_num = int(getattr(item, "page_number", 0) or 0)
+                payload = getattr(item, "payload", None) or getattr(item, "data", None) or ""
+                bbox = _to_json_safe(getattr(item, "bbox", None))
+                fmt = str(getattr(item, "format", "QR_CODE") or "QR_CODE")
+                if 1 <= page_num <= page_count and isinstance(payload, str) and payload.strip():
+                    records.append({
+                        "page_number": page_num,
+                        "payload": payload.strip(),
+                        "bbox": bbox,
+                        "format": fmt,
+                    })
+
+    # Also check per-page
+    for i, pg in enumerate(_get_pages(document), start=1):
+        for attr in ("qr_codes", "qr_results", "barcodes"):
+            items = getattr(pg, attr, None)
+            if isinstance(items, (list, tuple)):
+                for item in items:
+                    page_num = int(getattr(item, "page_number", i) or i)
+                    payload = getattr(item, "payload", None) or getattr(item, "data", None) or ""
+                    bbox = _to_json_safe(getattr(item, "bbox", None))
+                    fmt = str(getattr(item, "format", "QR_CODE") or "QR_CODE")
+                    if 1 <= page_num <= page_count and isinstance(payload, str) and payload.strip():
+                        candidate = {
+                            "page_number": page_num,
+                            "payload": payload.strip(),
+                            "bbox": bbox,
+                            "format": fmt,
+                        }
+                        if candidate not in records:
+                            records.append(candidate)
+
+    return records
+
+
+_SAFE_QR_PAYLOAD_MAX = 2000
+
+
+def _qr_payload_is_safe(payload: str) -> bool:
+    """Return True if the QR payload is safe to embed in enriched markdown.
+
+    Rejects payloads longer than 2000 chars or containing control characters.
+    The payload is never fetched or executed.
+    """
+    if len(payload) > _SAFE_QR_PAYLOAD_MAX:
+        return False
+    return all(c >= " " or c in ("\t",) for c in payload)
+
+
+def _build_qr_derived_blocks(
+    qr_results: list[dict[str, Any]],
+    page_count: int,
+) -> list[list[dict[str, Any]]]:
+    """Return derived_content_by_page list with QR-code items."""
+    by_page: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+    for rec in qr_results:
+        pn = rec["page_number"]
+        if 1 <= pn <= page_count and _qr_payload_is_safe(rec["payload"]):
+            by_page[pn - 1].append({
+                "type": "qr_code",
+                "page_number": pn,
+                "payload": rec["payload"],
+                "format": rec["format"],
+                "bbox": rec.get("bbox"),
+            })
+    return by_page
+
+
+def _render_qr_enriched_page(
+    page_text: str,
+    qr_items: list[dict[str, Any]],
+) -> str:
+    """Append derived:start QR-code blocks to a page's source text."""
+    if not qr_items:
+        return page_text
+    blocks: list[str] = [page_text.rstrip()]
+    for item in qr_items:
+        header = (
+            f"<!-- derived:start\n"
+            f"type=qr_code\n"
+            f"page={item['page_number']}\n"
+            f"format={item['format']}\n"
+            f"-->\n"
+            f"> **QR code:** {item['payload']}\n"
+            f"<!-- derived:end -->"
+        )
+        blocks.append(header)
+    return "\n\n".join(blocks) + "\n"
 
 
 def _result_to_page_texts(document: Any, expected_pages: int) -> dict[int, str]:
@@ -695,6 +826,7 @@ def _build_metrics(
     artifact_selected_list: list[str],
     run_log_path: Path | None,
     metrics_json_path: Path | None,
+    qr_results: list[dict[str, Any]] | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
@@ -782,6 +914,17 @@ def _build_metrics(
             ],
             "errors_count": errors_count,
             "retry_count": 0,
+            "xberg_layout": {
+                "enabled": bool(profile.get("layout_enabled", False)),
+                "provider": str(profile.get("layout_acceleration_provider", "cpu")),
+                "use_layout_for_markdown": bool(profile.get("layout_enabled", False)),
+            },
+            "qr": {
+                "enabled": bool(profile.get("qr_codes", False)),
+                "detected": len(qr_results) if qr_results is not None else 0,
+                "decoded": len(qr_results) if qr_results is not None else 0,
+                "failed": 0,
+            },
         },
         "resources": resources,
         "content_elements": {
@@ -902,12 +1045,15 @@ def preflight_profile(
         else:
             checks.append(make_check("xberg.extract async", "pass"))
 
-        for cls_name in (
+        required_classes = [
             "ExtractionConfig", "ExtractInput",
             "OcrConfig", "TesseractConfig",
             "PdfConfig", "PageConfig",
             "ImageExtractionConfig", "ContentFilterConfig",
-        ):
+        ]
+        if bool(profile.get("layout_enabled", False)):
+            required_classes += ["AccelerationConfig", "LayoutDetectionConfig"]
+        for cls_name in required_classes:
             obj = getattr(xberg, cls_name, None)
             checks.append(make_check(
                 cls_name,
@@ -1008,6 +1154,7 @@ def main() -> None:
     monitor = ResourceMonitor()
     pipeline_started = perf_counter()
     monitor.start()
+    qr_results: list[dict[str, Any]] = []
 
     try:
         with parser_output_context(
@@ -1031,22 +1178,36 @@ def main() -> None:
             )
             element_counts = _count_elements_from_result(document, page_texts)
 
+            qr_enabled = bool(profile.get("qr_codes", False))
+            if qr_enabled:
+                qr_results = _collect_qr_results(document, page_count)
+
     except Exception:
         monitor.stop()
         raise
 
     pipeline_seconds = perf_counter() - pipeline_started
 
+    if qr_results:
+        derived_content_by_page = _build_qr_derived_blocks(qr_results, page_count)
+        enriched_page_markdown = [
+            _render_qr_enriched_page(page_texts[i], derived_content_by_page[i])
+            for i in range(page_count)
+        ]
+    else:
+        derived_content_by_page = [[] for _ in page_texts]
+        enriched_page_markdown = None
+
     artifact_input = ParserArtifactInput(
         native_markdown=join_page_texts(page_texts),
         source_page_markdown=page_texts,
-        enriched_page_markdown=None,
+        enriched_page_markdown=enriched_page_markdown,
         page_mapping_status="complete",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
-        derived_content_by_page=[[] for _ in page_texts],
-        raw_origin_kind="adapter_assembled_declared",
-        raw_origin_details="page_texts join",
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="parser_native_per_page_join",
+        raw_origin_details="page_texts join from ExtractedDocument.pages",
     )
 
     artifact_result = finalize_artifacts(
@@ -1078,6 +1239,7 @@ def main() -> None:
         resources=resources,
         tokenizer_name=tokenizer_name,
         artifact_selected_list=artifact_policy.as_list(),
+        qr_results=qr_results,
         verbose=args.verbose,
         run_log_path=paths.run_log if artifact_policy.includes("run.log") else None,
         metrics_json_path=paths.metrics_json if artifact_policy.includes("metrics.json") else None,

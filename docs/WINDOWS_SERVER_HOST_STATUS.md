@@ -843,8 +843,50 @@ Alterações implementadas:
 - Corrigidos: `test_profiles.py` (novo `_EXPECTED_PROFILES` + `_REQUIRED_KEYS`) e
   `test_adapter_contract.py` (mock de `finalize_artifacts` com `artifacts` e `quality_eligibility`)
 
+### Commit X1–X4 — `feat(xberg): enable local cpu layout, qr extraction and table diagnostics`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivos alterados:** `src/parsers/xberg_v2.py`, `config/benchmark_profiles.json`
+**Arquivos novos:** `parser_tests/xberg/test_qr_codes.py`, `parser_tests/xberg/test_layout_config.py`
+**Arquivos atualizados:** `parser_tests/xberg/test_profiles.py`
+
+**Layout local CPU (X1):**
+- Removido guard que bloqueava `layout_enabled=true` com `XbergConfigurationError`
+- Construção de `AccelerationConfig(provider="cpu")` e `LayoutDetectionConfig` quando
+  `layout_enabled=true` — com todas as sub-chaves configuráveis via perfil
+- Novas chaves em `_PROFILE_KEYS`: `layout_strategy`, `layout_apply_heuristics`,
+  `layout_acceleration_provider`, `layout_confidence_threshold`, `layout_enable_chart_understanding`
+- Métricas `xberg_layout`: `enabled`, `provider`, `use_layout_for_markdown`
+
+**Layout para Markdown (X2):**
+- `use_layout_for_markdown` no `root_config` agora é `layout_enabled` (antes hardcoded `False`)
+- Quando `layout_enabled=true`, o Xberg usa o mapa de regiões de layout para gerar o Markdown
+
+**QR codes (X3):**
+- `qr_codes` no `root_config` agora lê do perfil (antes hardcoded `False`)
+- Nova função `_collect_qr_results()`: coleta QR codes do documento e das páginas individualmente
+- Nova função `_build_qr_derived_blocks()`: transforma QR results em `derived_content_by_page`
+- Nova função `_render_qr_enriched_page()`: injeta blocos `derived:start / type=qr_code`
+  no `enriched_page_markdown` — payload nunca é executado ou buscado na rede
+- `_qr_payload_is_safe()`: rejeita payloads > 2000 chars ou com caracteres de controle
+- Métricas `qr`: `enabled`, `detected`, `decoded`, `failed`
+
+**Diagnósticos de tabela e Markdown (X4):**
+- `allow_single_column_tables` agora lido do perfil (antes hardcoded `False`)
+- Nova chave `qr_codes` em `_PROFILE_KEYS`
+- `language_detection` permanece `None` fixo (não exposto como chave de perfil)
+
+**Novo perfil `full_cpu_layout`:**
+- Baseado em `full_cpu_local` com `layout_enabled=true` e `qr_codes=true`
+- `layout_acceleration_provider="cpu"`, `layout_apply_heuristics=true`
+
+**`raw_origin_kind` unificado:**
+- Todos os perfis Xberg agora usam `parser_native_per_page_join` com
+  `raw_origin_details="page_texts join from ExtractedDocument.pages"`
+
 ### Próximo passo
 
 ```text
-Implementar Commits X1–X4 (Xberg layout local CPU, layout para markdown, QR e diagnósticos).
+Etapa 2 concluída. Ver lista do que ainda resta abaixo.
 ```

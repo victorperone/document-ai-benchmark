@@ -631,8 +631,39 @@ Métricas registradas em `processing.visual_enrichment`:
 Parser registra `PyMuPDF4LLM + PaddleOCR + SmolVLM` nas métricas quando visual
 ativo; `PyMuPDF4LLM` quando desativado.
 
+### Commits 5+6 concluídos (unificados) — MinerU nativo
+
+```text
+fix(mineru): preserve native markdown, bundle and effective formula/table flags
+```
+
+Alterações implementadas:
+
+- `native_markdown`: usa o arquivo `.md` oficial do MinerU com leitura
+  UTF-8 estrita; `UnicodeDecodeError` agora propaga como `RuntimeError`
+  em vez de substituir caracteres silenciosamente
+
+- `ParserArtifactInput`: `raw_origin_kind = "parser_native_exact"`,
+  `raw_origin_details = "<document_id>.md"`
+
+- Bundle nativo copiado para `native/` antes do `TemporaryDirectory`
+  fechar: `.md`, `_content_list.json`, `_middle.json`, `images/`;
+  `manifest.json` criado com `schema_version=1`, `bundle_status=available`,
+  SHA-256 por arquivo
+
+- CLI: `--formula true/false` e `--table true/false` adicionados ao
+  comando `mineru`; env vars `MINERU_FORMULA_ENABLE`, `MINERU_TABLE_ENABLE`
+  e `MINERU_TABLE_MERGE_ENABLE` injetadas no subprocesso
+
+- Perfil `full_cpu_local`: adicionado `table_merge: true`,
+  `persist_native_assets: true`, `persist_content_list: true`,
+  `persist_middle_json: true`
+
+- Métricas: `table_merge_enabled`, `native_bundle_valid` adicionados a
+  `mineru_native`
+
 ### Próximo passo
 
 ```text
-Commit 5: fix(mineru): preserve native markdown and native bundle
+Commit 7: refactor(liteparse): preserve native markdown and page contract
 ```

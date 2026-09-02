@@ -453,12 +453,26 @@ def main() -> None:
     try:
         extraction_started = perf_counter()
 
+        table_merge_enabled = bool(
+            profile.get("table_merge", True)
+        )
+
+        persist_native = args.artifact_policy.includes("native")
+
         native_result = run_mineru_native(
             input_path=input_path,
             method=method,
             backend=backend,
+            formula_enabled=formula_enabled,
+            table_enabled=table_enabled,
+            table_merge_enabled=table_merge_enabled,
             threads=args.threads,
             verbose=args.verbose,
+            native_bundle_destination=(
+                paths.native_dir if persist_native else None
+            ),
+            parser_name=PARSER_NAME,
+            profile_name=args.profile,
         )
 
         extraction_seconds = (
@@ -487,15 +501,15 @@ def main() -> None:
         )
 
         artifact_input = ParserArtifactInput(
-            native_markdown=join_page_texts(page_texts),
+            native_markdown=native_result["native_markdown"],
             source_page_markdown=page_texts,
             enriched_page_markdown=None,
             page_mapping_status="complete",
             parser_page_elements=parser_page_elements,
             parser_native_pages=parser_native_pages,
             derived_content_by_page=[[] for _ in page_texts],
-            raw_origin_kind="adapter_assembled_declared",
-            raw_origin_details="page_texts join",
+            raw_origin_kind="parser_native_exact",
+            raw_origin_details=f"{input_path.stem}.md",
         )
 
         artifact_result = finalize_artifacts(
@@ -741,12 +755,13 @@ def main() -> None:
     ] = table_enabled
 
     resolved_config[
+        "table_merge"
+    ] = table_merge_enabled
+
+    resolved_config[
         "threads"
     ] = args.threads
 
-    # formula and table are always active in pipeline backend (no CLI flags
-    # to disable them in MinerU 3.4.4); capability_exceptions = [] confirms
-    # both are effectively enabled when their profile keys are True.
     resolved_config[
         "capability_exceptions"
     ] = []
@@ -1034,6 +1049,10 @@ def main() -> None:
             "method": method,
             "formula_enabled": formula_enabled,
             "table_enabled": table_enabled,
+            "table_merge_enabled": table_merge_enabled,
+            "native_bundle_valid": (
+                native_result.get("native_bundle_manifest") is not None
+            ),
             "native_content_items": (
                 len(
                     content_list
@@ -1048,7 +1067,7 @@ def main() -> None:
                 )
             ),
             "intermediate_assets_persisted": (
-                False
+                native_result.get("native_bundle_manifest") is not None
             ),
         },
     }
@@ -1377,13 +1396,91 @@ def get_mineru_page_count(
     )
 
 
+def _copy_mineru_bundle(
+    *,
+    native_root: Path,
+    document_id: str,
+    markdown_path: Path,
+    content_list_path: Path,
+    middle_path: Path,
+    destination: Path,
+    parser_name: str,
+    profile_name: str,
+) -> dict[str, Any]:
+    """Copy MinerU output bundle to native/ before temp dir is destroyed.
+
+    Returns a manifest dict with schema_version=1 and file entries.
+    Never follows symlinks; rejects path traversal.
+    """
+    import shutil as _shutil
+
+    destination.mkdir(parents=True, exist_ok=True)
+    assets_dest = destination / "assets"
+
+    manifest_files: list[dict[str, Any]] = []
+
+    def _copy_entry(src: Path, rel: str) -> None:
+        dest_path = destination / rel
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(src, dest_path)
+        sha = hashlib.sha256(dest_path.read_bytes()).hexdigest()
+        manifest_files.append({
+            "path": rel,
+            "sha256": sha,
+            "size_bytes": dest_path.stat().st_size,
+            "source": "mineru",
+        })
+
+    _copy_entry(markdown_path, f"{document_id}.md")
+    _copy_entry(content_list_path, f"{document_id}_content_list.json")
+    _copy_entry(middle_path, f"{document_id}_middle.json")
+
+    # Copy assets directory if present
+    assets_src = native_root / document_id / "images"
+    if not assets_src.is_dir():
+        # MinerU may output assets under a different subpath
+        assets_src = native_root / "images"
+    if assets_src.is_dir():
+        for asset in assets_src.iterdir():
+            if not asset.is_file():
+                continue
+            dest_asset = assets_dest / asset.name
+            dest_asset.parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy2(asset, dest_asset)
+            sha = hashlib.sha256(dest_asset.read_bytes()).hexdigest()
+            manifest_files.append({
+                "path": f"assets/{asset.name}",
+                "sha256": sha,
+                "size_bytes": dest_asset.stat().st_size,
+                "source": "mineru",
+            })
+
+    manifest = {
+        "schema_version": 1,
+        "parser": parser_name,
+        "profile": profile_name,
+        "bundle_status": "available",
+        "files": manifest_files,
+    }
+    (destination / "manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    return manifest
+
+
 def run_mineru_native(
     *,
     input_path: Path,
     method: str,
     backend: str = "pipeline",
+    formula_enabled: bool = True,
+    table_enabled: bool = True,
+    table_merge_enabled: bool = True,
     threads: int | None,
     verbose: bool,
+    native_bundle_destination: Path | None = None,
+    parser_name: str = "mineru",
+    profile_name: str = "",
 ) -> dict[str, Any]:
     if method not in {
         "txt",
@@ -1395,6 +1492,16 @@ def run_mineru_native(
         )
 
     environment = os.environ.copy()
+
+    environment["MINERU_FORMULA_ENABLE"] = (
+        "true" if formula_enabled else "false"
+    )
+    environment["MINERU_TABLE_ENABLE"] = (
+        "true" if table_enabled else "false"
+    )
+    environment["MINERU_TABLE_MERGE_ENABLE"] = (
+        "true" if table_merge_enabled else "false"
+    )
 
     if threads is not None:
         thread_value = str(threads)
@@ -1428,6 +1535,10 @@ def run_mineru_native(
             backend,
             "-m",
             method,
+            "--formula",
+            str(formula_enabled).lower(),
+            "--table",
+            str(table_enabled).lower(),
         ]
 
         process = subprocess.run(
@@ -1483,12 +1594,16 @@ def run_mineru_native(
             f"{document_id}_middle.json",
         )
 
-        native_markdown = (
-            markdown_path.read_text(
-                encoding="utf-8",
-                errors="replace",
+        try:
+            native_markdown = (
+                markdown_path.read_text(
+                    encoding="utf-8",
+                )
             )
-        )
+        except UnicodeDecodeError as _ude:
+            raise RuntimeError(
+                f"MinerU produced a non-UTF-8 markdown file: {_ude}"
+            ) from _ude
 
         content_list = json.loads(
             content_list_path.read_text(
@@ -1520,6 +1635,19 @@ def run_mineru_native(
                 "be a dictionary."
             )
 
+        native_bundle_manifest: dict[str, Any] | None = None
+        if native_bundle_destination is not None:
+            native_bundle_manifest = _copy_mineru_bundle(
+                native_root=native_root,
+                document_id=document_id,
+                markdown_path=markdown_path,
+                content_list_path=content_list_path,
+                middle_path=middle_path,
+                destination=native_bundle_destination,
+                parser_name=parser_name,
+                profile_name=profile_name,
+            )
+
         return {
             "command": command,
             "returncode": (
@@ -1533,6 +1661,7 @@ def run_mineru_native(
             ),
             "middle": middle,
             "log_text": log_text,
+            "native_bundle_manifest": native_bundle_manifest,
         }
 
 if __name__ == "__main__":

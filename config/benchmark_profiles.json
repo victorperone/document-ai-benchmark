@@ -346,7 +346,11 @@
           "ocr_enabled": true,
           "formula": true,
           "table": true,
-          "backend": "pipeline"
+          "table_merge": true,
+          "backend": "pipeline",
+          "persist_native_assets": true,
+          "persist_content_list": true,
+          "persist_middle_json": true
         }
       }
     },

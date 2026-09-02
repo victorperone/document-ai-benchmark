@@ -752,8 +752,34 @@ Alterações implementadas:
   imagem sem proveniência ignorada, `derived:start` não contamina `source_page_texts`
 - Ambos os arquivos só rodam no Windows Server (dependência `torch` no import do adapter)
 
+### Commit P1+P2 — `feat(paddleocr): cpu inference runtime settings and complete native results`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivo alterado:** `src/parsers/paddleocr_v2.py`, `config/benchmark_profiles.json`
+
+**CPU inference runtime (P1):**
+- `build_pipeline_kwargs()` estendido com `device`, `engine`, `enable_mkldnn`,
+  `mkldnn_cache_capacity`, `cpu_threads` quando presentes no perfil
+- `enable_hpi=False` e `enable_cinn=False` sempre passados (reproducibilidade)
+- Novos kwargs validados automaticamente pelo preflight existente via
+  `inspect.signature(PPStructureV3.__init__)`
+- Bloco `paddle_runtime` adicionado em `processing`: `device`, `engine_requested`,
+  `mkldnn_enabled`, `mkldnn_cache_capacity`, `cpu_threads_requested`,
+  `hpi_enabled`, `cinn_enabled`
+- Todos os 6 perfis receberam: `device="cpu"`, `inference_engine="paddle_static"`,
+  `enable_mkldnn=true`, `mkldnn_cache_capacity=10`, `cpu_threads=null`
+
+**Native results completos (P2):**
+- Nova função `_json_safe()`: serializa resultados do PPStructureV3 de forma
+  segura — elimina bytes de imagem, numpy arrays → tolist(), profundidade máxima 8
+- `build_paddleocr_page_contract()` estendido: cada `parser_native_pages[i]` agora
+  inclui `parsing_res_list` (serializado), `overall_ocr_res` (serializado),
+  `tables_with_html`, `chart_count`, `seal_count`
+- `parser_output` atualizado: `tables_with_html`, `charts_detected`, `seals_detected`
+
 ### Próximo passo
 
 ```text
-Implementar Commit P1+P2 (PaddleOCR CPU runtime e native results).
+Implementar Commits P3+P4 (PaddleOCR thresholds e perfil PPOCRv6 experimental).
 ```

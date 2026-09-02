@@ -523,6 +523,31 @@ def build_pipeline_kwargs(
     if profile.get("format_block_content") is True:
         kwargs["format_block_content"] = True
 
+    # CPU inference runtime settings (P1)
+    # Only passed when the profile explicitly declares them, so existing
+    # profiles without these keys continue to use PPStructureV3 defaults.
+    if "device" in profile:
+        kwargs["device"] = str(profile["device"])
+
+    if "inference_engine" in profile:
+        kwargs["engine"] = str(profile["inference_engine"])
+
+    if "enable_mkldnn" in profile:
+        kwargs["enable_mkldnn"] = bool(profile["enable_mkldnn"])
+
+    if "mkldnn_cache_capacity" in profile:
+        kwargs["mkldnn_cache_capacity"] = int(
+            profile["mkldnn_cache_capacity"]
+        )
+
+    if "cpu_threads" in profile and profile["cpu_threads"] is not None:
+        kwargs["cpu_threads"] = int(profile["cpu_threads"])
+
+    # HPI is always disabled for the benchmark (no accelerator hardware)
+    kwargs["enable_hpi"] = False
+    # CINN causes nondeterminism; disabled for reproducibility
+    kwargs["enable_cinn"] = False
+
     return kwargs
 
 
@@ -555,6 +580,60 @@ def _result_value(
         return default
 
     return value
+
+
+def _json_safe(obj: Any, _depth: int = 0) -> Any:
+    """Recursively convert PPStructureV3 result objects to JSON-serializable form.
+
+    Drops image bytes (bytes/bytearray) and limits recursion to avoid excessive
+    nesting. Unknown objects are converted to their type name to preserve
+    structure visibility without crashing serialization.
+    """
+    if _depth > 8:
+        return f"<truncated:{type(obj).__name__}>"
+
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    if isinstance(obj, (bytes, bytearray)):
+        return f"<bytes:{len(obj)}>"
+
+    if isinstance(obj, dict):
+        return {
+            str(k): _json_safe(v, _depth + 1)
+            for k, v in obj.items()
+            if k not in ("img", "image", "img_path", "input_path")
+        }
+
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(item, _depth + 1) for item in obj]
+
+    # numpy arrays and similar — convert via tolist() if available
+    to_list = getattr(obj, "tolist", None)
+    if callable(to_list):
+        try:
+            return _json_safe(to_list(), _depth + 1)
+        except Exception:
+            pass
+
+    # Pydantic / dataclass — try model_dump first, then __dict__
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _json_safe(
+                model_dump(mode="json", exclude_none=True), _depth + 1
+            )
+        except Exception:
+            pass
+
+    obj_dict = getattr(obj, "__dict__", None)
+    if obj_dict is not None:
+        return _json_safe(
+            {k: v for k, v in obj_dict.items() if not k.startswith("_")},
+            _depth + 1,
+        )
+
+    return f"<{type(obj).__name__}>"
 
 
 def build_paddleocr_page_contract(
@@ -683,6 +762,19 @@ def build_paddleocr_page_contract(
             }
         )
 
+        # Serialized native results (P2)
+        tables_with_html = sum(
+            1
+            for t in tables
+            if _result_value(t, "html", None)
+        )
+
+        seal_list = _result_value(result, "seal_res_list", [])
+        chart_list = _result_value(result, "chart_res_list", [])
+
+        serialized_parsing = _json_safe(parsing_blocks)
+        serialized_ocr = _json_safe(ocr_result)
+
         parser_native_pages.append(
             {
                 "page_idx": page_idx,
@@ -699,15 +791,14 @@ def build_paddleocr_page_contract(
                         )
                     )
                 ),
-                "table_count": len(
-                    tables
-                ),
-                "formula_count": len(
-                    formulas
-                ),
-                "parsing_block_count": len(
-                    parsing_blocks
-                ),
+                "table_count": len(tables),
+                "tables_with_html": tables_with_html,
+                "formula_count": len(formulas),
+                "chart_count": len(chart_list),
+                "seal_count": len(seal_list),
+                "parsing_block_count": len(parsing_blocks),
+                "parsing_res_list": serialized_parsing,
+                "overall_ocr_res": serialized_ocr,
             }
         )
 
@@ -1239,8 +1330,23 @@ def main() -> None:
         for page in parser_native_pages
     )
 
+    total_tables_with_html = sum(
+        page.get("tables_with_html", 0)
+        for page in parser_native_pages
+    )
+
     total_formulas = sum(
         page["formula_count"]
+        for page in parser_native_pages
+    )
+
+    total_charts = sum(
+        page.get("chart_count", 0)
+        for page in parser_native_pages
+    )
+
+    total_seals = sum(
+        page.get("seal_count", 0)
         for page in parser_native_pages
     )
 
@@ -1342,25 +1448,21 @@ def main() -> None:
     )
 
     parser_output = {
-        "layout_boxes": (
-            total_parsing_blocks
-        ),
-        "tables_detected": (
-            total_tables
-        ),
+        "layout_boxes": total_parsing_blocks,
+        "tables_detected": total_tables,
+        "tables_with_html": total_tables_with_html,
         "images_detected": None,
         "headings_detected": None,
         "lists_detected": None,
-        "formulas_detected": (
-            total_formulas
-        ),
+        "formulas_detected": total_formulas,
+        "charts_detected": total_charts,
+        "seals_detected": total_seals,
         "captions_detected": None,
         "page_headers_detected": None,
         "page_footers_detected": None,
         "footnotes_detected": None,
         "text_blocks_detected": None,
         "code_blocks_detected": None,
-        "charts_detected": None,
         "box_class_counts": None,
     }
 
@@ -1644,6 +1746,29 @@ def main() -> None:
                     "per-page OCR failure callbacks "
                     "are not inferred."
                 ),
+            },
+            "paddle_runtime": {
+                "device": str(
+                    profile.get("device", "cpu")
+                ),
+                "engine_requested": str(
+                    profile.get(
+                        "inference_engine", "paddle_static"
+                    )
+                ),
+                "mkldnn_enabled": bool(
+                    profile.get("enable_mkldnn", False)
+                ),
+                "mkldnn_cache_capacity": int(
+                    profile.get("mkldnn_cache_capacity", 10)
+                ),
+                "cpu_threads_requested": (
+                    int(profile["cpu_threads"])
+                    if profile.get("cpu_threads") is not None
+                    else None
+                ),
+                "hpi_enabled": False,
+                "cinn_enabled": False,
             },
             "warnings_count": len(
                 warning_messages

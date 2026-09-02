@@ -450,7 +450,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "default": {
           "ocr_enabled": true,
@@ -461,7 +466,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "mvp_structured": {
           "ocr_enabled": true,
@@ -472,7 +482,12 @@
           "textline_orientation": true,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "full": {
           "ocr_enabled": true,
@@ -483,7 +498,12 @@
           "textline_orientation": true,
           "document_unwarping": true,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "ocr_structured_visual": {
           "ocr_enabled": true,
@@ -494,7 +514,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "full_cpu_local": {
           "ocr_enabled": true,
@@ -507,7 +532,12 @@
           "region_detection": true,
           "seal_recognition": true,
           "format_block_content": true,
-          "markdown_ignore_labels": []
+          "markdown_ignore_labels": [],
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         }
       }
     },

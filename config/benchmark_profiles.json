@@ -33,7 +33,13 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess": {
           "ocr_enabled": true,
@@ -47,7 +53,13 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_force_rapidtess": {
           "ocr_enabled": true,
@@ -61,7 +73,13 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_150": {
           "ocr_enabled": true,
@@ -75,7 +93,13 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_200": {
           "ocr_enabled": true,
@@ -90,7 +114,13 @@
           "write_images": false,
           "embed_images": false,
           "page_separators": false,
-          "diagnostic_only": true
+          "diagnostic_only": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_300": {
           "ocr_enabled": true,
@@ -105,7 +135,13 @@
           "write_images": false,
           "embed_images": false,
           "page_separators": false,
-          "diagnostic_only": true
+          "diagnostic_only": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "full_cpu_local": {
           "ocr_enabled": true,
@@ -119,7 +155,33 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": true
+          "page_separators": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
+        },
+        "full_cpu_local_visual": {
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "rapidtess",
+          "ocr_language": "por",
+          "ocr_dpi": 150,
+          "layout_module": true,
+          "parser_header": true,
+          "parser_footer": true,
+          "force_text": true,
+          "write_images": false,
+          "embed_images": false,
+          "page_separators": true,
+          "visual_enrichment_enabled": true,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "HuggingFaceTB/SmolVLM-256M-Instruct",
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         }
       }
     },

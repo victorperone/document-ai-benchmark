@@ -572,10 +572,67 @@ test_preflight_contract.py); `page_texts=` ausente em src/parsers/.
 O schema v3 não deve ser executado no Windows Server até este commit
 corretivo ser aprovado e submetido ao pull.
 
+### Commit 2 concluído — OCR português a 150 DPI
+
+```text
+feat(pymupdf): enforce portuguese OCR at 150 dpi
+```
+
+Corrigidos os fallbacks silenciosos no adapter:
+- `ocr_language`: `"eng"` → `"por"`
+- `ocr_dpi`: `300` → `150`
+
+Perfis atualizados: `ocr_force_rapidtess` e `full_cpu_local` agora explicitamente
+a 150 DPI. Perfis `_200` e `_300` marcados como `diagnostic_only=true`.
+
+Adicionado check de preflight que recusa `write_images=true` ou `embed_images=true`.
+
+### Commit 3 concluído — worker de enriquecimento visual
+
+```text
+feat(enrichment): add local in-memory visual enrichment worker
+```
+
+Criado módulo `src/enrichment/` com:
+- `visual_contract.py` — dataclasses `VisualRequest` / `VisualResponse`
+- `visual_worker.py` — processo filho que carrega PaddleOCR + SmolVLM uma vez
+- `visual_worker_client.py` — cliente com context manager e registro no ResourceMonitor
+- `requirements/windows/visual_enrichment.txt`
+- `scripts/windows/setup_visual_enrichment.ps1`
+
+Imagens processadas exclusivamente em memória. `image_base64` nunca gravado em disco.
+
+### Commit 4 concluído — perfil visual não persistente no PyMuPDF
+
+```text
+feat(pymupdf): add non-persistent visual enrichment profile
+```
+
+Criado `src/parsers/pymupdf_visual_enrichment.py` com pipeline isolado:
+- Detecta regiões `picture`, `chart`, `diagram` via `page_boxes`
+- Renderiza em memória com `get_pixmap(...).tobytes("png")` — sem `pix.save()`
+- `region_id` estável: `p<page>-picture-<index>-<sha256_prefix>`
+- Filtragem por área mínima (`0.2%`), largura mínima (80px), dimensão máxima (2500px)
+- Blocos `derived:start` inseridos no `enriched_page_markdown`
+
+Novo perfil `full_cpu_local_visual` no `benchmark_profiles.json`:
+- `visual_enrichment_enabled: true`
+- `visual_description_model: HuggingFaceTB/SmolVLM-256M-Instruct`
+- `visual_failure_fatal: false` (falha não aborta job)
+- `visual_persist_images: false`
+
+Perfil `full_cpu_local` mantido sem enriquecimento visual (chaves adicionadas com
+`visual_enrichment_enabled: false`).
+
+Métricas registradas em `processing.visual_enrichment`:
+`regions_detected`, `regions_processed`, `regions_failed`, `images_persisted=0`,
+`temporary_files_created=0`.
+
+Parser registra `PyMuPDF4LLM + PaddleOCR + SmolVLM` nas métricas quando visual
+ativo; `PyMuPDF4LLM` quando desativado.
+
 ### Próximo passo
 
 ```text
-Commit 2: feat(pymupdf): enforce portuguese OCR at 150 dpi
+Commit 5: fix(mineru): preserve native markdown and native bundle
 ```
-
-Corrige DPI padrão (300 → 150) e idioma padrão ("eng" → "por") no PyMuPDF.

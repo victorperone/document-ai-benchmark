@@ -594,6 +594,12 @@ _PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
         "embed_images",
         "page_separators",
         "diagnostic_only",
+        "visual_enrichment_enabled",
+        "visual_render_dpi",
+        "visual_ocr_language",
+        "visual_description_model",
+        "visual_failure_fatal",
+        "visual_persist_images",
     }
 )
 
@@ -1180,14 +1186,68 @@ def main() -> None:
     )
 
     _parser_page_elements = parser_elements["per_page"]
+
+    # --- Visual enrichment (optional, profile-controlled) ---
+    visual_enrichment_enabled = bool(
+        profile.get("visual_enrichment_enabled", False)
+    )
+    visual_metrics: dict[str, Any] = {"enabled": False}
+    enriched_page_markdown: list[str] | None = None
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in page_texts
+    ]
+
+    if visual_enrichment_enabled:
+        from src.parsers.pymupdf_visual_enrichment import enrich_pages
+        from src.enrichment.visual_worker_client import VisualWorkerClient
+
+        visual_language = str(
+            profile.get("visual_ocr_language", "por")
+        )
+        visual_model = str(
+            profile.get("visual_description_model", "")
+        )
+        visual_failure_fatal = bool(
+            profile.get("visual_failure_fatal", False)
+        )
+
+        try:
+            with VisualWorkerClient(
+                language=visual_language,
+                smolvlm_model_path=visual_model,
+                resource_monitor=monitor,
+            ) as worker:
+                enriched_page_markdown, derived_content_by_page, visual_metrics = (
+                    enrich_pages(
+                        document=document,
+                        native_pages=native_pages,
+                        page_texts=page_texts,
+                        worker_client=worker,
+                        language=visual_language,
+                        description_model=visual_model,
+                    )
+                )
+        except Exception as _ve:
+            visual_metrics = {
+                "enabled": True,
+                "error": str(_ve),
+                "regions_detected": 0,
+                "regions_processed": 0,
+                "regions_failed": 0,
+                "images_persisted": 0,
+                "temporary_files_created": 0,
+            }
+            if visual_failure_fatal:
+                raise
+
     artifact_input = ParserArtifactInput(
         native_markdown=join_page_texts(page_texts),
         source_page_markdown=page_texts,
-        enriched_page_markdown=None,
+        enriched_page_markdown=enriched_page_markdown,
         page_mapping_status="complete",
         parser_page_elements=_parser_page_elements,
         parser_native_pages=native_pages,
-        derived_content_by_page=[[] for _ in page_texts],
+        derived_content_by_page=derived_content_by_page,
         raw_origin_kind="adapter_assembled_declared",
         raw_origin_details="page_texts join",
     )
@@ -1549,6 +1609,8 @@ def main() -> None:
                     .extra_kwargs_seen
                 ),
             },
+
+            "visual_enrichment": visual_metrics,
 
             "warnings_count": len(
                 captured_warning_messages

@@ -15,6 +15,7 @@ _ALL_PROFILES = [
     "ocr_auto_rapidtess_200",
     "ocr_auto_rapidtess_300",
     "full_cpu_local",
+    "full_cpu_local_visual",
 ]
 
 

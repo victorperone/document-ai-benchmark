@@ -538,6 +538,40 @@ Todos os 7 adaptadores usam `raw_origin_kind = "adapter_assembled_declared"`
 neste commit transitório. A extração de markdown nativo por parser ocorre
 nos commits seguintes.
 
+### Commit corretivo concluído — schema v3 completo
+
+Após o Commit 1, uma revisão identificou lacunas no contrato. O commit
+corretivo resolve todos os itens P0/P1:
+
+Arquivos alterados no commit corretivo:
+
+```text
+src/benchmark/artifact_contract.py  (VALID_PAGE_MAPPING_STATUS, VALID_RAW_ORIGIN_KIND)
+src/benchmark/artifacts.py          (source_text, document_jsonl block, derived validation)
+src/benchmark/token_metrics.py      (source_text param, normalization_tokens_removed,
+                                     raw_to_clean_token_delta, source_markdown_tokens)
+src/benchmark/post_validation.py    (_validate_native_dir com parser/profile,
+                                     artifacts/quality_eligibility obrigatórios,
+                                     coherence checks de enriched)
+tests/_support.py                   (fixtures com artifacts.raw/clean, quality_eligibility)
+tests/test_artifact_contract.py     (22 casos de teste do contrato)
+src/parsers/pymupdf_v2.py           (+artifacts, +quality_eligibility)
+src/parsers/docling_v2.py           (+artifacts, +quality_eligibility)
+src/parsers/mineru_v2.py            (+artifacts, +quality_eligibility)
+src/parsers/paddleocr_v2.py         (+artifacts, +quality_eligibility)
+src/parsers/liteparse_v2.py         (+artifacts, +quality_eligibility)
+src/parsers/unstructured_v2.py      (+artifacts, +quality_eligibility)
+src/parsers/xberg_v2.py             (+artifacts, +quality_eligibility)
+```
+
+Estado dos testes em WSL: 780 passando, 0 regressões.
+
+Gates de grep: `schema_version.*2` ausente em src/config/tests (exceto
+test_preflight_contract.py); `page_texts=` ausente em src/parsers/.
+
+O schema v3 não deve ser executado no Windows Server até este commit
+corretivo ser aprovado e submetido ao pull.
+
 ### Próximo passo
 
 ```text

@@ -1,0 +1,7 @@
+paddleocr==3.7.0
+paddlepaddle
+Pillow>=10.3.0
+transformers==5.16.1
+accelerate>=0.27.0
+safetensors
+psutil==7.2.2

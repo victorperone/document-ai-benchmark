@@ -885,8 +885,149 @@ Alterações implementadas:
 - Todos os perfis Xberg agora usam `parser_native_per_page_join` com
   `raw_origin_details="page_texts join from ExtractedDocument.pages"`
 
-### Próximo passo
+---
+
+## Commit corretivo pós-Etapa 2 — correções de contrato identificadas antes da validação
+
+**Status:** implementado — aguardando commit e validação no Windows Server
+
+### Itens corrigidos
+
+**LiteParse — derived items com `type`, `source`, `text`:**
+- Items agora têm `"type": "image_description"` (VLM) ou `"type": "image_ocr"` (OCR-only)
+- Campo `"source": "liteparse"` em todos os items
+- Campo `"text"` com o conteúdo real (descrição VLM ou texto OCR)
+- `has_derived_text` substitui `has_descriptions`: cobre items de OCR-only, não só VLM
+- `enriched_page_markdown` disponível quando há OCR-only (não só quando há descrição VLM)
+- Blocos `derived:start` gerados com `type=image_ocr` para OCR-only e `type=image_description` para VLM
+
+**LiteParse — page mapping por cobertura real:**
+- `_extract_page_texts()` retorna `tuple[list[str], set[int]]`
+- `mapped_pages: set[int]` rastreia páginas mapeadas pela biblioteca (não por conteúdo)
+- `page_mapping_status="complete"` somente quando `effective_mapped >= all_expected`
+
+**PyMuPDF — visual worker Python correto:**
+- `_resolve_visual_worker_python()`: resolve via `DOCUMENT_AI_VISUAL_WORKER_PYTHON` ou
+  `.venvs/visual-enrichment/Scripts/python.exe` (Windows) / `.../bin/python` (Linux)
+- Worker antes usava `sys.executable` (Python do venv pymupdf); agora usa o venv dedicado
+
+**PyMuPDF — reabertura do PDF para enriquecimento visual:**
+- PDF reaberto explicitamente com `pymupdf.open(input_path)` após fechamento do documento principal
+- Evita uso de `document` já fechado no bloco `finally`
+
+**PyMuPDF — model path local para SmolVLM:**
+- `visual_description_model` em `full_cpu_local_visual` alterado para
+  `"models/liteparse/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct"` (path relativo local)
+- Código resolve como path absoluto se o diretório existir localmente
+
+**MinerU — cópia recursiva do bundle:**
+- Assets copiados com `rglob("*")` em vez de `iterdir()` (recursivo)
+- Estrutura relativa preservada: `images/` não renomeado para `assets/`
+- `_validate_mineru_markdown_links()`: verifica que todos os links relativos do `.md`
+  existem no bundle antes de declarar `bundle_status=available`
+
+**Docling — derived items com `type`, `source`, `text`:**
+- Description items: `"type": "picture_description"`, `"source": "docling"`,
+  `"text": desc_text.strip()`
+- Classification items adicionados a `derived_content_by_page` (antes só em `parser_native_pages`):
+  `"type": "picture_classification"`, `"source": "docling"`, `"text": "<label> (<score>)"`,
+  `"metadata": {...}`
+- `has_derived` cobre description + classification; substitui `has_descriptions`
+
+**artifacts.py — JSONL só escrito quando mapping disponível:**
+- `jsonl_available = mapping_complete`
+- `jsonl_written = jsonl_selected and jsonl_available`
+- `output.document_jsonl` = `None` quando não escrito
+
+**post_validation.py — `document.jsonl` com `present=false`:**
+- Validação pula checagem de arquivo quando `metrics.artifacts.document_jsonl.present=false`
+- Protege tanto `validate_post_execution` quanto `validate_resume_candidate`
+
+**scripts/windows/check_envs.ps1:**
+- `visual-enrichment` adicionado à lista de ambientes verificados com check de `paddleocr`
+
+**scripts/windows/setup_visual_enrichment.ps1:**
+- `python` → `py -3.12` para criação do venv
+- `paddlepaddle` → `paddlepaddle==3.2.0` (versão fixada)
+
+**requirements/windows/visual_enrichment.txt:**
+- `paddlepaddle==3.2.0` fixado
+
+**PaddleOCR visual worker — model dirs explícitos:**
+- `visual_worker.py._load_paddleocr()` aceita `det_model_dir` e `rec_model_dir`
+- `VisualWorkerClient.__init__()` aceita e repassa via config JSON ao worker
+- Worker lê os dirs do config de inicialização
+- Perfil `full_cpu_local_visual`: `visual_det_model_dir` e `visual_rec_model_dir` com
+  paths locais `models/liteparse/paddleocr/det` e `.../rec`
+- Demais perfis PyMuPDF recebem as novas chaves com `null`
+
+**PyMuPDF — preflight checks de visual enrichment:**
+- Quando `visual_enrichment_enabled=true`, `preflight_profile()` valida:
+  1. Worker Python executável (via `_resolve_visual_worker_python`)
+  2. Diretório SmolVLM (`visual_description_model`)
+  3. Dirs opcionais det/rec (`visual_det_model_dir`, `visual_rec_model_dir`)
+  4. Imports do worker via probe subprocess (`paddleocr`, `transformers`, `torch`)
+
+---
+
+## Etapa 3 — Suítes schema v3
+
+**Status:** implementado — aguardando commit e validação no Windows Server
+
+Quatro suítes adicionadas a `config/benchmark_profiles.json`:
+
+### `windows_source_preservation_v3`
+
+13 entradas — todos os 7 parsers com perfis puros (sem enriquecimento visual externo):
 
 ```text
-Etapa 2 concluída. Ver lista do que ainda resta abaixo.
+pymupdf/native
+pymupdf/ocr_auto_rapidtess
+docling/native
+docling/ocr_auto
+mineru/txt
+mineru/auto
+paddleocr/mvp_structured
+liteparse/native
+liteparse/ocr_auto_tesseract
+unstructured/fast_native
+unstructured/auto_ocr
+xberg/native_markdown
+xberg/ocr_auto_tesseract
+```
+
+Artefatos esperados: `raw.md`, `document.md`, `document.jsonl`, `metrics.json`, `run.log`, `native/`.
+
+### `windows_max_quality_cpu_v3`
+
+7 entradas — `full_cpu_local` em todos os 7 parsers.
+Capacidade máxima sem enriquecimento visual.
+
+### `windows_version_candidates_v3`
+
+3 entradas — perfis experimentais para comparação de versão:
+
+```text
+xberg/full_cpu_layout
+paddleocr/ppstructure_v6_experimental
+docling/ocr_auto_table_v2
+```
+
+Não entra no ranking principal. Destina-se a comparações controladas
+de versão/configuração em branch separada.
+
+### `windows_enriched_visual_cpu_v3`
+
+7 entradas — PyMuPDF com `full_cpu_local_visual` + demais com `full_cpu_local`.
+Requer `.venvs/visual-enrichment` com PaddleOCR e SmolVLM carregados localmente.
+Artefatos incluem `document.enriched.md` com blocos `derived:start`.
+
+---
+
+## Próximo passo
+
+```text
+Aguardando validação no Windows Server das correções corretivas e das suítes v3.
+Itens pendentes após validação: fixtures schema3, métricas por dimensão,
+migrações de versão em branches separadas.
 ```

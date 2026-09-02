@@ -593,6 +593,7 @@ _PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
         "write_images",
         "embed_images",
         "page_separators",
+        "diagnostic_only",
     }
 )
 
@@ -721,6 +722,22 @@ def preflight_profile(
                     f"engine={ocr_engine} language={ocr_language} dpi={ocr_dpi}",
                 )
             )
+
+    # --------------------------------------------------
+    # Image persistence guard
+    # --------------------------------------------------
+
+    if profile.get("write_images") or profile.get("embed_images"):
+        checks.append(
+            make_check(
+                "image persistence",
+                "fail",
+                "write_images and embed_images must both be false — "
+                "image persistence is not permitted in formal benchmark profiles",
+            )
+        )
+    else:
+        checks.append(make_check("image persistence", "pass"))
 
     # --------------------------------------------------
     # Required packages
@@ -1076,14 +1093,14 @@ def main() -> None:
                             profile.get(
                                 "ocr_language"
                             )
-                            or "eng"
+                            or "por"
                         ),
 
                         ocr_dpi=int(
                             profile.get(
                                 "ocr_dpi"
                             )
-                            or 300
+                            or 150
                         ),
 
                         header=bool(

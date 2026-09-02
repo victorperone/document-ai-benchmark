@@ -54,7 +54,7 @@
           "ocr_mode": "forced",
           "ocr_engine": "rapidtess",
           "ocr_language": "por",
-          "ocr_dpi": 300,
+          "ocr_dpi": 150,
           "layout_module": true,
           "parser_header": true,
           "parser_footer": true,
@@ -89,7 +89,8 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "diagnostic_only": true
         },
         "ocr_auto_rapidtess_300": {
           "ocr_enabled": true,
@@ -103,14 +104,15 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "diagnostic_only": true
         },
         "full_cpu_local": {
           "ocr_enabled": true,
           "ocr_mode": "auto",
           "ocr_engine": "rapidtess",
           "ocr_language": "por",
-          "ocr_dpi": 300,
+          "ocr_dpi": 150,
           "layout_module": true,
           "parser_header": true,
           "parser_footer": true,

@@ -44,7 +44,7 @@ def _minimal_metrics() -> dict:
                 "mode": "auto",
                 "engine": "rapidtess",
                 "language": "por",
-                "dpi": 300,
+                "dpi": 150,
                 "pages_requested": 3,
                 "pages_processed": 1,
                 "pages_failed": 0,

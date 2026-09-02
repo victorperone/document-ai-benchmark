@@ -778,8 +778,35 @@ Alterações implementadas:
   `tables_with_html`, `chart_count`, `seal_count`
 - `parser_output` atualizado: `tables_with_html`, `charts_detected`, `seals_detected`
 
+### Commit P3+P4 — `feat(paddleocr): threshold configuration and ppocrv6 experimental profile`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivo alterado:** `src/parsers/paddleocr_v2.py`, `config/benchmark_profiles.json`
+
+**Thresholds configuráveis (P3):**
+- Novas chaves adicionadas a `PROFILE_EXTRA_KEYS` (opcionais, ausência não causa erro):
+  `layout_threshold`, `text_det_thresh`, `text_rec_score_thresh`,
+  `use_wired_table_cells_trans_to_html`, `use_e2e_wired_table_rec_model`,
+  `use_e2e_wireless_table_rec_model`
+- `build_pipeline_kwargs()`: passa threshold ao PPStructureV3 somente quando
+  declarado no perfil com valor não-nulo; ausente = defaults da biblioteca
+
+**Perfil PPOCRv6 experimental (P4):**
+- Novas chaves em `PROFILE_EXTRA_KEYS`: `experimental`,
+  `text_detection_model_dir_override`, `text_recognition_model_dir_override`
+- `build_pipeline_kwargs()`: quando override não-nulo, substitui o
+  `text_detection_model_dir` / `text_recognition_model_dir` resolvido pelo
+  `resolve_model_paths()` — permite usar modelos v6 sem alterar a raiz default
+- `preflight_profile()`: check `experimental profile` com status `warn` quando
+  `experimental=true` — aviso explícito de que o perfil não é elegível para ranking
+- Novo perfil `ppstructure_v6_experimental` em `benchmark_profiles.json`:
+  baseado em `full_cpu_local`, `experimental=true`,
+  `text_detection_model_dir_override=null` e
+  `text_recognition_model_dir_override=null` (operador define os paths v6 locais)
+
 ### Próximo passo
 
 ```text
-Implementar Commits P3+P4 (PaddleOCR thresholds e perfil PPOCRv6 experimental).
+Implementar Commits U1+U2 (Unstructured strategy explícita e ciclo de vida de imagens).
 ```

@@ -538,6 +538,27 @@
           "enable_mkldnn": true,
           "mkldnn_cache_capacity": 10,
           "cpu_threads": null
+        },
+        "ppstructure_v6_experimental": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": true,
+          "document_orientation_classification": true,
+          "textline_orientation": true,
+          "document_unwarping": true,
+          "region_detection": true,
+          "seal_recognition": true,
+          "format_block_content": true,
+          "markdown_ignore_labels": [],
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null,
+          "experimental": true,
+          "text_detection_model_dir_override": null,
+          "text_recognition_model_dir_override": null
         }
       }
     },

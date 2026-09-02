@@ -51,7 +51,27 @@ PROFILE_BOOL_KEYS = (
 PROFILE_OPTIONAL_BOOL_KEYS = frozenset({"format_block_content"})
 
 # Additional known profile keys that are not booleans.
-PROFILE_EXTRA_KEYS = frozenset({"markdown_ignore_labels"})
+PROFILE_EXTRA_KEYS = frozenset({
+    "markdown_ignore_labels",
+    # CPU runtime (P1)
+    "device",
+    "inference_engine",
+    "enable_mkldnn",
+    "mkldnn_cache_capacity",
+    "cpu_threads",
+    # Detection/recognition thresholds (P3) — all optional, values passed
+    # directly to PPStructureV3 when present; absent = use library defaults
+    "layout_threshold",
+    "text_det_thresh",
+    "text_rec_score_thresh",
+    "use_wired_table_cells_trans_to_html",
+    "use_e2e_wired_table_rec_model",
+    "use_e2e_wireless_table_rec_model",
+    # Experimental profile gate (P4)
+    "experimental",
+    "text_detection_model_dir_override",
+    "text_recognition_model_dir_override",
+})
 
 DEFAULT_MODEL_ROOT = Path(
     "/home/appuser/.paddlex/official_models"
@@ -523,6 +543,26 @@ def build_pipeline_kwargs(
     if profile.get("format_block_content") is True:
         kwargs["format_block_content"] = True
 
+    # Detection/recognition thresholds (P3)
+    # Values absent in profile → PPStructureV3 uses its own defaults.
+    _threshold_map = {
+        "layout_threshold": "layout_threshold",
+        "text_det_thresh": "text_det_thresh",
+        "text_rec_score_thresh": "text_rec_score_thresh",
+        "use_wired_table_cells_trans_to_html": (
+            "use_wired_table_cells_trans_to_html"
+        ),
+        "use_e2e_wired_table_rec_model": (
+            "use_e2e_wired_table_rec_model"
+        ),
+        "use_e2e_wireless_table_rec_model": (
+            "use_e2e_wireless_table_rec_model"
+        ),
+    }
+    for profile_key, kwarg_name in _threshold_map.items():
+        if profile.get(profile_key) is not None:
+            kwargs[kwarg_name] = profile[profile_key]
+
     # CPU inference runtime settings (P1)
     # Only passed when the profile explicitly declares them, so existing
     # profiles without these keys continue to use PPStructureV3 defaults.
@@ -547,6 +587,19 @@ def build_pipeline_kwargs(
     kwargs["enable_hpi"] = False
     # CINN causes nondeterminism; disabled for reproducibility
     kwargs["enable_cinn"] = False
+
+    # Experimental model dir overrides (P4)
+    # Allow profiles to point text_detection / text_recognition at a
+    # different model directory (e.g. PP-OCRv6) without changing the
+    # default model root resolution for other components.
+    if profile.get("text_detection_model_dir_override"):
+        kwargs["text_detection_model_dir"] = str(
+            profile["text_detection_model_dir_override"]
+        )
+    if profile.get("text_recognition_model_dir_override"):
+        kwargs["text_recognition_model_dir"] = str(
+            profile["text_recognition_model_dir_override"]
+        )
 
     return kwargs
 
@@ -851,6 +904,21 @@ def preflight_profile(
             profile_name,
         )
     )
+
+    # --------------------------------------------------
+    # Experimental gate
+    # --------------------------------------------------
+
+    if profile.get("experimental"):
+        checks.append(
+            make_check(
+                "experimental profile",
+                "warn",
+                "This profile is experimental and not eligible for formal "
+                "benchmark ranking. Results must not be compared directly "
+                "with non-experimental profiles.",
+            )
+        )
 
     # --------------------------------------------------
     # Profile contract

@@ -268,11 +268,18 @@ def make_valid_job_output(
                 else 0,
             },
             "artifacts": {
+                "raw": {"origin_kind": "adapter_assembled_declared", "origin_details": "", "bytes": None, "sha256": None},
+                "clean": {"bytes": None, "sha256": None},
                 "enriched": {
                     "selected": enriched_selected,
                     "available": enriched_available,
                     "present": enriched_present,
                 },
+            },
+            "quality_eligibility": {
+                "source_text": True,
+                "page_mapping_complete": True,
+                "formal_quality_eligible": True,
             },
         }
         mp = out_dir / "metrics.json"

@@ -1592,6 +1592,10 @@ def main() -> None:
             ]
         ),
 
+        "artifacts": artifact_result["artifacts"],
+
+        "quality_eligibility": artifact_result["quality_eligibility"],
+
         "output": {
             **artifact_result[
                 "output"

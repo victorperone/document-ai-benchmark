@@ -99,13 +99,14 @@ def validate_post_execution(
         artifact_path = getattr(paths, _ARTIFACT_PATH_ATTR[artifact])
         check_name = f"artifact {artifact}"
         if artifact == "native":
-            checks.extend(_validate_native_dir(artifact_path, check_name))
+            checks.extend(_validate_native_dir(artifact_path, check_name, parser=parser, profile=profile))
             continue
         if artifact == "document.enriched.md":
-            enriched_present = (
-                metrics.get("artifacts", {}).get("enriched", {}).get("present", True)
-                if metrics else True
+            enriched_block = (
+                (metrics.get("artifacts") or {}).get("enriched", {})
+                if metrics else {}
             )
+            enriched_present = enriched_block.get("present", True)
             if not enriched_present:
                 checks.append(make_check(check_name, "pass"))
                 continue
@@ -205,10 +206,12 @@ def validate_resume_candidate(
             continue
         artifact_path = getattr(paths, path_attr)
         if artifact == "native":
-            checks.extend(_validate_native_dir(artifact_path, check_name))
+            checks.extend(_validate_native_dir(artifact_path, check_name, parser=parser, profile=profile))
             continue
         if artifact == "document.enriched.md":
-            enriched_present = out_block.get("enriched_markdown") is not None
+            enriched_present = (
+                metrics.get("artifacts", {}).get("enriched", {}).get("present", True)
+            )
             if not enriched_present:
                 checks.append(make_check(check_name, "pass"))
                 continue
@@ -270,7 +273,16 @@ def _check_source_inventory(
     return pages
 
 
-def _validate_native_dir(artifact_path: Path, check_name: str) -> list[dict]:
+_VALID_BUNDLE_STATUS = frozenset({"unavailable", "available"})
+
+
+def _validate_native_dir(
+    artifact_path: Path,
+    check_name: str,
+    *,
+    parser: str,
+    profile: str,
+) -> list[dict]:
     checks: list[dict] = []
     if not artifact_path.is_dir():
         checks.append(make_check(check_name, "fail", "directory not found"))
@@ -287,17 +299,42 @@ def _validate_native_dir(artifact_path: Path, check_name: str) -> list[dict]:
         checks.append(make_check(check_name, "fail", f"manifest.json unreadable: {exc}"))
         return checks
 
-    if not isinstance(manifest.get("schema_version"), int):
+    # schema_version must be exactly 1
+    schema_ver = manifest.get("schema_version")
+    if schema_ver != 1:
         checks.append(make_check(check_name, "fail",
-            "manifest.json: schema_version missing or not int"))
+            f"manifest.json: schema_version must be 1, got {schema_ver!r}"))
         return checks
-    if manifest.get("bundle_status") not in {"unavailable", "partial", "complete"}:
+
+    bundle_status = manifest.get("bundle_status")
+    if bundle_status not in _VALID_BUNDLE_STATUS:
         checks.append(make_check(check_name, "fail",
-            "manifest.json: invalid bundle_status"))
+            f"manifest.json: bundle_status must be one of {sorted(_VALID_BUNDLE_STATUS)}, "
+            f"got {bundle_status!r}"))
         return checks
+
     if not isinstance(manifest.get("files"), list):
         checks.append(make_check(check_name, "fail",
             "manifest.json: files must be list"))
+        return checks
+
+    # unavailable → files must be empty
+    if bundle_status == "unavailable" and manifest["files"]:
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: bundle_status=unavailable requires files=[]"))
+        return checks
+
+    # parser and profile must match the job
+    manifest_parser = manifest.get("parser")
+    if manifest_parser is not None and manifest_parser != parser:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: parser mismatch: expected {parser!r}, got {manifest_parser!r}"))
+        return checks
+
+    manifest_profile = manifest.get("profile")
+    if manifest_profile is not None and manifest_profile != profile:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: profile mismatch: expected {profile!r}, got {manifest_profile!r}"))
         return checks
 
     native_root = artifact_path.resolve()
@@ -330,7 +367,7 @@ def _validate_native_dir(artifact_path: Path, check_name: str) -> list[dict]:
         if declared_sha256 is not None:
             import hashlib as _hashlib
             actual = _hashlib.sha256(candidate.read_bytes()).hexdigest()
-            if actual != declared_sha256:
+            if actual != declared_sha256.lower():
                 checks.append(make_check(check_name, "fail",
                     f"manifest.json files[{i}]: sha256 mismatch for {rel!r}"))
                 return checks
@@ -363,6 +400,38 @@ def _load_and_check_metrics(
     for block in ("benchmark", "run", "document", "processing", "output"):
         if block not in metrics:
             checks.append(make_check(f"metrics {block} block", "fail", "missing"))
+
+    # Schema 3 requires artifacts and quality_eligibility blocks
+    artifacts_block = metrics.get("artifacts")
+    if not isinstance(artifacts_block, dict):
+        checks.append(make_check("metrics artifacts block", "fail",
+            "missing or not a dict (required in schema v3)"))
+    else:
+        for sub in ("raw", "clean", "enriched"):
+            if not isinstance(artifacts_block.get(sub), dict):
+                checks.append(make_check(f"metrics artifacts.{sub}", "fail",
+                    "missing or not a dict"))
+        # coherence: enriched.present vs output.enriched_markdown
+        enriched_sub = artifacts_block.get("enriched") or {}
+        enriched_present = enriched_sub.get("present")
+        out_block_pre = metrics.get("output", {})
+        enriched_output_path = out_block_pre.get("enriched_markdown")
+        if enriched_present is True and enriched_output_path is None:
+            checks.append(make_check("metrics artifacts.enriched coherence", "fail",
+                "artifacts.enriched.present=true but output.enriched_markdown=null"))
+        elif enriched_present is False and enriched_output_path is not None:
+            checks.append(make_check("metrics artifacts.enriched coherence", "fail",
+                "artifacts.enriched.present=false but output.enriched_markdown is set"))
+
+    quality_block = metrics.get("quality_eligibility")
+    if not isinstance(quality_block, dict):
+        checks.append(make_check("metrics quality_eligibility block", "fail",
+            "missing or not a dict (required in schema v3)"))
+    else:
+        for field in ("source_text", "page_mapping_complete", "formal_quality_eligible"):
+            if field not in quality_block:
+                checks.append(make_check(f"metrics quality_eligibility.{field}", "fail",
+                    "missing"))
 
     bm = metrics.get("benchmark", {})
     if bm.get("schema_version") != METRICS_SCHEMA_VERSION:

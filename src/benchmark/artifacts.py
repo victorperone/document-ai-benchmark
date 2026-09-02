@@ -124,8 +124,8 @@ def finalize_artifacts(
                     f"complete mapping: enriched_page_markdown has {len(enr)} pages, "
                     f"expected {page_count}"
                 )
-        dcbp = artifact_input.derived_content_by_page or []
-        if dcbp and len(dcbp) != page_count:
+        dcbp = artifact_input.derived_content_by_page
+        if len(dcbp) != page_count:
             raise ValueError(
                 f"complete mapping: derived_content_by_page has {len(dcbp)} pages, "
                 f"expected {page_count}"
@@ -136,10 +136,10 @@ def finalize_artifacts(
                 "page_mapping_status='unavailable' requires source_page_markdown=None"
             )
         source_pages = []
-        dcbp = artifact_input.derived_content_by_page or []
+        dcbp = artifact_input.derived_content_by_page
     else:
         source_pages = artifact_input.source_page_markdown or []
-        dcbp = artifact_input.derived_content_by_page or []
+        dcbp = artifact_input.derived_content_by_page
 
     native_content = artifact_input.native_markdown or ""
 
@@ -216,6 +216,7 @@ def finalize_artifacts(
 
     token_metrics = build_token_metrics(
         raw_text=native_content,
+        source_text=normalized.raw_markdown,
         clean_text=normalized.clean_markdown,
         enriched_text=enriched_text,
         page_count=page_count,
@@ -348,6 +349,18 @@ def finalize_artifacts(
             "derived": {
                 "total_items": total_derived_items,
                 "pages_with_derived": pages_with_derived,
+            },
+            "document_jsonl": {
+                "selected": jsonl_selected,
+                "available": mapping_complete,
+                "present": jsonl_selected and mapping_complete,
+                "records": len(records) if (jsonl_selected and mapping_complete) else None,
+                "bytes": jsonl_bytes,
+                "sha256": (
+                    _sha256_of_file(paths.document_jsonl)
+                    if (jsonl_selected and mapping_complete)
+                    else None
+                ),
             },
         },
 

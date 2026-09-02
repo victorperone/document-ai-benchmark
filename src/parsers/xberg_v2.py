@@ -791,6 +791,8 @@ def _build_metrics(
         "heuristics": artifact_result["heuristics"],
         "tokens": artifact_result["tokens"],
         "normalization": artifact_result["normalization"],
+        "artifacts": artifact_result["artifacts"],
+        "quality_eligibility": artifact_result["quality_eligibility"],
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,

@@ -1,7 +1,14 @@
 """Tests for the schema v3 artifact contract (ParserArtifactInput + finalize_artifacts).
 
-Requires the project venv (.venvs/core/) which has tiktoken installed.
-Run with: .venvs/core/python -m pytest tests/test_artifact_contract.py -v
+Requires a Python environment with pytest and tiktoken installed.
+
+WSL development environment:
+    source notebooks/.venv/bin/activate
+    python -m pytest tests/test_artifact_contract.py -v
+
+Note:
+    scripts/run_tests.py uses unittest discovery and does not execute this
+    pytest-style module. Run this module explicitly as shown above.
 """
 from __future__ import annotations
 
@@ -86,7 +93,6 @@ def test_t1_finalize_all_artifacts_no_crash(tmp_path):
     assert result["artifacts"]["enriched"]["available"] is False
     assert result["artifacts"]["raw"]["bytes"] is not None
     assert result["artifacts"]["raw"]["sha256"] is not None
-    assert result["artifacts"]["native_manifest_created"] is not True or True  # just no crash
     assert result["quality_eligibility"]["page_mapping_complete"] is True
     assert paths.native_dir.is_dir()
     assert (paths.native_dir / "manifest.json").is_file()

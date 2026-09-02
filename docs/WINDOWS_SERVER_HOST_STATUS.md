@@ -805,8 +805,46 @@ Alterações implementadas:
   `text_detection_model_dir_override=null` e
   `text_recognition_model_dir_override=null` (operador define os paths v6 locais)
 
+### Commit U1–U4 — `feat(unstructured): explicit ocr agent, transient images, per-page metrics and new auto profiles`
+
+**Status:** implementado — aguardando validação no Windows Server
+
+**Arquivos alterados:** `src/parsers/unstructured_v2.py`, `config/benchmark_profiles.json`
+**Arquivos novos:** `parser_tests/unstructured/test_per_page_metrics.py`, `parser_tests/unstructured/test_ocr_agent.py`
+**Arquivos corrigidos:** `parser_tests/unstructured/test_profiles.py`, `parser_tests/unstructured/test_adapter_contract.py`
+
+**OCR agent explícito (U1):**
+- Novas chaves `ocr_agent` e `table_ocr_agent` adicionadas a `_PROFILE_KEYS`
+- Constante `_OCR_AGENT_TESSERACT` definida localmente (fallback quando unstructured não instalado)
+- `main()`: quando `ocr_enabled` e `ocr_agent` declarado, passa `ocr_agent` e `table_ocr_agent`
+  ao `partition_pdf()` usando a constante da biblioteca quando disponível
+- Métricas: `strategy_requested`, `strategy_effective`, `ocr_agent_requested`,
+  `ocr_agent_effective`, `table_ocr_agent_requested`
+- Novos perfis `auto_general` (sem `infer_table_structure`) e `auto_quality`
+  (com `infer_table_structure=true`) — ambos com `strategy=auto`, `ocr_agent=tesseract`
+
+**Ciclo de vida de imagens (U2):**
+- `image_temp_dir.cleanup()` movido para bloco `finally` com `image_temp_dir = None`
+  após cleanup — garante que imagens temporárias são removidas mesmo em caso de exceção
+- `parser_native_pages[i]["images_extracted"]`: conta imagens extraídas por página
+  sem persistir nenhum path no artefato
+- `images_extracted_transient` e `unassigned_elements` nas métricas `ocr`
+
+**Métricas por página corretas (U3):**
+- Nova função `_count_elements_by_page()`: distribui contagens por `metadata.page_number`
+  em vez de acumular tudo na página 0
+- `parser_page_elements` agora usa `per_page_counts` para todos os perfis
+- `unassigned_elements` (sem `page_number`) guardados separadamente
+
+**Testes (U4):**
+- `test_per_page_metrics.py`: 8 casos — regression test para o bug de acumulação
+  na página 1, elementos não atribuídos, out-of-range, PageBreak ignorado
+- `test_ocr_agent.py`: 9 casos — chaves presentes, valores corretos, novos perfis
+- Corrigidos: `test_profiles.py` (novo `_EXPECTED_PROFILES` + `_REQUIRED_KEYS`) e
+  `test_adapter_contract.py` (mock de `finalize_artifacts` com `artifacts` e `quality_eligibility`)
+
 ### Próximo passo
 
 ```text
-Implementar Commits U1+U2 (Unstructured strategy explícita e ciclo de vida de imagens).
+Implementar Commits X1–X4 (Xberg layout local CPU, layout para markdown, QR e diagnósticos).
 ```

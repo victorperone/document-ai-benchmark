@@ -46,7 +46,14 @@ _PROFILE_KEYS = frozenset({
     "password", "pdfminer_line_margin", "pdfminer_char_margin",
     "pdfminer_line_overlap", "pdfminer_word_margin",
     "remote_services_enabled", "network_allowed_during_run",
+    # U1: explicit OCR agent selection
+    "ocr_agent",
+    "table_ocr_agent",
 })
+
+# Constant for Tesseract OCR agent — mirrors unstructured's own constant so
+# the adapter compiles even when unstructured is not installed (WSL).
+_OCR_AGENT_TESSERACT = "unstructured.partition.utils.ocr_models.tesseract_ocr.OCRAgentTesseract"
 
 _TESSDATA_CANDIDATES = (
     r"C:\Program Files\Tesseract-OCR\tessdata",
@@ -281,6 +288,46 @@ def _count_elements(elements: list[Any]) -> dict[str, Any]:
     }
 
 
+def _count_elements_by_page(
+    elements: list[Any],
+    page_count: int,
+) -> list[dict[str, Any]]:
+    """Return per-page element counts. Fixes the prior bug that accumulated
+    all counts on page 1 (index 0) instead of distributing by page_number."""
+    page_counters: list[Counter[str]] = [Counter() for _ in range(page_count)]
+    unassigned: list[Any] = []
+
+    for el in elements:
+        if type(el).__name__ == "PageBreak":
+            continue
+        meta = getattr(el, "metadata", None)
+        page_num = getattr(meta, "page_number", None) if meta else None
+        if isinstance(page_num, int) and 1 <= page_num <= page_count:
+            page_counters[page_num - 1][type(el).__name__] += 1
+        else:
+            unassigned.append(el)
+
+    result: list[dict[str, Any]] = []
+    for page_num, counts in enumerate(page_counters, start=1):
+        result.append({
+            "page_number": page_num,
+            "tables_detected": counts.get("Table", 0),
+            "images_detected": counts.get("Image", 0),
+            "headings_detected": counts.get("Title", 0),
+            "lists_detected": counts.get("ListItem", 0),
+            "formulas_detected": counts.get("Formula", 0),
+            "captions_detected": counts.get("FigureCaption", 0),
+            "page_headers_detected": counts.get("Header", 0),
+            "page_footers_detected": counts.get("Footer", 0),
+            "text_blocks_detected": (
+                counts.get("NarrativeText", 0) + counts.get("Text", 0)
+            ),
+            "layout_boxes": sum(counts.values()),
+        })
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -409,6 +456,10 @@ def _build_metrics(
     run_log_path: Path | None,
     metrics_json_path: Path | None,
     verbose: bool = False,
+    ocr_agent_effective: str | None = None,
+    strategy_effective: str | None = None,
+    images_extracted_total: int = 0,
+    unassigned_elements_count: int = 0,
 ) -> dict[str, Any]:
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
     input_bytes = input_path.stat().st_size
@@ -467,11 +518,17 @@ def _build_metrics(
             ),
             "ocr": {
                 "enabled": ocr_enabled,
-                "strategy": strategy,
+                "strategy_requested": strategy,
+                "strategy_effective": strategy_effective or strategy,
                 "engine": profile.get("ocr_engine"),
+                "ocr_agent_requested": profile.get("ocr_agent"),
+                "ocr_agent_effective": ocr_agent_effective,
+                "table_ocr_agent_requested": profile.get("table_ocr_agent"),
                 "languages": profile.get("languages"),
                 "infer_table_structure": profile.get("infer_table_structure", False),
                 "hi_res_model_name": profile.get("hi_res_model_name"),
+                "images_extracted_transient": images_extracted_total,
+                "unassigned_elements": unassigned_elements_count,
                 # Public API in 0.27.1 does not expose stable per-page OCR tracking
                 "pages_requested": None,
                 "pages_processed": None,
@@ -1004,6 +1061,30 @@ def main() -> None:
         "form_extraction_skip_tables": bool(profile.get("form_extraction_skip_tables", True)),
     }
 
+    # U1: explicit OCR agent — use profile value or fall back to Tesseract constant.
+    # Import the library constant when available so the value stays in sync with
+    # whatever version is installed; fall back to the string we know from 0.27.x.
+    _ocr_agent_requested = profile.get("ocr_agent")
+    if ocr_enabled and _ocr_agent_requested:
+        try:
+            from unstructured.partition.utils.constants import (  # type: ignore  # noqa: PLC0415
+                OCR_AGENT_TESSERACT,
+            )
+            _resolved_ocr_agent = OCR_AGENT_TESSERACT if _ocr_agent_requested == "tesseract" else _ocr_agent_requested
+        except ImportError:
+            _resolved_ocr_agent = _OCR_AGENT_TESSERACT
+        partition_kwargs["ocr_agent"] = _resolved_ocr_agent
+
+        _table_ocr_agent = profile.get("table_ocr_agent", _ocr_agent_requested)
+        try:
+            from unstructured.partition.utils.constants import (  # type: ignore  # noqa: PLC0415
+                OCR_AGENT_TESSERACT,
+            )
+            _resolved_table_agent = OCR_AGENT_TESSERACT if _table_ocr_agent == "tesseract" else _table_ocr_agent
+        except ImportError:
+            _resolved_table_agent = _OCR_AGENT_TESSERACT
+        partition_kwargs["table_ocr_agent"] = _resolved_table_agent
+
     infer_table_structure = bool(profile.get("infer_table_structure", False))
     if infer_table_structure:
         partition_kwargs["infer_table_structure"] = True
@@ -1017,6 +1098,7 @@ def main() -> None:
     )
 
     image_temp_dir: TemporaryDirectory | None = None
+    unassigned_elements: list[Any] = []
 
     if image_block_types:
         image_temp_dir = TemporaryDirectory(
@@ -1071,32 +1153,35 @@ def main() -> None:
 
             page_texts, native_pages = _elements_to_page_texts(elements, page_count)
             element_counts = _count_elements(elements)
+            # U3: per-page counts (fixes prior bug that put all counts on page 1)
+            per_page_counts = _count_elements_by_page(elements, page_count)
 
-            parser_page_elements = [
-                {
-                    "page_number": i + 1,
-                    **({
-                        k: element_counts[k]
-                        for k in ("tables_detected", "images_detected", "headings_detected",
-                                  "lists_detected", "text_blocks_detected")
-                    } if i == 0 else {}),
-                }
-                for i in range(page_count)
-            ]
+            parser_page_elements = per_page_counts
+
             parser_native_pages = [
                 {
                     "page_number": i + 1,
                     "elements": native_pages.get(i + 1, []),
+                    # U2: count images extracted to temp dir (never persist paths)
+                    "images_extracted": sum(
+                        1 for el in native_pages.get(i + 1, [])
+                        if el.get("category") == "Image"
+                    ),
                 }
                 for i in range(page_count)
             ]
+
+            # U2: collect unassigned elements (no page number) into separate record
+            unassigned_elements = native_pages.get(0, [])
 
     except Exception:
         monitor.stop()
         raise
     finally:
+        # U2: always cleanup — even on exception — so no temp images linger on disk
         if image_temp_dir is not None:
             image_temp_dir.cleanup()
+            image_temp_dir = None
 
     pipeline_seconds = perf_counter() - pipeline_started
 
@@ -1126,6 +1211,10 @@ def main() -> None:
 
     resources = monitor.stop()
 
+    images_extracted_total = sum(
+        p.get("images_extracted", 0) for p in parser_native_pages
+    )
+
     metrics = _build_metrics(
         input_path=input_path,
         profile=profile,
@@ -1143,6 +1232,10 @@ def main() -> None:
         verbose=args.verbose,
         run_log_path=paths.run_log if artifact_policy.includes("run.log") else None,
         metrics_json_path=paths.metrics_json if artifact_policy.includes("metrics.json") else None,
+        ocr_agent_effective=partition_kwargs.get("ocr_agent"),
+        strategy_effective=strategy,
+        images_extracted_total=images_extracted_total,
+        unassigned_elements_count=len(unassigned_elements),
     )
 
     if artifact_policy.includes("metrics.json"):

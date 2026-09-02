@@ -196,12 +196,24 @@ class TestAdapterContract(unittest.TestCase):
             mock_finalize.return_value = {
                 "timing": {
                     "normalization_seconds": 0.0,
+                    "common_metrics_seconds": 0.0,
+                    "artifact_write_seconds": 0.0,
                 },
                 "empty_output_pages": [],
                 "content_elements": {},
                 "heuristics": {},
                 "tokens": {},
                 "normalization": {},
+                "artifacts": {
+                    "raw": {"origin_kind": "adapter_assembled_declared", "bytes": None, "sha256": None},
+                    "clean": {"bytes": None, "sha256": None},
+                    "enriched": {"selected": False, "available": False, "present": False},
+                },
+                "quality_eligibility": {
+                    "source_text": True,
+                    "page_mapping_complete": True,
+                    "formal_quality_eligible": True,
+                },
                 "output": {
                     "clean_markdown_bytes": 100,
                 },
@@ -262,12 +274,26 @@ def _make_benchmark_sys_modules(
     """
     if finalize_return is None:
         finalize_return = {
-            "timing": {"normalization_seconds": 0.0},
+            "timing": {
+                "normalization_seconds": 0.0,
+                "common_metrics_seconds": 0.0,
+                "artifact_write_seconds": 0.0,
+            },
             "empty_output_pages": [],
             "content_elements": {},
             "heuristics": {},
             "tokens": {},
             "normalization": {},
+            "artifacts": {
+                "raw": {"origin_kind": "adapter_assembled_declared", "bytes": None, "sha256": None},
+                "clean": {"bytes": None, "sha256": None},
+                "enriched": {"selected": False, "available": False, "present": False},
+            },
+            "quality_eligibility": {
+                "source_text": True,
+                "page_mapping_complete": True,
+                "formal_quality_eligible": True,
+            },
             "output": {"clean_markdown_bytes": 100},
         }
 

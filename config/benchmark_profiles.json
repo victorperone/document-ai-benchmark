@@ -717,7 +717,9 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": null,
+          "table_ocr_agent": null
         },
         "auto_ocr": {
           "strategy": "auto",
@@ -742,7 +744,9 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "hi_res_tables": {
           "strategy": "hi_res",
@@ -767,7 +771,9 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "ocr_only_diagnostic": {
           "strategy": "ocr_only",
@@ -792,7 +798,9 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "full_cpu_local": {
           "strategy": "hi_res",
@@ -820,7 +828,63 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
+        },
+        "auto_general": {
+          "strategy": "auto",
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "tesseract",
+          "languages": [
+            "por",
+            "eng"
+          ],
+          "detect_language_per_element": false,
+          "infer_table_structure": false,
+          "include_page_breaks": true,
+          "hi_res_model_name": "yolox",
+          "extract_image_block_types": [],
+          "extract_image_block_to_payload": false,
+          "extract_forms": false,
+          "form_extraction_skip_tables": true,
+          "password": null,
+          "pdfminer_line_margin": null,
+          "pdfminer_char_margin": null,
+          "pdfminer_line_overlap": null,
+          "pdfminer_word_margin": 0.185,
+          "remote_services_enabled": false,
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
+        },
+        "auto_quality": {
+          "strategy": "auto",
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "tesseract",
+          "languages": [
+            "por",
+            "eng"
+          ],
+          "detect_language_per_element": false,
+          "infer_table_structure": true,
+          "include_page_breaks": true,
+          "hi_res_model_name": "yolox",
+          "extract_image_block_types": [],
+          "extract_image_block_to_payload": false,
+          "extract_forms": false,
+          "form_extraction_skip_tables": true,
+          "password": null,
+          "pdfminer_line_margin": null,
+          "pdfminer_char_margin": null,
+          "pdfminer_line_overlap": null,
+          "pdfminer_word_margin": 0.185,
+          "remote_services_enabled": false,
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         }
       }
     },

@@ -641,6 +641,12 @@ _PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+_PYMUPDF_OPTIONAL_PROFILE_KEYS: frozenset[str] = frozenset(
+    {
+        "diagnostic_only",
+    }
+)
+
 _TO_MARKDOWN_ARGS: frozenset[str] = frozenset(
     {
         "page_chunks",
@@ -695,8 +701,17 @@ def preflight_profile(
     # Profile keys
     # --------------------------------------------------
 
-    missing_keys = sorted(_PYMUPDF_PROFILE_KEYS - set(profile))
-    unknown_keys = sorted(set(profile) - _PYMUPDF_PROFILE_KEYS)
+    missing_keys = sorted(
+    (
+        _PYMUPDF_PROFILE_KEYS
+        - _PYMUPDF_OPTIONAL_PROFILE_KEYS
+    )
+    - set(profile)
+    )
+    unknown_keys = sorted(
+        set(profile)
+        - _PYMUPDF_PROFILE_KEYS
+    )
     key_errors: list[str] = []
     if missing_keys:
         key_errors.append("missing: " + ", ".join(missing_keys))

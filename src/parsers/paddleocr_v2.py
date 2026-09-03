@@ -455,6 +455,20 @@ _PREDICT_ONLY_KWARGS = frozenset({
     "markdown_ignore_labels",
 })
 
+_PPSTRUCTURE_COMMON_INIT_KWARGS = frozenset(
+    {
+        "device",
+        "engine",
+        "engine_config",
+        "enable_hpi",
+        "use_tensorrt",
+        "precision",
+        "enable_mkldnn",
+        "mkldnn_cache_capacity",
+        "cpu_threads",
+        "enable_cinn",
+    }
+)
 
 def build_pipeline_init_kwargs(
     model_paths: dict[str, Path],
@@ -1142,12 +1156,32 @@ def preflight_profile(
             profile,
         )
 
-        signature = inspect.signature(PPStructureV3.__init__)
-        known_parameters = set(signature.parameters)
+        signature = inspect.signature(
+            PPStructureV3.__init__
+        )
+
+        known_parameters = set(
+            signature.parameters
+        )
+
+        has_var_kwargs = any(
+            parameter.kind
+            == inspect.Parameter.VAR_KEYWORD
+            for parameter
+            in signature.parameters.values()
+        )
+
         unknown_kwargs = sorted(
             key
             for key in pipeline_kwargs
-            if key not in known_parameters
+            if (
+                key not in known_parameters
+                and not (
+                    has_var_kwargs
+                    and key
+                    in _PPSTRUCTURE_COMMON_INIT_KWARGS
+                )
+            )
         )
 
         if unknown_kwargs:

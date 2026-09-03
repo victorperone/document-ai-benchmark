@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -19,6 +20,7 @@ class ProcessResult:
     stderr: str
     timed_out: bool
     pid: int
+    duration_seconds: float
 
 
 def _windows_job_object() -> object | None:
@@ -202,6 +204,7 @@ def run_process_tree(
     else:
         popen_kwargs["start_new_session"] = True
 
+    start_time = time.monotonic()
     process = subprocess.Popen(command, **popen_kwargs)  # type: ignore[arg-type]
     if windows_job is not None and not _assign_windows_job(windows_job, process):
         # Never retain an empty Job Object: TerminateJobObject could report
@@ -227,6 +230,7 @@ def run_process_tree(
     finally:
         close_windows_job(windows_job)
 
+    duration_seconds = time.monotonic() - start_time
     return ProcessResult(
         args=command,
         returncode=process.returncode if process.returncode is not None else 1,
@@ -234,4 +238,5 @@ def run_process_tree(
         stderr=stderr,
         timed_out=timed_out,
         pid=process.pid,
+        duration_seconds=duration_seconds,
     )

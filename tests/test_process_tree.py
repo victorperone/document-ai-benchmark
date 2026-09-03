@@ -40,12 +40,19 @@ class ProcessTreeTests(unittest.TestCase):
                 [sys.executable, "-c", source, str(child_pid_path)], timeout=0.5
             )
             self.assertTrue(result.timed_out)
+            self.assertGreater(result.duration_seconds, 0)
             child_pid = int(child_pid_path.read_text(encoding="utf-8"))
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline and _alive_non_zombie(child_pid):
                 time.sleep(0.02)
             self.assertFalse(_alive_non_zombie(result.pid))
             self.assertFalse(_alive_non_zombie(child_pid))
+
+    def test_normal_execution_returns_positive_duration(self) -> None:
+        result = run_process_tree([sys.executable, "-c", "pass"])
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.timed_out)
+        self.assertGreater(result.duration_seconds, 0)
 
 
 class WindowsProcessTreeContractTests(unittest.TestCase):
@@ -65,6 +72,7 @@ class WindowsProcessTreeContractTests(unittest.TestCase):
         ):
             result = process_tree.run_process_tree(["python.exe", "worker.py"], capture_output=True)
         self.assertEqual(result.returncode, 0)
+        self.assertGreater(result.duration_seconds, 0)
         self.assertEqual(popen.call_args.kwargs["creationflags"], 512)
         self.assertNotIn("start_new_session", popen.call_args.kwargs)
         assign.assert_called_once_with(fake_job, fake_process)

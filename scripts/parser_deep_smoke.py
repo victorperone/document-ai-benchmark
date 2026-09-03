@@ -45,6 +45,15 @@ MODEL_COMPONENTS = {
     "unstructured": "unstructured",
     "xberg": "xberg",
 }
+MODEL_VERSIONS = {
+    "pymupdf": "PP-OCRv6_medium_det+PP-OCRv6_medium_rec+SmolVLM-256M-Instruct",
+    "docling": "full_cpu_local",
+    "mineru": "pipeline-3.4.4",
+    "paddleocr": "PPStructureV3-PP-OCRv5",
+    "liteparse": "SmolVLM-256M-Instruct",
+    "unstructured": "full_cpu_local",
+    "xberg": "layout-1.0.14",
+}
 FIXTURE_ROOT = ROOT / "fixtures" / "deep_smoke"
 FIXTURE_PDF = FIXTURE_ROOT / "deep_smoke.pdf"
 FIXTURE_MANIFEST = FIXTURE_ROOT / "manifest.json"
@@ -90,7 +99,12 @@ def verify_fixture() -> dict:
 
 def verify_model(parser: str) -> dict:
     root = MODEL_ROOTS[parser].resolve()
-    return verify_manifest(MODEL_COMPONENTS[parser], root, root / "manifest.json")
+    return verify_manifest(
+        MODEL_COMPONENTS[parser],
+        MODEL_VERSIONS[parser],
+        root,
+        root / "manifest.json",
+    )
 
 
 def _artifact_text(job_root: Path) -> str:

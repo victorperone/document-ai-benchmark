@@ -87,10 +87,10 @@ class ModelManifestTests(unittest.TestCase):
             manifest_path.write_text(
                 json.dumps(build_manifest("unit", "1", root, manifest_path)), encoding="utf-8"
             )
-            verify_manifest("unit", root, manifest_path)
+            verify_manifest("unit", "1", root, manifest_path)
             (root / "download.part").write_bytes(b"unexpected")
             with self.assertRaisesRegex(RuntimeError, "unlisted model files"):
-                verify_manifest("unit", root, manifest_path)
+                verify_manifest("unit", "1", root, manifest_path)
 
 
 if __name__ == "__main__":

@@ -39,7 +39,12 @@ def build_manifest(component: str, version: str, root: Path, manifest_path: Path
     }
 
 
-def verify_manifest(component: str, root: Path, manifest_path: Path) -> dict:
+def verify_manifest(
+    component: str,
+    expected_version: str,
+    root: Path,
+    manifest_path: Path,
+) -> dict:
     root = root.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
@@ -50,6 +55,10 @@ def verify_manifest(component: str, root: Path, manifest_path: Path) -> dict:
         )
     if not isinstance(manifest.get("version"), str) or not manifest["version"]:
         raise RuntimeError("model manifest version is missing")
+    if manifest["version"] != expected_version:
+        raise RuntimeError(
+            f"version mismatch: expected {expected_version!r}, got {manifest['version']!r}"
+        )
     if not isinstance(manifest.get("prepared_at_utc"), str):
         raise RuntimeError("model manifest prepared_at_utc is missing")
     files = manifest.get("files")
@@ -93,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("prepare", "verify"))
     parser.add_argument("--component", required=True)
-    parser.add_argument("--version", default="unknown")
+    parser.add_argument("--version", required=True)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
     return parser.parse_args()
@@ -112,7 +121,7 @@ def main() -> int:
         )
         temporary.replace(manifest_path)
     else:
-        verify_manifest(args.component, root, manifest_path)
+        verify_manifest(args.component, args.version, root, manifest_path)
     print(f"MODEL_MANIFEST_{args.mode.upper()}=PASS component={args.component}")
     return 0
 

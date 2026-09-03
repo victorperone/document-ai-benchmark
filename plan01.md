@@ -19,7 +19,7 @@
 - [x] Adicionar `content_validation` às métricas, com existência, UTF-8, bytes, presença alfanumérica, expectativa e justificativa por artefato. Saída vazia, somente comentários ou somente separadores falhará quando o inventário e o perfil exigirem conteúdo.
 - [x] Introduzir resolução de raízes por componente, mantendo `resolve_model_root` compatível. `visual_enrichment` apontará para `models/visual-enrichment`; todos os caminhos host serão absolutos e descendentes de `models/`.
 - [x] Criar o contrato comum `ProcessResult`/`run_process_tree`: Job Object via `ctypes` no Windows, `CREATE_NEW_PROCESS_GROUP`, fallback `taskkill /T /F`, espera do encerramento e fallback POSIX testável no WSL.
-- [ ] Padronizar scripts de modelos em `-Mode Prepare|Verify`. `Prepare` pode usar rede e grava o manifesto; `Verify` é offline e somente leitura, valida hashes e executa inferência real. Manifesto v1: componente, versão, data de preparação e arquivos com caminho relativo, tamanho e SHA-256.
+- [x] Padronizar scripts de modelos em `-Mode Prepare|Verify`. `Prepare` pode usar rede e grava o manifesto; `Verify` é offline e somente leitura, valida hashes e executa inferência real. Manifesto v1: componente, versão, data de preparação e arquivos com caminho relativo, tamanho e SHA-256.
 
 ## Implementação em fases
 
@@ -54,8 +54,8 @@
 ### 4. Smoke profundo, readiness e documentação
 
 - [x] Criar uma fixture determinística, local e versionada de duas páginas contendo título, texto digital em português, tabela, fórmula, código, gráfico/diagrama, imagem com texto, QR válido, selo e uma região rasterizada/rotacionada. Versionar PDF, assets e manifesto com SHA-256.
-- [ ] Criar `parser_deep_smoke.py` e `run_deep_smoke_all.ps1`. Executar os sete perfis sequencialmente, offline, em saída limpa, com todos os artefatos, pós-validação, verificação de hashes dos modelos e ausência de descendentes.
-- [ ] Criar `check_server_readiness.ps1`: repositório limpo/SHA, ambiente, executáveis, modelos `Verify`, testes comuns, testes de cada parser, smoke profundo, links, temporários, downloads e leaks. Gravar relatório em `logs/windows_readiness/<timestamp>/` e imprimir `SERVER_READINESS`, `COMMIT`, `PARSERS_READY`, `PARSERS_FAILED` e `FUNCTIONAL_TESTS_SKIPPED`.
+- [x] Criar `parser_deep_smoke.py` e `run_deep_smoke_all.ps1`. Executar os sete perfis sequencialmente, offline, em saída limpa, com todos os artefatos, pós-validação, verificação de hashes dos modelos e ausência de descendentes.
+- [x] Criar `check_server_readiness.ps1`: repositório limpo/SHA, ambiente, executáveis, modelos `Verify`, testes comuns, testes de cada parser, smoke profundo, links, temporários, downloads e leaks. Gravar relatório em `logs/windows_readiness/<timestamp>/` e imprimir `SERVER_READINESS`, `COMMIT`, `PARSERS_READY`, `PARSERS_FAILED` e `FUNCTIONAL_TESTS_SKIPPED`.
 - [ ] Reestruturar `docs/WINDOWS_SERVER_HOST_STATUS.md` como documento canônico: branch/SHA dinâmicos, separação WSL versus Windows nativo, milestone antigo preservado como histórico, gates atuais, comandos oficiais e status “código preparado; homologação Windows pendente”. Não criar um novo guia.
 - [ ] Atualizar `plan01.md` ao concluir cada fase, sem marcar readiness real como concluído até receber os logs do Windows Server.
 

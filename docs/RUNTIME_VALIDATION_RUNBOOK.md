@@ -1,244 +1,175 @@
 # Runtime Validation Runbook
 
-This document covers how to run, interpret, and maintain the benchmark runtime
-validation campaign. It assumes the codebase is in **PRE-RUNTIME CODE READINESS:
-COMPLETE** state — all tests pass, no containers need to run.
+**Branch:** `perf/parser-runtime-optimization`
+**Data:** 2026-09-03
+**Status:** Código preparado — homologação nativa Windows Server pendente
 
 ---
 
-## Prerequisites
+## 1. Propósito e escopo
 
-- Docker Engine running (`docker info`)
-- Docker Compose available (`docker compose version`)
-- All models that a suite requires must be downloaded **before** launching that
-  suite. See [Known model blockers](#known-model-blockers).
-- Python 3.10+
-- All project dependencies installed (`pip install -r requirements.txt`)
+Este runbook descreve o protocolo de validação de prontidão do benchmark de PDF para Markdown no Windows Server 2025. Ele cobre duas etapas distintas:
+
+| Etapa | Ambiente | O que valida |
+|---|---|---|
+| **Validação WSL** | WSL (Linux no Windows) | Corretude de código, sintaxe, contratos de artefatos, testes unitários |
+| **Certificação Windows** | Windows Server 2025 nativo | Inferência real, modelos, encerramento de processos, isolamento offline |
+
+**A validação WSL nunca substitui a certificação Windows.** Testes que passam no WSL apenas comprovam que o código está sintaticamente correto e que os contratos lógicos estão satisfeitos. A inferência efetiva de modelos, o comportamento de processos Windows e a ausência de conexões de rede só podem ser comprovados no host nativo.
 
 ---
 
-## How to run the regression suite
+## 2. Validação no WSL (antes de levar para o Windows Server)
 
-Verifies that all code-level contracts hold without launching any container:
+Execute no WSL após cada conjunto de alterações:
 
 ```bash
-python scripts/run_tests.py
-echo $?   # must be 0
+python3 scripts/run_tests.py
+python3 -m compileall -q src scripts parser_tests tests
+python3 scripts/parser_deep_smoke.py --validate-fixture-only
+git diff --check
 ```
+
+Todos devem terminar com código zero. Se qualquer um falhar, **não prosseguir para o Windows Server**.
 
 ---
 
-## How to consult available suites
+## 3. Fase Prepare — aquisição de modelos (requer rede)
 
-```bash
-python scripts/show_benchmark_plan.py
-```
-
-Suites defined in `config/benchmark_profiles.json`:
-
-| Suite | Purpose |
-|---|---|
-| `smoke` | Integration health-check — 4 parsers, simplest profiles |
-| `default` | Primary benchmark (identical to `ocr_primary`) |
-| `ocr_primary` | Primary OCR benchmark (explicit historical name) |
-| `full_corpus` | Expanded benchmark — 8 parser/profile pairs |
-| `diagnostic_ocr` | Force-OCR diagnostic across 3 parsers |
-| `visual_ablation` | Docling + PaddleOCR visual feature ablation |
-| `windows_all_features_host` | Windows Server nativo, sete parsers e todos os artefatos |
-
----
-
-## How to run a smoke dry-run
-
-Verifies the job plan without executing containers:
-
-```bash
-python scripts/run_batch.py \
-  --suite smoke \
-  --input-dir data/raw/batch \
-  --dry-run
-```
-
-## Native Windows Server validation
-
-The Windows host flow is separate from the Docker campaign above. WSL can run
-the common/unit checks, but it cannot certify native Windows readiness.
-
-On Windows Server, prepare model files while network access is explicitly
-allowed:
+Execute **com acesso à internet**, antes de aplicar qualquer isolamento de rede.
 
 ```powershell
 .\scripts\windows\setup_envs.ps1
+.\scripts\windows\check_envs.ps1
 .\scripts\windows\prepare_all_models.ps1 -Mode Prepare
 ```
 
-Then enforce the offline release gate:
+O que acontece nessa fase:
+- Ambientes virtuais por parser são criados e verificados
+- Modelos são baixados do Hugging Face para diretórios locais sob `models/`
+- Manifestos de modelo são gravados com componente, versão, data e hashes de arquivos
+- Nenhuma inferência real ocorre ainda
+
+Ao final, **desconecte a rede ou aplique firewall externo** antes de prosseguir para a fase Verify.
+
+---
+
+## 4. Fase Verify — verificação offline (sem rede)
+
+Após isolar a rede, defina as variáveis de confirmação e execute:
 
 ```powershell
-.\scripts\windows\check_server_readiness.ps1 -VerboseOutput
+# Confirmação manual do operador após isolar a rede
+$env:DOCUMENT_AI_NETWORK_ISOLATED = '1'
+$env:DOCUMENT_AI_ENFORCE_OFFLINE = '1'
+
+.\scripts\windows\prepare_all_models.ps1 -Mode Verify
 ```
 
-The gate enables one real, offline fixture conversion in every isolated parser
-test suite and then repeats the complete seven-parser deep smoke. A skipped
-functional test or a changed model manifest makes readiness fail.
+**`DOCUMENT_AI_NETWORK_ISOLATED`** é uma variável de confirmação — o script **não modifica o firewall**. O operador é responsável por garantir o isolamento real antes de definir essa variável.
 
-Useful non-mutating checks and the fresh default run are:
+**`DOCUMENT_AI_ENFORCE_OFFLINE`** ativa o `sitecustomize.py` (injetado via `PYTHONPATH`) que intercepta tentativas de conexão Python e as registra em `logs/offline_guard.jsonl`. Qualquer tentativa registrada reprova o gate.
+
+O que a fase Verify valida:
+- Manifesto de cada componente corresponde aos arquivos presentes (hash SHA-256)
+- Inferência real funciona offline (PaddleOCR, SmolVLM, MinerU, etc.)
+- Nenhum arquivo temporário é deixado após a verificação
+
+> **Isolamento de rede no nível do SO é um pré-requisito externo.** Bibliotecas nativas (como PaddlePaddle ou PyTorch) podem abrir sockets sem passar pelo Python, contornando o `sitecustomize.py`. O firewall externo é a única garantia completa.
+
+---
+
+## 5. Execução completa e gate de readiness
 
 ```powershell
 .\scripts\windows\run_all_features_host.ps1 -DryRun
-.\scripts\windows\run_all_features_host.ps1 -PreflightOnly
-.\scripts\windows\run_all_features_host.ps1
+.\scripts\windows\check_server_readiness.ps1 -VerboseOutput
 ```
 
-Use `-Resume` only when intentional. The native status and evidence contract is
-maintained in [WINDOWS_SERVER_HOST_STATUS.md](WINDOWS_SERVER_HOST_STATUS.md).
+O dry-run deve exibir exatamente **7 jobs** com os perfis definidos. Se exibir número diferente, há erro na configuração da suíte.
 
----
+### Critério de aceite
 
-## How to run the default suite
+O `check_server_readiness.ps1` é aceito somente com:
 
-```bash
-# Equivalent: omitting --suite defaults to 'default'
-python scripts/run_batch.py \
-  --input-dir data/raw/batch
-
-# Explicit:
-python scripts/run_batch.py \
-  --suite default \
-  --input-dir data/raw/batch
+```
+SERVER_READINESS=PASS
+PARSERS_READY=pymupdf,docling,mineru,paddleocr,liteparse,unstructured,xberg
+PARSERS_FAILED=
+FUNCTIONAL_TESTS_SKIPPED=0
 ```
 
----
+Além disso:
+- Manifestos idênticos antes e depois da execução
+- Zero tentativas de conexão externa (`logs/offline_guard.jsonl` vazio ou ausente)
+- Zero processos Python residuais do repositório
+- Zero arquivos temporários com prefixos `document-ai-*`, `document-ai-visual-*`, `unstructured_images_*`, `mineru-verify-*`, `visual_crops`
+- Zero links Markdown quebrados nos artefatos
+- Zero Markdowns inesperadamente vazios
 
-## How to run the runtime campaign in plan mode
+### Como `PARSERS_READY` é calculado
 
-Prints all phases without starting any container:
+`PARSERS_READY` é derivado **exclusivamente** de linhas `DEEP_SMOKE_PARSER=PASS parser=<nome>` presentes no log do deep smoke (`logs/windows_readiness/<timestamp>/deep_smoke.log`), e somente quando o gate `deep_smoke` terminou com código zero (`GATE_deep_smoke=PASS`).
 
-```bash
-python scripts/run_runtime_campaign.py
-# or equivalently:
-python scripts/run_runtime_campaign.py --plan
-echo $?   # must be 0
-```
-
-Expected output: 10 phases listed in order, zero containers started.
-
----
-
-## How to execute a single campaign phase
-
-```bash
-python scripts/run_runtime_campaign.py \
-  --phase smoke_limit1 \
-  --execute
-```
-
-The runner calls `scripts/run_batch.py` internally for three sequential steps:
-
-1. **Preflight** (`--preflight`) — validates Docker, models, and infrastructure
-2. **Forced fresh execution** (`--force`) — runs all containers unconditionally,
-   producing fresh outputs for this phase; does not reuse prior outputs
-3. **Read-only resume check** (`--resume-check`) — verifies that every job is
-   now reusable (would be SKIP in a future resume); exits 1 if any job is
-   still pending, meaning the outputs produced in step 2 are not valid
+**A existência de `metrics.json` não conta como parser pronto.**
 
 ---
 
-## How to execute the full campaign
+## 6. Testes funcionais — proibição de pular
 
-```bash
-python scripts/run_runtime_campaign.py --execute
-```
-
-The campaign stops on the first failing phase. Remaining phases are recorded
-as `NOT_RUN`. A JSON + Markdown report is written to `logs/`.
+Testes funcionais marcados como `skip` em ambiente Windows são **falha**, não neutros. O campo `FUNCTIONAL_TESTS_SKIPPED` na saída do readiness deve ser zero. Qualquer valor diferente de zero indica que o ambiente não estava pronto para executar os testes, e o resultado não pode ser considerado válido.
 
 ---
 
-## How to prepare models manually when preflight requests it
+## 7. Onde encontrar os logs
 
-Preflight will report which models are missing. Follow the installation
-instructions for each parser:
-
-- **pymupdf/rapidtess**: Tesseract OCR — `apt install tesseract-ocr`
-- **docling/rapidocr**: automatically downloaded on first run inside the
-  container if internet access is available
-- **mineru**: follow MinerU model download instructions in `docker/`
-- **paddleocr**: see [Known model blockers](#known-model-blockers) for models
-  that require manual steps
-
-Do **not** modify `config/benchmark_profiles.json` profiles to work around
-missing models. If a model is missing, the phase reports `FAIL` and the
-campaign stops — that is expected behavior.
-
----
-
-## How to interpret campaign phase statuses
-
-| Status | Meaning |
+| Artefato | Local |
 |---|---|
-| `PASS` | Preflight, execution, and resume check all returned exit 0 |
-| `FAIL` | One of the three steps returned a non-zero exit code |
-| `NOT_RUN` | Phase was not reached because a prior phase failed |
-| `EXPECTED_BLOCK` | Manual annotation: failure was expected (e.g. model not installed) |
-| `ENVIRONMENT_BLOCK` | Manual annotation: environment issue (OOM, disk full, etc.) |
-| `IMPLEMENTATION_FAIL` | Manual annotation: confirmed code bug |
-
-`EXPECTED_BLOCK`, `ENVIRONMENT_BLOCK`, and `IMPLEMENTATION_FAIL` are manual
-annotations for review. The runner only writes `PASS`, `FAIL`, and `NOT_RUN`
-automatically.
+| Relatório de readiness | `logs/windows_readiness/<timestamp>/summary.txt` |
+| Falhas detalhadas | `logs/windows_readiness/<timestamp>/failures.txt` |
+| Log do deep smoke | `logs/windows_readiness/<timestamp>/deep_smoke.log` |
+| Tentativas de rede bloqueadas | `logs/offline_guard.jsonl` |
+| Resíduos de temp no gate | `logs/windows_readiness/<timestamp>/hygiene_temp_residues.log` |
+| Leaks de processo | `logs/windows_readiness/<timestamp>/process_leaks.log` |
 
 ---
 
-## How to collect logs and results
+## 8. Resumo das variáveis de ambiente relevantes
 
-After execution:
-
-- **Campaign report**: `logs/runtime_campaign_<timestamp>.json` and `.md`
-- **Batch logs** (per phase): `logs/batch_<timestamp>.log`
-- **Results per phase**: `logs/batch_<timestamp>_results.jsonl`
-- **Execution output**: `outputs/_runtime/<phase_name>/`
-
----
-
-## What not to alter during a campaign
-
-- `config/benchmark_profiles.json` — changing suites or profiles mid-campaign
-  invalidates comparisons
-- `config/runtime_campaign.json` — changing phase names or output roots
-  invalidates resume logic
-- Adapter scripts under `src/parsers/` — must remain unchanged
-- Model weights already loaded into containers — do not update models between
-  phases
-
----
-
-## Known model blockers
-
-The following models are not auto-downloaded and require manual setup before
-the corresponding suite/profile can pass preflight:
-
-| Model | Used by | Notes |
+| Variável | Quem define | Significado |
 |---|---|---|
-| `PP-FormulaNet_plus-L` | `paddleocr/mvp_structured`, `paddleocr/full` | Download manually per PaddleOCR docs |
-| `PP-Chart2Table` | `paddleocr/ocr_structured_visual`, `paddleocr/full` | Experimental; may not be available |
-| `UVDoc` | `paddleocr/full` (document unwarping) | Requires separate model archive |
-
-These are documented as **environment blockers**, not code bugs. Do not
-hardcode them as permanent failures in unit tests — the environment may change.
+| `DOCUMENT_AI_NETWORK_ISOLATED` | Operador (manual) | Confirma que o isolamento de rede foi aplicado externamente |
+| `DOCUMENT_AI_ENFORCE_OFFLINE` | Operador (manual) | Ativa o `sitecustomize.py` para bloquear conexões Python |
+| `DOCUMENT_AI_OFFLINE_LOG` | Opcional | Caminho alternativo para o log JSONL do guard offline |
+| `BENCHMARK_VISUAL_ROOT` | Scripts de prepare | Raiz dos modelos do worker visual |
+| `BENCHMARK_MINERU_ROOT` | Scripts de prepare | Raiz dos modelos MinerU |
+| `MINERU_TOOLS_CONFIG_JSON` | Scripts de prepare | Caminho do `mineru.json` local |
+| `HF_HUB_OFFLINE` | Scripts de verify | Força Hugging Face a não tentar rede |
+| `TRANSFORMERS_OFFLINE` | Scripts de verify | Força Transformers a não tentar rede |
+| `LITEPARSE_CONTRACT_PATH` | Script de probe | Caminho do JSON de contrato da API LiteParse |
 
 ---
 
-## Suite readiness at runbook creation
+## 9. Fluxo completo resumido
 
-| Suite | Code + Tests | Runtime |
-|---|---|---|
-| smoke | COMPLETE | PENDING |
-| default | COMPLETE | PENDING |
-| ocr_primary | COMPLETE | PENDING |
-| full_corpus | COMPLETE | PENDING |
-| diagnostic_ocr | COMPLETE | PENDING |
-| visual_ablation | COMPLETE | PENDING |
+```
+[WSL] python3 scripts/run_tests.py → zero
+[WSL] python3 -m compileall -q src scripts parser_tests tests → zero
+[WSL] python3 scripts/parser_deep_smoke.py --validate-fixture-only → zero
 
-**PRE-RUNTIME CODE READINESS: COMPLETE**
-**RUNTIME VALIDATION: PENDING**
+[Windows — com rede]
+setup_envs.ps1
+check_envs.ps1
+prepare_all_models.ps1 -Mode Prepare
+
+[Operador: desconectar rede / aplicar firewall externo]
+
+[Windows — sem rede]
+$env:DOCUMENT_AI_NETWORK_ISOLATED = '1'
+$env:DOCUMENT_AI_ENFORCE_OFFLINE  = '1'
+prepare_all_models.ps1 -Mode Verify
+run_all_features_host.ps1 -DryRun        → exibe exatamente 7 jobs
+check_server_readiness.ps1 -VerboseOutput → SERVER_READINESS=PASS
+```
+
+**A entrega está completa somente quando `SERVER_READINESS=PASS` for obtido no Windows Server nativo.**

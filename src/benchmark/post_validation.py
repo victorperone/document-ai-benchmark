@@ -395,6 +395,10 @@ def _check_source_inventory(
         checks.append(make_check(check_name, "fail",
             f"pages must be a positive integer, got {pages!r}"))
         return None, inv
+    if not bool(inv.get("measurement_complete", False)):
+        checks.append(make_check(check_name, "fail",
+            "measurement_complete is not True — inventory is incomplete"))
+        return None, inv
     checks.append(make_check(check_name, "pass"))
     return pages, inv
 

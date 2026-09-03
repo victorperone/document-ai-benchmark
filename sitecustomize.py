@@ -68,7 +68,7 @@ if _GUARD_ACTIVE:
         elif isinstance(address, str):
             host = address
 
-        if host and not _is_loopback(host):
+        if not host or not _is_loopback(host):
             stack = "".join(traceback.format_stack()[:-1])
             _log_attempt(host, port, stack)
             raise OSError(

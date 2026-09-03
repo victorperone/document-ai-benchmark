@@ -89,6 +89,18 @@ try {
         $Failures.Add("environment: core Python not found: $CorePython")
     }
 
+    # Snapshot TEMP before any gate runs so residues from any gate are captured.
+    $TempDir = [System.IO.Path]::GetTempPath()
+    $TempResiduePatterns = @(
+        '^document-ai-',
+        '^document-ai-visual-',
+        '^unstructured_images_',
+        '^mineru-verify-',
+        '^visual_crops'
+    )
+    $TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty Name)
+
     if ($NativeWindows -and (Test-Path $PowerShell -PathType Leaf)) {
         Invoke-ReadinessGate -Name 'environment' -Command $PowerShell -Arguments @(
             '-NoProfile','-ExecutionPolicy','Bypass','-File',
@@ -126,18 +138,6 @@ try {
         Invoke-ReadinessGate -Name 'deep_smoke' -Command $PowerShell `
             -Arguments $SmokeArgs -FunctionalTests | Out-Null
     }
-
-    # Snapshot temp dir before deep smoke runs, to detect residues afterwards.
-    $TempDir = [System.IO.Path]::GetTempPath()
-    $TempResiduePatterns = @(
-        '^document-ai-',
-        '^document-ai-visual-',
-        '^unstructured_images_',
-        '^mineru-verify-',
-        '^visual_crops'
-    )
-    $TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
-        Select-Object -ExpandProperty Name)
 
     # Derive PARSERS_READY exclusively from DEEP_SMOKE_PARSER=PASS lines in the deep smoke log.
     # deep_smoke gate log is written by Invoke-ReadinessGate to $ReportRoot\deep_smoke.log

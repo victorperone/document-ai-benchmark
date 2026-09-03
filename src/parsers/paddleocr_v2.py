@@ -2100,7 +2100,7 @@ def main() -> None:
                 "PPStructureV3"
             ),
             "native_page_results": (
-                len(results)
+                len(parser_native_pages)
             ),
             "native_page_markdown_bytes": (
                 native_page_markdown_bytes

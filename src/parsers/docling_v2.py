@@ -1283,15 +1283,19 @@ def build_docling_page_contract(
     )
 
     enriched_page_texts = list(page_texts)
-    (
-        enriched_page_markdown,
-        derived_content_by_page,
-    ) = _build_picture_description_blocks(
-        document,
-        page_count,
-        enriched_page_texts,
-        effective_prompt=effective_prompt,
-    )
+    if effective_prompt:
+        (
+            enriched_page_markdown,
+            derived_content_by_page,
+        ) = _build_picture_description_blocks(
+            document,
+            page_count,
+            enriched_page_texts,
+            effective_prompt=effective_prompt,
+        )
+    else:
+        enriched_page_markdown = list(page_texts)
+        derived_content_by_page = {}
 
     return (
         page_texts,

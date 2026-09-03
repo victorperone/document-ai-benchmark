@@ -195,6 +195,39 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _build_picture_description_blocks(doc, 1, ["text"], effective_prompt="")
 
+    def test_bbox_field_present_in_derived_entry(self):
+        """bbox key must always be present in derived entries (may be None if no prov bbox)."""
+        desc = _DescriptionStub("image without bbox")
+        doc = _DocumentStub([_PictureItemStub(desc, [1])])
+        _, derived = _build_picture_description_blocks(
+            doc, 1, ["text"], effective_prompt="Describe."
+        )
+        entry = derived[0][0]
+        self.assertIn("bbox", entry)
+
+    def test_bbox_populated_when_prov_has_bbox(self):
+        """When the provenance entry carries a bbox, the derived entry reflects it."""
+        from types import SimpleNamespace as NS
+
+        bbox_stub = NS(l=10.0, t=20.0, r=100.0, b=80.0, coord_origin=None)
+        prov_with_bbox = NS(page_no=1, bbox=bbox_stub)
+
+        class _PictureWithBbox(_PictureItemStub):
+            def __init__(self) -> None:
+                super().__init__(_DescriptionStub("image with bbox"), [1])
+                self.prov = [prov_with_bbox]
+
+        doc = _DocumentStub([_PictureWithBbox()])
+        _, derived = _build_picture_description_blocks(
+            doc, 1, ["text"], effective_prompt="Describe."
+        )
+        bbox = derived[0][0]["bbox"]
+        self.assertIsNotNone(bbox)
+        self.assertAlmostEqual(bbox["l"], 10.0)
+        self.assertAlmostEqual(bbox["t"], 20.0)
+        self.assertAlmostEqual(bbox["r"], 100.0)
+        self.assertAlmostEqual(bbox["b"], 80.0)
+
 
 class TestPageExportContract(unittest.TestCase):
     def test_missing_document_page_does_not_create_synthetic_blank_page(self):

@@ -46,9 +46,9 @@ Invoke-ModelManifest -Mode Verify -Python $Python -Component 'visual_enrichment'
     -Version $ManifestVersion -ModelRoot $ModelRoot
 
 # Verify via VisualWorkerClient — never load PaddleOCR/SmolVLM directly here.
-# We snapshot the temp dir before and after to catch any file residues.
+# Snapshot includes both files and directories (-File omitted) to catch visual_crops/ etc.
 $TempDir = [System.IO.Path]::GetTempPath()
-$TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -File -ErrorAction SilentlyContinue |
+$TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName)
 
 $Inference = @'
@@ -107,13 +107,13 @@ finally:
 $env:BENCHMARK_REPO_ROOT = $Root
 Invoke-PythonScriptChecked -Python $Python -ScriptText $Inference
 
-# Check for temp file residues introduced by the verify step
-$TempAfter = @(Get-ChildItem -LiteralPath $TempDir -Force -File -ErrorAction SilentlyContinue |
+Invoke-ModelManifest -Mode Verify -Python $Python -Component 'visual_enrichment' `
+    -Version $ManifestVersion -ModelRoot $ModelRoot
+
+# Check for residues (files and directories) introduced by the verify step
+$TempAfter = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName)
 $TempResidues = $TempAfter | Where-Object { $TempBefore -notcontains $_ }
 if ($TempResidues.Count -gt 0) {
-    throw "Verify left $($TempResidues.Count) temporary file(s): $($TempResidues -join ', ')"
+    throw "Verify left $($TempResidues.Count) temporary item(s): $($TempResidues -join ', ')"
 }
-
-Invoke-ModelManifest -Mode Verify -Python $Python -Component 'visual_enrichment' `
-    -Version $ManifestVersion -ModelRoot $ModelRoot

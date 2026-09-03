@@ -87,7 +87,6 @@ if (-not (Test-Path $FixturePdf -PathType Leaf)) {
 }
 
 $env:BENCHMARK_REPO_ROOT = $Root
-$ProbeScript = Join-Path $Root 'scripts\probe_liteparse_api_contract.py'
 
 # Write the contract-aware probe inline (avoids distributing a separate file for PS invoke)
 $ProbeText = @"

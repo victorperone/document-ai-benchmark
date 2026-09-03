@@ -100,12 +100,33 @@ def validate_post_execution(
             source_inventory_path, doc_name, expected_sha256, checks
         )
 
+    # §3.1: inventory is authoritative — derive content_expected from it when available
+    inventory_content_expected: bool | None = None
+    if source_inventory is not None:
+        inventory_content_expected = _inventory_content_expectation(source_inventory)
+
     metrics: dict | None = None
     if artifact_policy.includes("metrics.json"):
         metrics = _load_and_check_metrics(
             paths.metrics_json, parser, profile, doc_name, document_path.stem,
             expected_sha256, artifact_policy, source_pages, paths, checks,
         )
+
+    # §3.1: if inventory requires content, metrics must not claim content_expected=False
+    if metrics is not None and inventory_content_expected is True:
+        cv = metrics.get("content_validation") or {}
+        for md_artifact in ("raw.md", "document.md", "document.enriched.md"):
+            if not artifact_policy.includes(md_artifact):
+                continue
+            entry = cv.get(md_artifact, {})
+            metrics_ce = entry.get("content_expected")
+            if metrics_ce is not None and not bool(metrics_ce):
+                checks.append(make_check(
+                    f"inventory vs metrics content_expected ({md_artifact})",
+                    "fail",
+                    f"inventory requires content but metrics content_validation."
+                    f"{md_artifact}.content_expected={metrics_ce!r}",
+                ))
 
     for artifact in artifact_policy.as_list():
         if artifact == "metrics.json":
@@ -138,12 +159,11 @@ def validate_post_execution(
                         (metrics.get("content_validation") or {}).get(artifact, {})
                         if metrics else {}
                     )
-                    expected = bool(
-                        content_entry.get(
-                            "content_expected",
-                            _inventory_content_expectation(source_inventory),
-                        )
-                    )
+                    # §3.1: inventory is authoritative; fall back to metrics, then False
+                    if inventory_content_expected is not None:
+                        expected = inventory_content_expected
+                    else:
+                        expected = bool(content_entry.get("content_expected", False))
                     if expected and not _has_meaningful_text(content):
                         checks.append(make_check(
                             check_name,
@@ -176,6 +196,47 @@ def validate_resume_candidate(
     checks: list[dict] = []
     paths = build_output_paths(output_root, parser, document_path.stem, profile, create=False)
     doc_name = document_path.name
+
+    # §3.2: load and validate source inventory before approving resume
+    inv_path = output_root / "_source_inventory" / f"{document_path.stem}.json"
+    source_inventory: dict | None = None
+    if not inv_path.is_file():
+        checks.append(make_check(
+            "source inventory",
+            "fail",
+            f"not found: {inv_path} — output must not be reused without a valid inventory",
+        ))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    try:
+        source_inventory = json.loads(inv_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        checks.append(make_check("source inventory", "fail", f"unreadable: {exc}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    if source_inventory.get("file") != doc_name:
+        checks.append(make_check("source inventory", "fail",
+            f"file mismatch: expected {doc_name!r}, got {source_inventory.get('file')!r}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    if source_inventory.get("sha256") != expected_sha256:
+        checks.append(make_check("source inventory", "fail",
+            "sha256 mismatch — inventory was built from a different file version"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    inv_pages = source_inventory.get("pages")
+    if not isinstance(inv_pages, int) or inv_pages <= 0:
+        checks.append(make_check("source inventory", "fail",
+            f"pages must be a positive integer, got {inv_pages!r}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    inv_complete = bool(source_inventory.get("measurement_complete", False))
+    if not inv_complete:
+        checks.append(make_check("source inventory", "fail",
+            "measurement_complete=false — inventory is incomplete; output must not be reused"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    checks.append(make_check("source inventory", "pass"))
 
     if not paths.metrics_json.is_file():
         checks.append(make_check("metrics.json", "fail", "file not found — cannot verify provenance"))
@@ -227,6 +288,25 @@ def validate_resume_candidate(
         checks.append(make_check("artifact coverage", "fail",
             f"saved {sorted(saved_sel)} doesn't cover requested {sorted(requested_sel)}: missing {missing}"))
         return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    # §3.2: if inventory requires content, saved metrics must not say content_expected=False
+    if source_inventory is not None:
+        inventory_ce = _inventory_content_expectation(source_inventory)
+        if inventory_ce:
+            cv_block = metrics.get("content_validation") or {}
+            for md_artifact in ("raw.md", "document.md", "document.enriched.md"):
+                if not requested_artifacts.includes(md_artifact):
+                    continue
+                entry = cv_block.get(md_artifact, {})
+                metrics_ce = entry.get("content_expected")
+                if metrics_ce is not None and not bool(metrics_ce):
+                    checks.append(make_check(
+                        f"inventory vs metrics content_expected ({md_artifact})",
+                        "fail",
+                        f"inventory requires content but saved metrics says "
+                        f"content_expected={metrics_ce!r} — output must be regenerated",
+                    ))
+                    return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
 
     out_block = metrics.get("output", {})
     expected_pages = doc_block.get("pages")

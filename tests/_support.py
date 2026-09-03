@@ -164,7 +164,12 @@ def make_valid_job_output(
     inv_dir.mkdir(parents=True, exist_ok=True)
     inv_path = inv_dir / f"{doc_stem}.json"
     inv_path.write_text(
-        json.dumps({"file": doc_name, "sha256": doc_sha256, "pages": pages}),
+        json.dumps({
+            "file": doc_name,
+            "sha256": doc_sha256,
+            "pages": pages,
+            "measurement_complete": True,
+        }),
         encoding="utf-8",
     )
 

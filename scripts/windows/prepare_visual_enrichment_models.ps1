@@ -87,9 +87,11 @@ ocr_model_dir = str(root / "paddleocr")
 smolvlm_dir = str(root / "smolvlm" / "HuggingFaceTB--SmolVLM-256M-Instruct")
 
 client = VisualWorkerClient(
-    ocr_model_dir=ocr_model_dir,
-    smolvlm_model_dir=smolvlm_dir,
-    offline=True,
+    language="pt",
+    smolvlm_model_path=str(smolvlm_dir),
+    python_executable=sys.executable,
+    det_model_dir=str(det_model_dir),
+    rec_model_dir=str(rec_model_dir),
 )
 try:
     result = client.ocr_and_describe(image_bytes, prompt="Descreva a imagem.")

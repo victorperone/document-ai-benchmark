@@ -194,8 +194,8 @@
           "visual_render_dpi": 150,
           "visual_ocr_language": "pt",
           "visual_description_model": "models/visual-enrichment/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
-          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_det",
-          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_rec",
+          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_det",
+          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_rec",
           "visual_failure_fatal": true,
           "visual_persist_images": false
         }

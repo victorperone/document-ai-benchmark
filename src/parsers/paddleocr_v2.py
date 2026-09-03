@@ -436,25 +436,24 @@ def validate_profile(
             "the PPStructureV3 adapter"
         )
 
+    if (
+        profile.get("chart_recognition") is True
+        and profile.get("inference_engine")
+        == "paddle_static"
+    ):
+        errors.append(
+            "chart_recognition=true is incompatible "
+            "with inference_engine='paddle_static': "
+            "PP-Chart2Table requires paddle_dynamic "
+            "or another supported engine; use "
+            "inference_engine='paddle' for automatic "
+            "per-model engine resolution"
+        )
+
     if errors:
-        if (
-            profile.get("chart_recognition") is True
-            and profile.get("inference_engine")
-            == "paddle_static"
-        ):
-            errors.append(
-                "chart_recognition=true is incompatible "
-                "with inference_engine='paddle_static': "
-                "PP-Chart2Table requires paddle_dynamic "
-                "or another supported engine; use "
-                "inference_engine='paddle' for automatic "
-                "per-model engine resolution"
-            )
         raise ValueError(
             "Invalid PaddleOCR profile:\n  - "
-            + "\n  - ".join(
-                errors
-            )
+            + "\n  - ".join(errors)
         )
 
 

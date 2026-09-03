@@ -516,7 +516,7 @@
           "region_detection": true,
           "seal_recognition": false,
           "device": "cpu",
-          "inference_engine": "paddle_static",
+          "inference_engine": "paddle",
           "enable_mkldnn": true,
           "mkldnn_cache_capacity": 10,
           "cpu_threads": null
@@ -532,7 +532,7 @@
           "region_detection": true,
           "seal_recognition": false,
           "device": "cpu",
-          "inference_engine": "paddle_static",
+          "inference_engine": "paddle",
           "enable_mkldnn": true,
           "mkldnn_cache_capacity": 10,
           "cpu_threads": null
@@ -550,7 +550,7 @@
           "format_block_content": true,
           "markdown_ignore_labels": [],
           "device": "cpu",
-          "inference_engine": "paddle_static",
+          "inference_engine": "paddle",
           "enable_mkldnn": true,
           "mkldnn_cache_capacity": 10,
           "cpu_threads": null
@@ -568,7 +568,7 @@
           "format_block_content": true,
           "markdown_ignore_labels": [],
           "device": "cpu",
-          "inference_engine": "paddle_static",
+          "inference_engine": "paddle",
           "enable_mkldnn": true,
           "mkldnn_cache_capacity": 10,
           "cpu_threads": null,

@@ -192,11 +192,11 @@
           "page_separators": true,
           "visual_enrichment_enabled": true,
           "visual_render_dpi": 150,
-          "visual_ocr_language": "por",
-          "visual_description_model": "models/liteparse/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
-          "visual_det_model_dir": "models/liteparse/paddleocr/det",
-          "visual_rec_model_dir": "models/liteparse/paddleocr/rec",
-          "visual_failure_fatal": false,
+          "visual_ocr_language": "pt",
+          "visual_description_model": "models/visual-enrichment/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
+          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_det",
+          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_rec",
+          "visual_failure_fatal": true,
           "visual_persist_images": false
         }
       }
@@ -828,6 +828,12 @@
             "eng"
           ],
           "detect_language_per_element": true,
+          "visual_enrichment_enabled": true,
+          "visual_ocr_language": "pt",
+          "visual_description_model": "models/visual-enrichment/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
+          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_det",
+          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_server_rec",
+          "visual_failure_fatal": true,
           "infer_table_structure": true,
           "include_page_breaks": true,
           "hi_res_model_name": "yolox",
@@ -1594,6 +1600,36 @@
       [
         "xberg",
         "full_cpu_local"
+      ]
+    ],
+    "windows_all_features_host": [
+      [
+        "pymupdf",
+        "full_cpu_local_visual"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_layout"
       ]
     ],
     "windows_source_preservation_v3": [

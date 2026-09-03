@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+
+from PIL import Image
 
 from src.benchmark.config import get_profile
 from src.parsers.paddleocr_v2 import (
@@ -11,6 +15,7 @@ from src.parsers.paddleocr_v2 import (
     required_model_keys,
     MODEL_NAMES,
     MODEL_DIRECTORY_CANDIDATES,
+    persist_official_markdown_bundle,
 )
 
 PARSER_NAME = "paddleocr"
@@ -93,3 +98,20 @@ class TestFormatBlockContentConditionality(unittest.TestCase):
         kwargs = build_pipeline_kwargs(_fake_model_paths(p_copy), p_copy)
         self.assertIn("format_block_content", kwargs)
         self.assertTrue(kwargs["format_block_content"])
+
+
+class TestOfficialMarkdownBundle(unittest.TestCase):
+    def test_markdown_image_is_persisted_and_link_relocated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "native"
+            result = SimpleNamespace(markdown={
+                "markdown_texts": "![gráfico](images/chart.png)",
+                "markdown_images": {"images/chart.png": Image.new("RGB", (4, 4), "white")},
+            })
+            markdown, manifest = persist_official_markdown_bundle(
+                results=[result], official_markdown=result.markdown["markdown_texts"],
+                destination=destination, parser_name="paddleocr", profile_name="full_cpu_local",
+            )
+            self.assertIn("native/assets/", markdown)
+            self.assertEqual(manifest["bundle_status"], "available")
+            self.assertTrue(any(item["path"].endswith("chart.png") for item in manifest["files"]))

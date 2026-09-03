@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -8,7 +9,6 @@ import json
 import platform
 import re
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -26,6 +26,8 @@ from src.benchmark.config import (
 )
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.process_tree import run_process_tree
 
 PARSER_NAME = "unstructured"
 PARSER_DISPLAY_NAME = "Unstructured"
@@ -49,6 +51,9 @@ _PROFILE_KEYS = frozenset({
     # U1: explicit OCR agent selection
     "ocr_agent",
     "table_ocr_agent",
+    "visual_enrichment_enabled", "visual_ocr_language",
+    "visual_description_model", "visual_det_model_dir",
+    "visual_rec_model_dir", "visual_failure_fatal",
 })
 
 # Constant for Tesseract OCR agent — mirrors unstructured's own constant so
@@ -176,11 +181,8 @@ def _render_element(element: Any, *, image_description: bool = False) -> str:
         return text
 
     if category in ("Image",):
-        # No base64; no VLM — just a placeholder if there's a path
-        img_path = getattr(meta, "image_path", None) if meta else None
-        if img_path:
-            return f"<!-- image: {Path(img_path).name} -->"
-        return ""
+        # Preserve parser-provided text, but never persist a temporary crop path.
+        return text
 
     if category == "CodeSnippet":
         return f"```\n{text}\n```" if text else ""
@@ -268,6 +270,145 @@ def _element_to_native(element: Any) -> dict[str, Any]:
     return {k: v for k, v in record.items() if v is not None}
 
 
+def _process_visual_crops(
+    elements: list[Any],
+    *,
+    crop_root: Path,
+    page_count: int,
+    profile: dict[str, Any],
+    resource_monitor: Any,
+) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Describe transient Image/Table crops while their temp directory exists."""
+    by_page: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+    unassigned: list[dict[str, Any]] = []
+    if not profile.get("visual_enrichment_enabled", False):
+        return by_page, unassigned
+
+    from PIL import Image
+    from src.enrichment.visual_contract import VisualRequest
+    from src.enrichment.visual_worker_client import VisualWorkerClient
+
+    repo_root = Path(__file__).resolve().parents[2]
+
+    def resolved_profile_path(key: str) -> str:
+        value = Path(str(profile.get(key, "")))
+        return str((repo_root / value).resolve() if not value.is_absolute() else value.resolve())
+
+    worker_python = repo_root / ".venvs" / "visual-enrichment" / "Scripts" / "python.exe"
+    seen_hashes: set[str] = set()
+    crop_root_resolved = crop_root.resolve()
+
+    with VisualWorkerClient(
+        language=str(profile.get("visual_ocr_language", "pt")),
+        smolvlm_model_path=resolved_profile_path("visual_description_model"),
+        python_executable=str(worker_python),
+        resource_monitor=resource_monitor,
+        det_model_dir=resolved_profile_path("visual_det_model_dir"),
+        rec_model_dir=resolved_profile_path("visual_rec_model_dir"),
+    ) as worker:
+        for index, element in enumerate(elements):
+            category = type(element).__name__
+            if category not in {"Image", "Table"}:
+                continue
+            metadata = getattr(element, "metadata", None)
+            raw_path = getattr(metadata, "image_path", None) if metadata else None
+            if not raw_path:
+                continue
+            path = Path(raw_path).resolve()
+            try:
+                path.relative_to(crop_root_resolved)
+            except ValueError as exc:
+                raise RuntimeError(f"Unstructured crop escaped its temp root: {path}") from exc
+            image_bytes = path.read_bytes()
+            digest = hashlib.sha256(image_bytes).hexdigest()
+            if digest in seen_hashes:
+                continue
+            seen_hashes.add(digest)
+            with Image.open(path) as image:
+                width, height = image.size
+
+            page_number_raw = getattr(metadata, "page_number", None) if metadata else None
+            page_number = page_number_raw if isinstance(page_number_raw, int) else None
+            region_id = f"p{page_number or 0}-{category.lower()}-{index}-{digest[:8]}"
+            response = worker.process(VisualRequest(
+                request_id=region_id,
+                operation="ocr_and_describe",
+                image_base64=base64.b64encode(image_bytes).decode("ascii"),
+                language=str(profile.get("visual_ocr_language", "pt")),
+                prompt="Descreva objetivamente esta região documental.",
+                page_number=page_number or 0,
+                region_id=region_id,
+            ))
+            coords = getattr(metadata, "coordinates", None) if metadata else None
+            record = {
+                "type": "visual_crop",
+                "category": category,
+                "region_id": region_id,
+                "page_number": page_number,
+                "sha256": digest,
+                "width": width,
+                "height": height,
+                "bbox": getattr(coords, "points", None),
+                "storage_policy": "transient",
+                "deleted_after_processing": True,
+                "cleanup_state": "scheduled",
+                "status": response.status,
+                "ocr_engine": response.ocr_engine,
+                "description_model": response.description_model,
+                "ocr_text": response.ocr_text.strip() or None,
+                "text": response.description.strip() or response.ocr_text.strip() or None,
+            }
+            if response.error_detail:
+                record["error_detail"] = response.error_detail
+            if profile.get("visual_failure_fatal", False) and (
+                response.status != "success" or response.error_detail
+            ):
+                raise RuntimeError(
+                    f"visual crop {region_id} failed: "
+                    f"{response.error_detail or response.status}"
+                )
+            if page_number and page_number <= len(by_page):
+                by_page[page_number - 1].append(record)
+            else:
+                unassigned.append(record)
+    return by_page, unassigned
+
+
+def _render_visual_items(base: str, items: list[dict[str, Any]]) -> str:
+    blocks = []
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        ocr_text = str(item.get("ocr_text") or "").strip()
+        if not text and not ocr_text:
+            continue
+        lines = [
+            "<!-- derived:start",
+            "type=visual_crop",
+            f"page={item.get('page_number') or 0}",
+            f"region_id={item['region_id']}",
+            "-->",
+        ]
+        normalized_base = " ".join(base.casefold().split())
+        normalized_ocr = " ".join(ocr_text.casefold().split())
+        normalized_text = " ".join(text.casefold().split())
+        payload_added = False
+        if (
+            normalized_ocr
+            and normalized_ocr not in normalized_base
+            and normalized_ocr not in normalized_text
+        ):
+            lines.append(f"> **Texto OCR:** {ocr_text}")
+            payload_added = True
+        if normalized_text and normalized_text not in normalized_base:
+            lines.append(f"> **Descrição visual:** {text}")
+            payload_added = True
+        if not payload_added:
+            continue
+        lines.append("<!-- derived:end -->")
+        blocks.append("\n".join(lines))
+    return base.rstrip() + (("\n\n" + "\n\n".join(blocks)) if blocks else "")
+
+
 def _count_elements(elements: list[Any]) -> dict[str, Any]:
     counts: Counter[str] = Counter(type(el).__name__ for el in elements)
     return {
@@ -341,9 +482,9 @@ def _package_version(name: str) -> str | None:
 
 def _get_tesseract_version() -> str | None:
     try:
-        r = subprocess.run(
+        r = run_process_tree(
             ["tesseract", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         )
         lines = (r.stdout or r.stderr).splitlines()
         return lines[0].strip() if lines else None
@@ -356,9 +497,9 @@ def _get_poppler_version() -> str | None:
         path = shutil.which(tool)
         if path:
             try:
-                r = subprocess.run(
+                r = run_process_tree(
                     [path, "-v"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True, timeout=5,
                 )
                 lines = (r.stdout or r.stderr).splitlines()
                 return lines[0].strip() if lines else tool
@@ -553,6 +694,7 @@ def _build_metrics(
         "normalization": artifact_result["normalization"],
         "artifacts": artifact_result["artifacts"],
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,
@@ -834,11 +976,11 @@ def preflight_profile(
             ))
 
     # Table structure only with compatible strategy
-    if bool(profile.get("infer_table_structure")) and strategy not in ("hi_res",):
+    if bool(profile.get("infer_table_structure")) and strategy not in ("hi_res", "auto"):
         checks.append(make_check(
             "table structure strategy",
             "fail",
-            f"infer_table_structure=true requires hi_res, got {strategy!r}",
+            f"infer_table_structure=true requires hi_res or auto, got {strategy!r}",
         ))
     else:
         checks.append(make_check("table structure strategy", "pass"))
@@ -1099,6 +1241,11 @@ def main() -> None:
 
     image_temp_dir: TemporaryDirectory | None = None
     unassigned_elements: list[Any] = []
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in range(page_count)
+    ]
+    unassigned_derived: list[dict[str, Any]] = []
+    unassigned_markdown = ""
 
     if image_block_types:
         image_temp_dir = TemporaryDirectory(
@@ -1173,6 +1320,27 @@ def main() -> None:
 
             # U2: collect unassigned elements (no page number) into separate record
             unassigned_elements = native_pages.get(0, [])
+            unassigned_source_elements = [
+                element for element in elements
+                if not isinstance(
+                    getattr(getattr(element, "metadata", None), "page_number", None), int
+                )
+                and type(element).__name__ != "PageBreak"
+            ]
+            unassigned_markdown = "\n\n".join(
+                rendered for rendered in (
+                    _render_element(element) for element in unassigned_source_elements
+                ) if rendered
+            )
+
+            if image_temp_dir is not None:
+                derived_content_by_page, unassigned_derived = _process_visual_crops(
+                    elements,
+                    crop_root=Path(image_temp_dir.name),
+                    page_count=page_count,
+                    profile=profile,
+                    resource_monitor=monitor,
+                )
 
     except Exception:
         monitor.stop()
@@ -1182,19 +1350,44 @@ def main() -> None:
         if image_temp_dir is not None:
             image_temp_dir.cleanup()
             image_temp_dir = None
+        for item in [
+            entry
+            for page_items in derived_content_by_page
+            for entry in page_items
+        ] + unassigned_derived:
+            item["cleanup_state"] = "cleaned"
 
     pipeline_seconds = perf_counter() - pipeline_started
 
+    mapping_complete = not unassigned_elements and not unassigned_derived
+    native_markdown = join_page_texts(page_texts)
+    if unassigned_markdown:
+        native_markdown = native_markdown.rstrip() + "\n\n" + unassigned_markdown + "\n"
+    enriched_pages = [
+        _render_visual_items(page_texts[index], derived_content_by_page[index])
+        for index in range(page_count)
+    ]
+    has_derived = any(derived_content_by_page) or bool(unassigned_derived)
+    enriched_global = None
+    if has_derived and not mapping_complete:
+        enriched_global = join_page_texts(enriched_pages)
+        if unassigned_markdown:
+            enriched_global = enriched_global.rstrip() + "\n\n" + unassigned_markdown
+        enriched_global = _render_visual_items(enriched_global, unassigned_derived)
+
     artifact_input = ParserArtifactInput(
-        native_markdown=join_page_texts(page_texts),
-        source_page_markdown=page_texts,
-        enriched_page_markdown=None,
-        page_mapping_status="complete",
+        native_markdown=native_markdown,
+        source_page_markdown=page_texts if mapping_complete else None,
+        enriched_page_markdown=enriched_pages if has_derived and mapping_complete else None,
+        enriched_document_markdown=enriched_global,
+        page_mapping_status="complete" if mapping_complete else "unavailable",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
-        derived_content_by_page=[[] for _ in page_texts],
+        derived_content_by_page=derived_content_by_page,
         raw_origin_kind="adapter_assembled_declared",
         raw_origin_details="page_texts join",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = finalize_artifacts(

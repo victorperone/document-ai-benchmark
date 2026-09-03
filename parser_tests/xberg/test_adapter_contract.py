@@ -155,6 +155,7 @@ class TestAdapterContract(unittest.TestCase):
                 mock_paths_instance.output_dir = tmp_path / "out"
                 mock_paths_instance.run_log = tmp_path / "run.log"
                 mock_paths_instance.metrics_json = tmp_path / "metrics.json"
+                mock_paths_instance.native_dir = tmp_path / "native"
                 mock_paths.return_value = mock_paths_instance
 
                 mock_finalize.return_value = {
@@ -164,6 +165,9 @@ class TestAdapterContract(unittest.TestCase):
                     "heuristics": {},
                     "tokens": {},
                     "normalization": {},
+                    "artifacts": {},
+                    "quality_eligibility": {},
+                    "content_validation": {},
                     "output": {"clean_markdown_bytes": 100},
                 }
 

@@ -1,8 +1,10 @@
 """Image OCR and visual description tests for LiteParse."""
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.parsers import liteparse_v2
 
@@ -149,6 +151,80 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
         out = self._build("", [img], enrichments)
         self.assertNotIn("pie chart", out)
         self.assertNotIn("*Imagem:", out)
+
+
+class LiteParseImageProfileExecutionTests(unittest.TestCase):
+    def test_disabled_rotation_and_image_ocr_are_not_executed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "image.png"
+            image_path.write_bytes(b"image")
+            image = _make_image_obj(str(image_path))
+            profile = {
+                "orientation_detection": False,
+                "image_ocr": False,
+                "image_description": False,
+                "ocr_failure_fatal": True,
+            }
+
+            with (
+                patch.object(
+                    liteparse_v2,
+                    "_detect_and_correct_orientation",
+                ) as detect,
+                patch.object(liteparse_v2, "_ocr_image_bytes") as ocr,
+            ):
+                result = liteparse_v2._process_document_images(
+                    [image], profile, Path(tmp), Path(tmp)
+                )
+
+        detect.assert_not_called()
+        ocr.assert_not_called()
+        self.assertFalse(result[str(image_path)]["ocr_attempted"])
+
+    def test_profile_controls_are_forwarded_to_image_pipeline(self) -> None:
+        with TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "image.png"
+            image_path.write_bytes(b"image")
+            image = _make_image_obj(str(image_path))
+            profile = {
+                "orientation_detection": True,
+                "image_ocr": True,
+                "image_description": True,
+                "image_description_fallback_only": False,
+                "image_description_model": "org/custom-model",
+                "image_description_prompt": "Describe visual facts.",
+                "ocr_failure_fatal": True,
+            }
+
+            with (
+                patch.object(
+                    liteparse_v2,
+                    "_detect_and_correct_orientation",
+                    return_value=(b"corrected", 90),
+                ) as detect,
+                patch.object(
+                    liteparse_v2,
+                    "_ocr_image_bytes",
+                    return_value="Readable budget total 2026",
+                ) as ocr,
+                patch.object(
+                    liteparse_v2,
+                    "_describe_image_with_smolvlm",
+                    return_value="A two-column budget table.",
+                ) as describe,
+            ):
+                result = liteparse_v2._process_document_images(
+                    [image], profile, Path(tmp), Path(tmp), "por+eng"
+                )
+
+        detect.assert_called_once_with(b"image", failure_fatal=True)
+        ocr.assert_called_once_with(
+            b"corrected", lang="por+eng", failure_fatal=True
+        )
+        description_args = describe.call_args.args
+        self.assertEqual(description_args[3], "org--custom-model")
+        self.assertIn("Do not transcribe or repeat", description_args[2])
+        self.assertEqual(result[str(image_path)]["model"], "org/custom-model")
 
 
 class LiteParseMarkdownBlockParserTests(unittest.TestCase):

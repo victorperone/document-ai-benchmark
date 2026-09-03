@@ -214,6 +214,7 @@ class TestAdapterContract(unittest.TestCase):
                     "page_mapping_complete": True,
                     "formal_quality_eligible": True,
                 },
+                "content_validation": {},
                 "output": {
                     "clean_markdown_bytes": 100,
                 },
@@ -294,6 +295,7 @@ def _make_benchmark_sys_modules(
                 "page_mapping_complete": True,
                 "formal_quality_eligible": True,
             },
+            "content_validation": {},
             "output": {"clean_markdown_bytes": 100},
         }
 

@@ -1,4 +1,113 @@
-# Windows Server Host Runtime — Current Status
+# Windows Server Host Runtime — Status canônico
+
+## Estado atual
+
+**STATUS DO CÓDIGO: EM CORREÇÃO**
+**HOMOLOGAÇÃO NO WINDOWS SERVER NATIVO: PENDENTE**
+
+Este é o documento canônico da execução host. A implementação e os testes
+portáveis são feitos no WSL; nenhum resultado obtido no WSL certifica o runtime
+Windows. `SERVER_READINESS=PASS` só é válido quando emitido por
+`scripts\windows\check_server_readiness.ps1` em Windows Server nativo.
+
+A branch e o commit não são fixados neste documento. Registre o estado real:
+
+```powershell
+git branch --show-current
+git rev-parse HEAD
+git status --short
+```
+
+O gate recusa árvore de trabalho suja e inclui o SHA executado no relatório.
+
+## Objetivo e política offline
+
+A suíte Windows compara sete conversores locais para documentos heterogêneos:
+texto digital, OCR, tabelas, documentos oficiais, orçamentos, fórmulas, imagens,
+QR e páginas rotacionadas. Durante `Verify`, preflight, testes e inferência, rede,
+APIs remotas e download sob demanda são proibidos. Somente `Prepare` pode usar
+rede para adquirir modelos; depois disso os manifests v1 fixam caminho relativo,
+tamanho e SHA-256 de cada arquivo.
+
+Docker continua sendo o runtime padrão do projeto. A seleção de host é sempre
+explícita e suas saídas ficam sob o namespace `host`.
+
+## Suíte oficial Windows
+
+`windows_all_features_host` contém, nesta ordem:
+
+1. `pymupdf/full_cpu_local_visual`
+2. `docling/full_cpu_local`
+3. `mineru/full_cpu_local`
+4. `paddleocr/full_cpu_local`
+5. `liteparse/full_cpu_local`
+6. `unstructured/full_cpu_local`
+7. `xberg/full_cpu_layout`
+
+## Procedimento oficial
+
+Execute uma vez a preparação, com rede disponível:
+
+```powershell
+.\scripts\windows\setup_envs.ps1
+.\scripts\windows\prepare_all_models.ps1 -Mode Prepare
+```
+
+Depois desconecte/bloqueie a rede e execute o gate completo:
+
+```powershell
+.\scripts\windows\check_server_readiness.ps1 -VerboseOutput
+```
+
+Para inspecionar ou executar somente a suíte:
+
+```powershell
+.\scripts\windows\run_all_features_host.ps1 -DryRun
+.\scripts\windows\run_all_features_host.ps1 -PreflightOnly
+.\scripts\windows\run_all_features_host.ps1
+```
+
+O wrapper é fresco por padrão; use `-Resume` somente para outputs cuja
+proveniência, hashes, assets e conteúdo passem a validação integral. O timeout
+padrão de cada job é 3.600 segundos e pode ser alterado por
+`-JobTimeoutSeconds`.
+
+## Gates e evidências
+
+O readiness verifica: plataforma Windows nativa, repositório limpo/SHA,
+versões e `pip check` de todas as venvs, Tesseract/Poppler, manifests e inferência
+offline dos modelos, testes comuns, testes isolados dos sete adapters, smoke
+profundo sequencial, pós-validação de todos os artefatos, links/asset manifests,
+arquivos temporários/downloads e processos descendentes remanescentes.
+
+Os relatórios ficam em:
+
+```text
+logs\windows_readiness\<timestamp>\
+```
+
+As linhas finais obrigatórias são:
+
+```text
+SERVER_READINESS=PASS|FAIL
+COMMIT=<sha>
+PARSERS_READY=<lista>
+PARSERS_FAILED=<lista>
+FUNCTIONAL_TESTS_SKIPPED=<n>
+```
+
+Qualquer parser ausente, teste funcional pulado, mutação de modelo, tentativa de
+rede, link inválido, artifact vazio inesperado ou processo vazado impede PASS.
+
+---
+
+# Histórico — milestone anterior
+
+O conteúdo abaixo é preservado como registro do milestone anterior. Nomes de
+branch, prioridades, comandos e declarações de estado desta seção não substituem
+o procedimento canônico acima.
+
+## Windows Server Host Runtime — Current Status (histórico)
 
 ## 1. Purpose
 

@@ -91,3 +91,29 @@ Enable Win32 long paths and restart the Windows Server before retrying.
 "@
     }
 }
+
+function Invoke-ModelManifest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Prepare', 'Verify')][string]$Mode,
+        [Parameter(Mandatory)][string]$Python,
+        [Parameter(Mandatory)][string]$Component,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$ModelRoot,
+        [string]$ManifestPath = ''
+    )
+
+    $RepoRoot = (Get-Item $PSScriptRoot).Parent.Parent.FullName
+    $ManifestScript = Join-Path $RepoRoot 'scripts\model_manifest.py'
+    $ManifestArgs = @(
+        $ManifestScript,
+        $Mode.ToLowerInvariant(),
+        '--component', $Component,
+        '--version', $Version,
+        '--root', $ModelRoot
+    )
+    if ($ManifestPath -ne '') {
+        $ManifestArgs += '--manifest', $ManifestPath
+    }
+    Invoke-NativeChecked -Cmd $Python -Args $ManifestArgs
+}

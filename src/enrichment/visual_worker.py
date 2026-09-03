@@ -31,13 +31,16 @@ def _load_paddleocr(
     kwargs: dict[str, Any] = {
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
-        "lang": language,
-        "show_log": False,
     }
     if det_model_dir:
-        kwargs["det_model_dir"] = det_model_dir
+        kwargs["text_detection_model_dir"] = det_model_dir
     if rec_model_dir:
-        kwargs["rec_model_dir"] = rec_model_dir
+        kwargs["text_recognition_model_dir"] = rec_model_dir
+    # Explicit model directories identify the exact certified models. PaddleOCR
+    # documents that lang/ocr_version are only model-selection shortcuts, so do
+    # not pass them when both model locations are authoritative.
+    if not (det_model_dir and rec_model_dir):
+        kwargs["lang"] = language
     return PaddleOCR(**kwargs)
 
 
@@ -54,6 +57,7 @@ def _load_smolvlm(model_path: str) -> tuple[Any, Any]:
         local_files_only=True,
         torch_dtype=torch.float32,
     )
+    model.to("cpu")
     model.eval()
     return processor, model
 
@@ -64,7 +68,25 @@ def _run_ocr(ocr_engine: Any, image_bytes: bytes, language: str) -> str:
     result = ocr_engine.predict(img)
     lines: list[str] = []
     for page_result in (result or []):
-        rec_texts = page_result.get("rec_texts") or []
+        rec_texts: Any = None
+        if isinstance(page_result, dict):
+            rec_texts = page_result.get("rec_texts")
+        if rec_texts is None:
+            try:
+                rec_texts = page_result["rec_texts"]
+            except (KeyError, TypeError, IndexError):
+                pass
+        if rec_texts is None:
+            rec_texts = getattr(page_result, "rec_texts", None)
+        if rec_texts is None:
+            json_value = getattr(page_result, "json", None)
+            if callable(json_value):
+                json_value = json_value()
+            if isinstance(json_value, dict):
+                payload = json_value.get("res", json_value)
+                if isinstance(payload, dict):
+                    rec_texts = payload.get("rec_texts")
+        rec_texts = rec_texts or []
         lines.extend(t for t in rec_texts if t and t.strip())
     return "\n".join(lines)
 
@@ -89,12 +111,23 @@ def _run_description(
             ],
         }
     ]
-    input_text = processor.apply_chat_template(messages, add_generation_prompt=True)
+    input_text = processor.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=False,
+    )
     inputs = processor(
         text=input_text,
         images=[img],
         return_tensors="pt",
     )
+    if hasattr(inputs, "to"):
+        inputs = inputs.to("cpu")
+    else:
+        inputs = {
+            key: value.to("cpu") if hasattr(value, "to") else value
+            for key, value in inputs.items()
+        }
     prompt_len = inputs["input_ids"].shape[1]
     with torch.no_grad():
         output_ids = model.generate(
@@ -146,11 +179,19 @@ def _process_request(
         error_detail += f"ocr: {exc}"
 
     try:
+        effective_prompt = prompt
+        if ocr_text.strip():
+            effective_prompt += (
+                "\n\nThe text below was already extracted by OCR. Do not "
+                "transcribe or repeat it; describe only additional visual "
+                "information:\n"
+                + ocr_text.strip()[:2000]
+            )
         description = _run_description(
             smolvlm_processor,
             smolvlm_model,
             image_bytes,
-            prompt,
+            effective_prompt,
             smolvlm_model_path,
         )
     except Exception as exc:
@@ -181,7 +222,7 @@ def main() -> None:
         print(json.dumps({"status": "init_error", "error": str(exc)}), flush=True)
         sys.exit(1)
 
-    language = config.get("language", "por")
+    language = config.get("language", "pt")
     smolvlm_model_path = config.get("smolvlm_model_path", "")
     det_model_dir = config.get("det_model_dir") or None
     rec_model_dir = config.get("rec_model_dir") or None

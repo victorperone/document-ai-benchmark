@@ -19,6 +19,7 @@ from src.benchmark.execution_paths import (
     RUNTIME_DOCKER,
     RUNTIME_HOST,
     project_root,
+    resolve_component_model_root,
     resolve_data_root,
     resolve_model_root,
     resolve_output_root,
@@ -64,6 +65,15 @@ class TestResolveDataRoot(unittest.TestCase):
 
 
 class TestResolveModelRoot(unittest.TestCase):
+
+    def test_host_visual_enrichment_is_absolute_descendant_of_models(self):
+        result = resolve_component_model_root(RUNTIME_HOST, "visual_enrichment")
+        self.assertTrue(result.is_absolute())
+        self.assertEqual(result, project_root() / "models" / "visual-enrichment")
+
+    def test_unknown_component_raises(self):
+        with self.assertRaises(ValueError):
+            resolve_component_model_root(RUNTIME_HOST, "unknown_component")
 
     def test_docker_docling_returns_container_path(self):
         result = resolve_model_root(RUNTIME_DOCKER, "docling")

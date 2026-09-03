@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import pymupdf
+
+from src.benchmark.process_tree import run_process_tree
 
 
 DEFAULT_DPI = 150
@@ -152,11 +153,10 @@ def run_tesseract_osd(
         "osd",
     ]
 
-    completed = subprocess.run(
+    completed = run_process_tree(
         command,
         capture_output=True,
-        text=True,
-        check=False,
+        timeout=30,
     )
 
     result = parse_osd_output(

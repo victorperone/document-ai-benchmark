@@ -10,16 +10,26 @@ alongside the parent parser process.
 from __future__ import annotations
 
 import json
+import queue
 import subprocess
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 
+from src.benchmark.process_tree import (
+    _assign_windows_job,
+    _windows_job_object,
+    close_windows_job,
+    terminate_process_tree,
+)
 from src.enrichment.visual_contract import VisualRequest, VisualResponse
 
 _WORKER_SCRIPT = Path(__file__).parent / "visual_worker.py"
-_READY_TIMEOUT = 120.0   # seconds; model loading can be slow on first run
+_READY_TIMEOUT = 300.0
+_REQUEST_TIMEOUT = 180.0
+_SHUTDOWN_TIMEOUT = 10.0
 
 
 class VisualWorkerError(RuntimeError):
@@ -44,8 +54,16 @@ class VisualWorkerClient:
         self._resource_monitor = resource_monitor
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._stdout_queue: queue.Queue[str | None] = queue.Queue()
+        self._stderr_tail: deque[str] = deque(maxlen=100)
+        self._windows_job: object | None = _windows_job_object()
 
         exe = python_executable or sys.executable
+        popen_options: dict[str, Any] = {}
+        if sys.platform == "win32":
+            popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_options["start_new_session"] = True
         self._proc = subprocess.Popen(
             [exe, str(_WORKER_SCRIPT)],
             stdin=subprocess.PIPE,
@@ -53,7 +71,23 @@ class VisualWorkerClient:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
+            errors="replace",
+            **popen_options,
         )
+        if self._windows_job is not None and not _assign_windows_job(
+            self._windows_job, self._proc
+        ):
+            close_windows_job(self._windows_job)
+            self._windows_job = None
+
+        self._stdout_thread = threading.Thread(
+            target=self._drain_stdout, name="visual-worker-stdout", daemon=True
+        )
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, name="visual-worker-stderr", daemon=True
+        )
+        self._stdout_thread.start()
+        self._stderr_thread.start()
 
         if resource_monitor is not None:
             try:
@@ -70,10 +104,30 @@ class VisualWorkerClient:
             config["det_model_dir"] = det_model_dir
         if rec_model_dir:
             config["rec_model_dir"] = rec_model_dir
-        self._send_line(json.dumps(config))
+        try:
+            self._send_line(json.dumps(config))
+            self._wait_for_ready()
+        except Exception:
+            self.shutdown()
+            raise
 
-        # Wait for "ready" signal
-        self._wait_for_ready()
+    def _drain_stdout(self) -> None:
+        assert self._proc is not None
+        assert self._proc.stdout is not None
+        try:
+            for line in self._proc.stdout:
+                self._stdout_queue.put(line.rstrip("\r\n"))
+        finally:
+            self._stdout_queue.put(None)
+
+    def _drain_stderr(self) -> None:
+        assert self._proc is not None
+        assert self._proc.stderr is not None
+        for line in self._proc.stderr:
+            self._stderr_tail.append(line.rstrip("\r\n"))
+
+    def _error_tail(self) -> str:
+        return "\n".join(self._stderr_tail)
 
     def _send_line(self, line: str) -> None:
         if self._proc is None or self._proc.stdin is None:
@@ -81,28 +135,35 @@ class VisualWorkerClient:
         self._proc.stdin.write(line + "\n")
         self._proc.stdin.flush()
 
-    def _read_line(self) -> str:
-        if self._proc is None or self._proc.stdout is None:
+    def _read_line(self, timeout: float, operation: str) -> str:
+        if self._proc is None:
             raise VisualWorkerError("worker process not running")
-        line = self._proc.stdout.readline()
-        if not line:
-            stderr_tail = ""
-            if self._proc.stderr:
-                try:
-                    stderr_tail = self._proc.stderr.read(2000)
-                except Exception:
-                    pass
+        try:
+            line = self._stdout_queue.get(timeout=timeout)
+        except queue.Empty as exc:
             raise VisualWorkerError(
-                f"worker stdout closed unexpectedly. stderr: {stderr_tail!r}"
+                f"worker timed out during {operation} after {timeout:.0f}s. "
+                f"stderr tail: {self._error_tail()!r}"
+            ) from exc
+        if line is None:
+            raise VisualWorkerError(
+                f"worker stdout closed during {operation} "
+                f"(exit={self._proc.poll()}). stderr tail: {self._error_tail()!r}"
             )
         return line.strip()
 
     def _wait_for_ready(self) -> None:
         import time
         deadline = time.monotonic() + _READY_TIMEOUT
-        while time.monotonic() < deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise VisualWorkerError(
+                    f"timed out waiting for worker to become ready. "
+                    f"stderr tail: {self._error_tail()!r}"
+                )
             try:
-                raw = self._read_line()
+                raw = self._read_line(remaining, "startup")
             except VisualWorkerError as exc:
                 raise VisualWorkerError(f"worker failed during init: {exc}") from exc
             try:
@@ -114,9 +175,9 @@ class VisualWorkerClient:
                 return
             if status == "init_error":
                 raise VisualWorkerError(
-                    f"worker init failed: {msg.get('error', raw)}"
+                    f"worker init failed: {msg.get('error', raw)}. "
+                    f"stderr tail: {self._error_tail()!r}"
                 )
-        raise VisualWorkerError("timed out waiting for worker to become ready")
 
     def process(self, request: VisualRequest) -> VisualResponse:
         with self._lock:
@@ -141,7 +202,7 @@ class VisualWorkerClient:
                 region_id=request.region_id,
             )
 
-            raw = self._read_line()
+            raw = self._read_line(_REQUEST_TIMEOUT, f"request {payload['request_id']}")
             try:
                 resp_dict = json.loads(raw)
             except json.JSONDecodeError as exc:
@@ -178,11 +239,16 @@ class VisualWorkerClient:
         except Exception:
             pass
         try:
-            self._proc.wait(timeout=10)
+            self._proc.wait(timeout=_SHUTDOWN_TIMEOUT)
         except subprocess.TimeoutExpired:
-            self._proc.kill()
-            self._proc.wait()
+            terminate_process_tree(
+                self._proc,
+                windows_job=self._windows_job,
+                grace_seconds=_SHUTDOWN_TIMEOUT,
+            )
         finally:
+            close_windows_job(self._windows_job)
+            self._windows_job = None
             self._proc = None
 
     def __enter__(self) -> "VisualWorkerClient":

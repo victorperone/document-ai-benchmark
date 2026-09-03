@@ -34,6 +34,7 @@ try { & "$Scripts\setup_docling.ps1"      @ForceArg } catch { Write-Host "ERROR 
 try { & "$Scripts\setup_liteparse.ps1"    @ForceArg } catch { Write-Host "ERROR [liteparse]: $_"; exit 1 }
 try { & "$Scripts\setup_mineru.ps1"       @ForceArg } catch { Write-Host "ERROR [mineru]: $_"; exit 1 }
 try { & "$Scripts\setup_paddleocr.ps1"    @ForceArg } catch { Write-Host "ERROR [paddleocr]: $_"; exit 1 }
+try { & "$Scripts\setup_visual_enrichment.ps1" @ForceArg } catch { Write-Host "ERROR [visual-enrichment]: $_"; exit 1 }
 try { & "$Scripts\setup_unstructured.ps1" @ForceArg } catch { Write-Host "ERROR [unstructured]: $_"; exit 1 }
 try { & "$Scripts\setup_xberg.ps1"        @ForceArg } catch { Write-Host "ERROR [xberg]: $_"; exit 1 }
 

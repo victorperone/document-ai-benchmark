@@ -9,6 +9,7 @@ Use make_valid_job_output() to create complete post-execution fixtures.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -205,9 +206,12 @@ def make_valid_job_output(
         p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         written["removed_content.jsonl"] = p
 
-    if artifact_policy.includes("document.enriched.md") and enriched_available:
+    if artifact_policy.includes("document.enriched.md"):
         p = out_dir / "document.enriched.md"
-        p.write_text("# Enriched document\n", encoding="utf-8")
+        p.write_text(
+            "# Enriched document\n" if enriched_available else "# Clean document\n",
+            encoding="utf-8",
+        )
         written["document.enriched.md"] = p
 
     if artifact_policy.includes("native"):
@@ -230,17 +234,31 @@ def make_valid_job_output(
     for artifact in artifact_sel:
         out_key = _ARTIFACT_OUTPUT_KEY.get(artifact)
         if out_key:
-            if artifact == "document.enriched.md" and not enriched_available:
-                out_block[out_key] = None
-            else:
-                out_block[out_key] = f"/outputs/{parser}/{doc_stem}/{profile}/{artifact}"
+            out_block[out_key] = f"/outputs/{parser}/{doc_stem}/{profile}/{artifact}"
         bytes_key = _ARTIFACT_BYTES_KEY.get(artifact)
         if bytes_key and artifact in written:
             out_block[bytes_key] = written[artifact].stat().st_size
 
     if artifact_policy.includes("metrics.json"):
         enriched_selected = artifact_policy.includes("document.enriched.md")
-        enriched_present = enriched_selected and enriched_available
+        enriched_present = enriched_selected
+        content_validation: dict[str, dict] = {}
+        for artifact, path in written.items():
+            if artifact not in _ARTIFACT_BYTES_KEY:
+                continue
+            data = path.read_bytes()
+            content_validation[artifact] = {
+                "selected": True,
+                "exists": True,
+                "utf8_valid": True,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "has_alphanumeric": any(ch.isalnum() for ch in data.decode("utf-8")),
+                "content_expected": artifact != "removed_content.jsonl",
+                "expectation_reason": "synthetic test fixture",
+                "valid": True,
+                "error": None,
+            }
         metrics_data = {
             "benchmark": {"schema_version": 3},
             "run": {
@@ -272,10 +290,16 @@ def make_valid_job_output(
                 "clean": {"bytes": None, "sha256": None},
                 "enriched": {
                     "selected": enriched_selected,
-                    "available": enriched_available,
+                    "available": enriched_selected,
                     "present": enriched_present,
+                    "enrichment_applied": enriched_available,
+                    "contains_derived_content": False,
+                    "fallback_origin": (
+                        "enriched_page_markdown" if enriched_available else "document.md"
+                    ),
                 },
             },
+            "content_validation": content_validation,
             "quality_eligibility": {
                 "source_text": True,
                 "page_mapping_complete": True,

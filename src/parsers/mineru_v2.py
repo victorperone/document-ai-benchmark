@@ -7,7 +7,6 @@ from time import perf_counter
 import json
 import shutil
 import os
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from importlib import metadata
@@ -29,6 +28,9 @@ from src.benchmark.metrics_writer import write_json
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.native_bundle import copy_native_bundle, prefix_local_markdown_links
+from src.benchmark.process_tree import run_process_tree
 
 
 PARSER_NAME = "mineru"
@@ -508,8 +510,11 @@ def main() -> None:
             parser_page_elements=parser_page_elements,
             parser_native_pages=parser_native_pages,
             derived_content_by_page=[[] for _ in page_texts],
-            raw_origin_kind="parser_native_exact",
-            raw_origin_details=f"{input_path.stem}.md",
+            enriched_document_markdown=native_result["native_markdown"],
+            raw_origin_kind=native_result["raw_origin_kind"],
+            raw_origin_details=native_result["raw_origin_details"],
+            content_expected=inventory_requires_content(inventory)[0],
+            content_expectation_reason=inventory_requires_content(inventory)[1],
         )
 
         artifact_result = finalize_artifacts(
@@ -1039,6 +1044,7 @@ def main() -> None:
         "artifacts": artifact_result["artifacts"],
 
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
 
         "output": (
             output_metrics
@@ -1407,79 +1413,16 @@ def _copy_mineru_bundle(
     parser_name: str,
     profile_name: str,
 ) -> dict[str, Any]:
-    """Copy MinerU output bundle to native/ before temp dir is destroyed.
-
-    Returns a manifest dict with schema_version=1 and file entries.
-    Never follows symlinks; rejects path traversal.
-    """
-    import shutil as _shutil
-
-    destination.mkdir(parents=True, exist_ok=True)
-    assets_dest = destination / "assets"
-
-    manifest_files: list[dict[str, Any]] = []
-
-    def _copy_entry(src: Path, rel: str) -> None:
-        dest_path = destination / rel
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        _shutil.copy2(src, dest_path)
-        sha = hashlib.sha256(dest_path.read_bytes()).hexdigest()
-        manifest_files.append({
-            "path": rel,
-            "sha256": sha,
-            "size_bytes": dest_path.stat().st_size,
-            "source": "mineru",
-        })
-
-    _copy_entry(markdown_path, f"{document_id}.md")
-    _copy_entry(content_list_path, f"{document_id}_content_list.json")
-    _copy_entry(middle_path, f"{document_id}_middle.json")
-
-    # Copy assets directory preserving relative structure so markdown links stay valid.
-    # MinerU typically outputs images/ under native_root/document_id or native_root.
-    assets_src = native_root / document_id / "images"
-    if not assets_src.is_dir():
-        assets_src = native_root / "images"
-    if assets_src.is_dir():
-        assets_src_resolved = assets_src.resolve()
-        # Determine relative prefix so that destination mirrors source structure.
-        # e.g. assets_src = .../auto/<doc_id>/images  →  copy to native/images/
-        assets_rel_root = assets_src.name  # "images"
-        for asset in assets_src.rglob("*"):
-            if asset.is_symlink() or not asset.is_file():
-                continue
-            # Safety: ensure asset stays inside assets_src tree
-            try:
-                asset.resolve().relative_to(assets_src_resolved)
-            except ValueError:
-                continue
-            rel_to_assets = asset.relative_to(assets_src)
-            rel_in_bundle = Path(assets_rel_root) / rel_to_assets
-            dest_asset = destination / rel_in_bundle
-            dest_asset.parent.mkdir(parents=True, exist_ok=True)
-            _shutil.copy2(asset, dest_asset)
-            sha = hashlib.sha256(dest_asset.read_bytes()).hexdigest()
-            manifest_files.append({
-                "path": rel_in_bundle.as_posix(),
-                "sha256": sha,
-                "size_bytes": dest_asset.stat().st_size,
-                "source": "mineru",
-            })
-
-    # Validate relative image links in the official markdown against the bundle
-    _validate_mineru_markdown_links(markdown_path, destination, document_id)
-
-    manifest = {
-        "schema_version": 1,
-        "parser": parser_name,
-        "profile": profile_name,
-        "bundle_status": "available",
-        "files": manifest_files,
-    }
-    (destination / "manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
+    """Create a fresh self-contained MinerU bundle with safe relocated links."""
+    result = copy_native_bundle(
+        source_root=native_root,
+        source_markdown_path=markdown_path,
+        destination=destination,
+        parser=parser_name,
+        profile=profile_name,
+        extra_files=[content_list_path, middle_path],
     )
-    return manifest
+    return result.manifest
 
 
 import re as _re
@@ -1540,6 +1483,7 @@ def run_mineru_native(
     native_bundle_destination: Path | None = None,
     parser_name: str = "mineru",
     profile_name: str = "",
+    timeout_seconds: int = 3600,
 ) -> dict[str, Any]:
     if method not in {
         "txt",
@@ -1600,18 +1544,20 @@ def run_mineru_native(
             str(table_enabled).lower(),
         ]
 
-        process = subprocess.run(
+        process = run_process_tree(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
             env=environment,
-            text=True,
-            check=False,
+            timeout=timeout_seconds,
+            capture_output=True,
         )
 
-        log_text = (
-            process.stdout or ""
-        )
+        log_text = "\n".join(part for part in (process.stdout, process.stderr) if part)
+
+        if process.timed_out:
+            raise RuntimeError(
+                f"MinerU exceeded {timeout_seconds}s; its process tree was terminated.\n"
+                + "\n".join(log_text.splitlines()[-80:])
+            )
 
         if verbose and log_text:
             print(
@@ -1706,6 +1652,18 @@ def run_mineru_native(
                 parser_name=parser_name,
                 profile_name=profile_name,
             )
+            relocated_markdown = (
+                native_bundle_destination / markdown_path.name
+            ).read_text(encoding="utf-8")
+            native_markdown = prefix_local_markdown_links(
+                relocated_markdown, "native"
+            )
+
+        origin_kind = (
+            "parser_native_links_relocated"
+            if native_markdown != markdown_path.read_text(encoding="utf-8")
+            else "parser_native_exact"
+        )
 
         return {
             "command": command,
@@ -1721,6 +1679,12 @@ def run_mineru_native(
             "middle": middle,
             "log_text": log_text,
             "native_bundle_manifest": native_bundle_manifest,
+            "raw_origin_kind": origin_kind,
+            "raw_origin_details": (
+                f"{document_id}.md with only local asset links relocated into native/assets"
+                if origin_kind == "parser_native_links_relocated"
+                else f"{document_id}.md"
+            ),
         }
 
 if __name__ == "__main__":

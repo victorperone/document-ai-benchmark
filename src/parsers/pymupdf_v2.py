@@ -6,7 +6,6 @@ import inspect
 import json
 import platform
 import shutil
-import subprocess
 import warnings
 from collections import Counter
 from datetime import datetime, timezone
@@ -43,6 +42,7 @@ from src.benchmark.metrics_writer import (
 from src.benchmark.paths import (
     build_output_paths,
 )
+from src.benchmark.process_tree import run_process_tree
 from src.benchmark.preflight import (
     make_check,
     make_result,
@@ -57,6 +57,7 @@ from src.benchmark.runtime_io import (
 from src.benchmark.source_inventory import (
     analyze_pdf_source,
     calculate_sha256,
+    inventory_requires_content,
 )
 
 
@@ -251,15 +252,17 @@ class OcrTracker:
 
 def _tesseract_version() -> str | None:
     try:
-        result = subprocess.run(
+        result = run_process_tree(
             [
                 "tesseract",
                 "--version",
             ],
             capture_output=True,
-            text=True,
-            check=True,
+            timeout=5,
         )
+
+        if result.returncode != 0 or result.timed_out:
+            return None
 
         first_line = (
             result.stdout
@@ -982,14 +985,12 @@ def preflight_profile(
 
         # Worker imports (subprocess probe — fast, no model loading)
         try:
-            import subprocess as _sp
-            probe_result = _sp.run(
+            probe_result = run_process_tree(
                 [str(worker_python), "-c",
                  "from paddleocr import PaddleOCR; "
                  "from transformers import AutoProcessor; "
                  "import torch; print('ok')"],
                 capture_output=True,
-                text=True,
                 timeout=30,
             )
             if probe_result.returncode == 0 and "ok" in probe_result.stdout:
@@ -1387,6 +1388,7 @@ def main() -> None:
                             language=visual_language,
                             description_model=visual_model,
                             render_dpi=visual_render_dpi,
+                            failure_fatal=visual_failure_fatal,
                         )
                     )
         except Exception as _ve:
@@ -1412,6 +1414,8 @@ def main() -> None:
         derived_content_by_page=derived_content_by_page,
         raw_origin_kind="adapter_assembled_declared",
         raw_origin_details="page_texts join",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = (
@@ -1836,6 +1840,7 @@ def main() -> None:
         "artifacts": artifact_result["artifacts"],
 
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
 
         "output": {
             **artifact_result[

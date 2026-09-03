@@ -12,9 +12,10 @@ import importlib.metadata
 import io
 import platform
 import shutil
-import subprocess
 import sys
 from pathlib import Path
+
+from src.benchmark.process_tree import run_process_tree
 
 # ── 1. Package and runtime versions ──────────────────────────────────────────
 
@@ -194,12 +195,12 @@ print(f"\n─── Tesseract probe ──────────────�
 tess_bin = shutil.which("tesseract")
 print(f"tesseract binary    : {tess_bin or 'NOT FOUND'}")
 if tess_bin:
-    result_v = subprocess.run(
-        ["tesseract", "--version"], capture_output=True, text=True
+    result_v = run_process_tree(
+        ["tesseract", "--version"], capture_output=True, timeout=30
     )
     print(f"tesseract version   : {result_v.stdout.splitlines()[0] if result_v.stdout else result_v.stderr.splitlines()[0]}")
-    result_l = subprocess.run(
-        ["tesseract", "--list-langs"], capture_output=True, text=True
+    result_l = run_process_tree(
+        ["tesseract", "--list-langs"], capture_output=True, timeout=30
     )
     langs = result_l.stdout.strip() + result_l.stderr.strip()
     for required_lang in ("eng", "por", "osd"):

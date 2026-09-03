@@ -4,7 +4,10 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from src.parsers.docling_v2 import _build_picture_description_blocks
+from src.parsers.docling_v2 import (
+    _build_picture_description_blocks,
+    build_docling_page_contract,
+)
 
 
 class _DescriptionStub:
@@ -159,3 +162,22 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         enriched, _ = _build_picture_description_blocks(doc, 1, page_texts)
         self.assertTrue(enriched[0].startswith("## Heading"))
         self.assertIn("chart", enriched[0])
+
+
+class TestPageExportContract(unittest.TestCase):
+    def test_missing_document_page_does_not_create_synthetic_blank_page(self):
+        class Document:
+            pages = {1: object()}
+
+            @staticmethod
+            def export_to_markdown(*, page_no, blocked_meta_names):
+                if page_no == 2:
+                    raise IndexError("page absent")
+                return "page one"
+
+            @staticmethod
+            def iterate_items():
+                return iter(())
+
+        with self.assertRaisesRegex(RuntimeError, "source page 2"):
+            build_docling_page_contract(Document(), 2)

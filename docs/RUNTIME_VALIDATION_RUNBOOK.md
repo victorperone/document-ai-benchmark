@@ -44,6 +44,7 @@ Suites defined in `config/benchmark_profiles.json`:
 | `full_corpus` | Expanded benchmark — 8 parser/profile pairs |
 | `diagnostic_ocr` | Force-OCR diagnostic across 3 parsers |
 | `visual_ablation` | Docling + PaddleOCR visual feature ablation |
+| `windows_all_features_host` | Windows Server nativo, sete parsers e todos os artefatos |
 
 ---
 
@@ -57,6 +58,40 @@ python scripts/run_batch.py \
   --input-dir data/raw/batch \
   --dry-run
 ```
+
+## Native Windows Server validation
+
+The Windows host flow is separate from the Docker campaign above. WSL can run
+the common/unit checks, but it cannot certify native Windows readiness.
+
+On Windows Server, prepare model files while network access is explicitly
+allowed:
+
+```powershell
+.\scripts\windows\setup_envs.ps1
+.\scripts\windows\prepare_all_models.ps1 -Mode Prepare
+```
+
+Then enforce the offline release gate:
+
+```powershell
+.\scripts\windows\check_server_readiness.ps1 -VerboseOutput
+```
+
+The gate enables one real, offline fixture conversion in every isolated parser
+test suite and then repeats the complete seven-parser deep smoke. A skipped
+functional test or a changed model manifest makes readiness fail.
+
+Useful non-mutating checks and the fresh default run are:
+
+```powershell
+.\scripts\windows\run_all_features_host.ps1 -DryRun
+.\scripts\windows\run_all_features_host.ps1 -PreflightOnly
+.\scripts\windows\run_all_features_host.ps1
+```
+
+Use `-Resume` only when intentional. The native status and evidence contract is
+maintained in [WINDOWS_SERVER_HOST_STATUS.md](WINDOWS_SERVER_HOST_STATUS.md).
 
 ---
 

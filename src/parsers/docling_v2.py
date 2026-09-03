@@ -38,6 +38,7 @@ from src.benchmark.artifact_policy import (
     ArtifactSelectionError,
 )
 from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
+from src.benchmark.content_validation import inventory_requires_content
 from src.benchmark.artifacts import finalize_artifacts
 from src.benchmark.config import (
     BenchmarkConfigurationError,
@@ -1168,13 +1169,6 @@ def build_docling_page_contract(
                 observed_pages.add(page_number)
 
     for page_number in range(1, page_count + 1):
-        if (
-            observed_pages
-            and page_number not in observed_pages
-        ):
-            page_texts.append("")
-            continue
-
         try:
             page_text = document.export_to_markdown(
                 page_no=page_number,
@@ -1182,8 +1176,10 @@ def build_docling_page_contract(
                 # block them from the compared markdown (adendo §2, §9).
                 blocked_meta_names={"description"},
             )
-        except Exception:
-            page_text = ""
+        except Exception as exc:
+            raise RuntimeError(
+                f"Docling failed to export source page {page_number}: {exc}"
+            ) from exc
         else:
             observed_pages.add(page_number)
 
@@ -1849,8 +1845,11 @@ def _build_pipeline_options(
             # use_style requires parsed page images for font-size analysis
             if bool(profile.get("heading_use_style", True)):
                 options.generate_parsed_pages = True
-        except ImportError:
-            pass  # not available in this docling version; skip silently
+        except ImportError as exc:
+            raise BenchmarkConfigurationError(
+                "heading_hierarchy was requested but this Docling build does not "
+                "provide HeadingHierarchyOptions"
+            ) from exc
 
     # TableFormer V2 — experimental; only activated when table_engine is
     # explicitly set to "tableformer_v2" in the profile.
@@ -1870,8 +1869,11 @@ def _build_pipeline_options(
                     profile.get("table_cell_matching", True)
                 )
             )
-        except ImportError:
-            pass  # V2 not available; V1 options already set above
+        except ImportError as exc:
+            raise BenchmarkConfigurationError(
+                "tableformer_v2 was requested but this Docling build does not "
+                "provide TableStructureV2Options"
+            ) from exc
 
     _configure_picture_description(
         options,
@@ -2634,6 +2636,13 @@ def main() -> None:
 
     document = conversion_result.document
 
+    try:
+        global_markdown = document.export_to_markdown(
+            blocked_meta_names={"description"},
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Docling global Markdown export failed: {exc}") from exc
+
     (
         page_texts,
         parser_page_elements,
@@ -2648,15 +2657,17 @@ def main() -> None:
     )
 
     artifact_input = ParserArtifactInput(
-        native_markdown=join_page_texts(page_texts),
+        native_markdown=str(global_markdown or ""),
         source_page_markdown=page_texts,
         enriched_page_markdown=enriched_page_markdown,
         page_mapping_status="complete",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
         derived_content_by_page=derived_content_by_page,
-        raw_origin_kind="parser_native_per_page_join",
-        raw_origin_details="export_to_markdown per page",
+        raw_origin_kind="parser_native_exact",
+        raw_origin_details="document.export_to_markdown(blocked_meta_names={'description'})",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = finalize_artifacts(
@@ -3030,6 +3041,7 @@ def main() -> None:
         ),
         "artifacts": artifact_result["artifacts"],
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
         "output": {
             **artifact_result["output"],
             "run_log": (

@@ -4,7 +4,11 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock
 
-from src.parsers.unstructured_v2 import _render_element, _render_table_html
+from src.parsers.unstructured_v2 import (
+    _render_element,
+    _render_table_html,
+    _render_visual_items,
+)
 
 
 def _make_el(category: str, text: str = "", **meta_attrs) -> MagicMock:
@@ -121,11 +125,13 @@ class TestHeaderFooterRendering(unittest.TestCase):
 
 
 class TestImageRendering(unittest.TestCase):
-    def test_image_with_path_returns_placeholder(self):
+    def test_image_with_path_does_not_persist_dead_placeholder(self):
         el = _make_el("Image", "", image_path="/tmp/img_001.png")
-        result = _render_element(el)
-        self.assertIn("<!-- image:", result)
-        self.assertIn("img_001.png", result)
+        self.assertEqual(_render_element(el), "")
+
+    def test_image_parser_text_is_preserved(self):
+        el = _make_el("Image", "texto OCR", image_path="/tmp/img_001.png")
+        self.assertEqual(_render_element(el), "texto OCR")
 
     def test_image_without_path_returns_empty(self):
         el = _make_el("Image", "", image_path=None)
@@ -186,3 +192,27 @@ class TestTableElementRendering(unittest.TestCase):
         el = _make_el("Table", "fallback text", text_as_html=None)
         result = _render_element(el)
         self.assertEqual(result, "fallback text")
+
+
+class TestVisualItemDeduplication(unittest.TestCase):
+    def test_content_already_in_base_does_not_leave_comment_only_block(self):
+        base = "IMAGEM OCR: Orcamento local 2026"
+        items = [{
+            "region_id": "p1-image-0",
+            "page_number": 1,
+            "ocr_text": base,
+            "text": base,
+        }]
+        self.assertEqual(_render_visual_items(base, items), base)
+
+    def test_description_covering_ocr_is_emitted_once(self):
+        ocr = "IMAGEM OCR: Orcamento local 2026"
+        items = [{
+            "region_id": "p1-image-0",
+            "page_number": 1,
+            "ocr_text": ocr,
+            "text": f"{ocr}. A bordered label.",
+        }]
+        rendered = _render_visual_items("page", items)
+        self.assertNotIn("Texto OCR", rendered)
+        self.assertEqual(rendered.casefold().count("imagem ocr"), 1)

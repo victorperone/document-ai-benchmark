@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -25,6 +26,7 @@ from src.benchmark.noise_metrics import (
     analyze_noise,
 )
 from src.benchmark.normalizer import (
+    normalize_global_markdown,
     normalize_pages,
 )
 from src.benchmark.paths import (
@@ -37,6 +39,7 @@ from src.benchmark.token_metrics import (
 
 MB = 1024 * 1024
 _DERIVED_MARKER = "<!-- derived:start"
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def _mb(value: int | None) -> float | None:
@@ -57,6 +60,50 @@ def _sha256_of_file(path: Path) -> str | None:
     if not path.is_file():
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _has_meaningful_text(value: str) -> bool:
+    """Reject empty Markdown, HTML comments, and separator-only output."""
+    without_comments = _HTML_COMMENT_RE.sub("", value)
+    return any(character.isalnum() for character in without_comments)
+
+
+def _text_content_validation(
+    *,
+    selected: bool,
+    path: Path,
+    expected: bool,
+    expectation_reason: str,
+) -> dict[str, Any]:
+    exists = selected and path.is_file()
+    utf8_valid = False
+    content = ""
+    error: str | None = None
+    if exists:
+        try:
+            content = path.read_text(encoding="utf-8")
+            utf8_valid = True
+        except (OSError, UnicodeDecodeError) as exc:
+            error = f"{type(exc).__name__}: {exc}"
+
+    has_alphanumeric = utf8_valid and _has_meaningful_text(content)
+    valid = (
+        True
+        if not selected
+        else bool(exists and utf8_valid and (has_alphanumeric or not expected))
+    )
+    return {
+        "selected": selected,
+        "exists": exists,
+        "utf8_valid": utf8_valid if exists else None,
+        "bytes": path.stat().st_size if exists else None,
+        "sha256": _sha256_of_file(path) if exists else None,
+        "has_alphanumeric": has_alphanumeric if exists and utf8_valid else None,
+        "content_expected": expected,
+        "expectation_reason": expectation_reason,
+        "valid": valid,
+        "error": error,
+    }
 
 
 def _ensure_transitional_native_manifest(
@@ -156,7 +203,12 @@ def finalize_artifacts(
     # --------------------------------------------------------
 
     started = perf_counter()
-    normalized = normalize_pages(source_pages, normalization_config)
+    if mapping_unavailable:
+        normalized = normalize_global_markdown(native_content, normalization_config)
+        normalization_mode = "global_without_page_repetition"
+    else:
+        normalized = normalize_pages(source_pages, normalization_config)
+        normalization_mode = "per_page_with_repetition_detection"
     normalization_seconds = perf_counter() - started
 
     # --------------------------------------------------------
@@ -208,11 +260,31 @@ def finalize_artifacts(
 
     # --- Enriched availability ---
     enriched_selected = artifact_policy.includes("document.enriched.md")
-    enriched_available = artifact_input.enriched_page_markdown is not None
-    enriched_written = enriched_selected and enriched_available
+    enriched_source = "not_selected"
     enriched_text: str | None = None
-    if enriched_written:
-        enriched_text = join_page_texts(artifact_input.enriched_page_markdown)
+    if enriched_selected:
+        if artifact_input.enriched_document_markdown is not None:
+            enriched_text = artifact_input.enriched_document_markdown
+            enriched_source = "enriched_document_markdown"
+        elif artifact_input.enriched_page_markdown is not None:
+            enriched_text = join_page_texts(artifact_input.enriched_page_markdown)
+            enriched_source = "enriched_page_markdown"
+        elif normalized.clean_markdown is not None:
+            enriched_text = normalized.clean_markdown
+            enriched_source = "document.md"
+        else:
+            enriched_text = native_content
+            enriched_source = "native_markdown"
+
+    enriched_written = enriched_selected
+    enrichment_applied = enriched_source in {
+        "enriched_document_markdown",
+        "enriched_page_markdown",
+    }
+    contains_derived_content = bool(
+        enriched_text
+        and (_DERIVED_MARKER in enriched_text or total_derived_items > 0)
+    )
 
     token_metrics = build_token_metrics(
         raw_text=native_content,
@@ -269,7 +341,7 @@ def finalize_artifacts(
         paths.clean_markdown.write_text(normalized.clean_markdown, encoding="utf-8")
 
     if enriched_written:
-        paths.enriched_markdown.write_text(enriched_text, encoding="utf-8")
+        paths.enriched_markdown.write_text(enriched_text or "", encoding="utf-8")
 
     jsonl_available = mapping_complete
     jsonl_written = jsonl_selected and jsonl_available
@@ -289,6 +361,63 @@ def finalize_artifacts(
     enriched_bytes = _written_size(selected=enriched_written, path=paths.enriched_markdown)
     jsonl_bytes = _written_size(selected=jsonl_written, path=paths.document_jsonl)
     removed_bytes = _written_size(selected=removed_selected, path=paths.removed_content_jsonl)
+
+    if artifact_input.content_expected is None:
+        content_expected = any(
+            _has_meaningful_text(value)
+            for value in (
+                native_content,
+                normalized.clean_markdown,
+                enriched_text or "",
+            )
+        )
+        expectation_reason = (
+            artifact_input.content_expectation_reason
+            or "inferred from parser artifact input"
+        )
+    else:
+        content_expected = artifact_input.content_expected
+        expectation_reason = (
+            artifact_input.content_expectation_reason
+            or "declared by parser adapter from source inventory"
+        )
+
+    content_validation = {
+        "raw.md": _text_content_validation(
+            selected=raw_selected,
+            path=paths.raw_markdown,
+            expected=content_expected,
+            expectation_reason=expectation_reason,
+        ),
+        "document.md": _text_content_validation(
+            selected=clean_selected,
+            path=paths.clean_markdown,
+            expected=content_expected,
+            expectation_reason=expectation_reason,
+        ),
+        "document.enriched.md": _text_content_validation(
+            selected=enriched_selected,
+            path=paths.enriched_markdown,
+            expected=content_expected,
+            expectation_reason=expectation_reason,
+        ),
+        "document.jsonl": _text_content_validation(
+            selected=jsonl_written,
+            path=paths.document_jsonl,
+            expected=jsonl_written,
+            expectation_reason=(
+                "one record is required for every mapped source page"
+                if jsonl_written
+                else "page mapping unavailable or artifact not selected"
+            ),
+        ),
+        "removed_content.jsonl": _text_content_validation(
+            selected=removed_selected,
+            path=paths.removed_content_jsonl,
+            expected=False,
+            expectation_reason="the normalization audit may legitimately be empty",
+        ),
+    }
 
     empty_output_pages = sum(
         not any(character.isalnum() for character in page)
@@ -316,6 +445,7 @@ def finalize_artifacts(
         "tokens": token_metrics,
 
         "normalization": {
+            "mode": normalization_mode,
             "config": normalization_config,
             "removed_records": len(normalized.removed_records),
             "header_records_removed": sum(
@@ -343,8 +473,11 @@ def finalize_artifacts(
             },
             "enriched": {
                 "selected": enriched_selected,
-                "available": enriched_available,
+                "available": enriched_selected,
                 "present": enriched_written,
+                "enrichment_applied": enrichment_applied,
+                "contains_derived_content": contains_derived_content,
+                "fallback_origin": enriched_source,
                 "bytes": enriched_bytes,
                 "sha256": _sha256_of_file(paths.enriched_markdown) if enriched_written else None,
             },
@@ -371,6 +504,8 @@ def finalize_artifacts(
             "page_mapping_complete": mapping_complete,
             "formal_quality_eligible": bool(native_content) and mapping_complete,
         },
+
+        "content_validation": content_validation,
 
         "output": {
             "selected_artifacts": artifact_policy.as_list(),

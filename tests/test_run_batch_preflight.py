@@ -210,7 +210,7 @@ class TestRunParserPreflightHostRuntime(unittest.TestCase):
         from src.benchmark.execution_paths import RUNTIME_HOST, resolve_venv_python
         stdout = f"{_preflight_line(ok=True, parser=_PARSER, profile=_PROFILE)}"
 
-        with patch.object(_run_batch.subprocess, "run",
+        with patch.object(_run_batch, "run_process_tree",
                           return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
             _run_batch.run_parser_preflight(
                 _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
@@ -224,7 +224,7 @@ class TestRunParserPreflightHostRuntime(unittest.TestCase):
         from src.benchmark.execution_paths import RUNTIME_HOST
         stdout = _preflight_line(ok=True)
 
-        with patch.object(_run_batch.subprocess, "run",
+        with patch.object(_run_batch, "run_process_tree",
                           return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
             _run_batch.run_parser_preflight(
                 _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
@@ -238,7 +238,7 @@ class TestRunParserPreflightHostRuntime(unittest.TestCase):
         from src.benchmark.execution_paths import RUNTIME_HOST
         stdout = _preflight_line(ok=True)
 
-        with patch.object(_run_batch.subprocess, "run",
+        with patch.object(_run_batch, "run_process_tree",
                           return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
             _run_batch.run_parser_preflight(
                 _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST
@@ -253,7 +253,7 @@ class TestRunParserPreflightHostRuntime(unittest.TestCase):
         from src.benchmark.execution_paths import RUNTIME_HOST
         stdout = _preflight_line(ok=True)
 
-        with patch.object(_run_batch.subprocess, "run",
+        with patch.object(_run_batch, "run_process_tree",
                           return_value=_completed(returncode=0, stdout=stdout)) as mock_run:
             _run_batch.run_parser_preflight(
                 _COMPOSE_BASE, _PARSER, _PROFILE, runtime=RUNTIME_HOST

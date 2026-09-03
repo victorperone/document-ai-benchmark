@@ -4,6 +4,8 @@ from __future__ import annotations
 import unittest
 
 from src.benchmark.config import get_profile
+from src.benchmark.config import BenchmarkConfigurationError
+from src.parsers import liteparse_v2
 
 _ALL_PROFILES = ("native", "ocr_auto_tesseract", "ocr_auto_visual")
 
@@ -133,6 +135,32 @@ class LiteParseProfileContractTests(unittest.TestCase):
                 )
                 self.assertIsInstance(num_workers, int)
                 self.assertGreater(num_workers, 0)
+
+    def test_full_profile_maps_every_runtime_control(self) -> None:
+        profile = liteparse_v2._resolve_profile_runtime(
+            get_profile("liteparse", "full_cpu_local")
+        )
+        self.assertEqual(profile["ocr_strategy"], "selective")
+        self.assertEqual(profile["ocr_engine"], "tesseract")
+        self.assertTrue(profile["orientation_detection"])
+        self.assertTrue(profile["image_ocr"])
+        self.assertEqual(
+            profile["image_description_model"],
+            "HuggingFaceTB/SmolVLM-256M-Instruct",
+        )
+        self.assertFalse(profile["ocr_failure_fatal"])
+
+    def test_unsupported_ocr_strategy_is_rejected(self) -> None:
+        profile = get_profile("liteparse", "full_cpu_local")
+        profile["ocr_strategy"] = "always"
+        with self.assertRaises(BenchmarkConfigurationError):
+            liteparse_v2._resolve_profile_runtime(profile)
+
+    def test_unsafe_visual_model_id_is_rejected(self) -> None:
+        profile = get_profile("liteparse", "full_cpu_local")
+        profile["image_description_model"] = "../outside"
+        with self.assertRaises(BenchmarkConfigurationError):
+            liteparse_v2._resolve_profile_runtime(profile)
 
 
 if __name__ == "__main__":

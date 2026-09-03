@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import platform
+from tempfile import TemporaryDirectory
 from collections import Counter
 from datetime import datetime, timezone
 from importlib import metadata
@@ -29,6 +30,12 @@ from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import (
     add_runtime_arguments,
     parser_output_context,
+)
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.native_bundle import (
+    copy_native_bundle,
+    ensure_safe_relative_path,
+    prefix_local_markdown_links,
 )
 
 
@@ -852,6 +859,11 @@ def build_paddleocr_page_contract(
                 "parsing_block_count": len(parsing_blocks),
                 "parsing_res_list": serialized_parsing,
                 "overall_ocr_res": serialized_ocr,
+                "table_res_list": _json_safe(tables),
+                "formula_res_list": _json_safe(formulas),
+                "chart_res_list": _json_safe(chart_list),
+                "seal_res_list": _json_safe(seal_list),
+                "doc_preprocessor_res": _json_safe(doc_preprocessor),
             }
         )
 
@@ -860,6 +872,73 @@ def build_paddleocr_page_contract(
         parser_page_elements,
         parser_native_pages,
     )
+
+
+def aggregate_official_markdown(pipeline: Any, results: list[Any]) -> str:
+    """Use PaddleOCR's official multi-page Markdown aggregator."""
+    concatenate = getattr(pipeline, "concatenate_markdown_pages", None)
+    if not callable(concatenate):
+        raise RuntimeError("PPStructureV3.concatenate_markdown_pages is unavailable")
+    markdown_pages = [result.markdown for result in results]
+    combined = concatenate(markdown_pages)
+    if isinstance(combined, str):
+        return combined
+    for key in ("markdown_texts", "markdown", "content", "text"):
+        value = _result_value(combined, key, None)
+        if isinstance(value, str):
+            return value
+    raise TypeError(
+        "PPStructureV3 official Markdown aggregator returned "
+        f"{type(combined).__name__}, expected str or mapping"
+    )
+
+
+def persist_official_markdown_bundle(
+    *,
+    results: list[Any],
+    official_markdown: str,
+    destination: Path,
+    parser_name: str,
+    profile_name: str,
+) -> tuple[str, dict[str, Any]]:
+    """Persist PPStructureV3 Markdown and every official markdown image."""
+    with TemporaryDirectory(prefix="paddleocr_markdown_") as temporary:
+        source_root = Path(temporary)
+        markdown_path = source_root / "document.md"
+        markdown_path.write_text(official_markdown, encoding="utf-8")
+        image_paths: list[Path] = []
+        for result in results:
+            markdown_data = result.markdown
+            markdown_images = _result_value(markdown_data, "markdown_images", {}) or {}
+            if not isinstance(markdown_images, dict):
+                raise TypeError("PaddleOCR markdown_images must be a mapping")
+            for relative_value, image in markdown_images.items():
+                relative = ensure_safe_relative_path(str(relative_value))
+                image_path = source_root / Path(*relative.parts)
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                if image_path.exists():
+                    continue
+                save = getattr(image, "save", None)
+                if callable(save):
+                    save(image_path)
+                elif isinstance(image, (bytes, bytearray)):
+                    image_path.write_bytes(bytes(image))
+                else:
+                    raise TypeError(
+                        "PaddleOCR markdown image must expose save() or bytes; "
+                        f"got {type(image).__name__}"
+                    )
+                image_paths.append(image_path)
+
+        bundle = copy_native_bundle(
+            source_root=source_root,
+            source_markdown_path=markdown_path,
+            destination=destination,
+            parser=parser_name,
+            profile=profile_name,
+            extra_files=image_paths,
+        )
+        return prefix_local_markdown_links(bundle.markdown, "native"), bundle.manifest
 
 
 def enabled_text(
@@ -882,6 +961,7 @@ def preflight_profile(
     # Profile configuration
     # --------------------------------------------------
 
+    pipeline: Any | None = None
     try:
         profile = get_profile(
             PARSER_NAME,
@@ -1034,12 +1114,12 @@ def preflight_profile(
                 )
             )
 
-        # Check predict() signature for markdown_ignore_labels
+        # Check streaming inference signature for markdown_ignore_labels.
         ignore_labels = profile.get("markdown_ignore_labels")
         if ignore_labels is not None:
             try:
                 predict_sig = inspect.signature(
-                    PPStructureV3.predict
+                    PPStructureV3.predict_iter
                 )
                 predict_params = set(predict_sig.parameters)
                 if "markdown_ignore_labels" in predict_params:
@@ -1054,7 +1134,7 @@ def preflight_profile(
                         make_check(
                             "PPStructureV3 predict API (markdown_ignore_labels)",
                             "warn",
-                            "markdown_ignore_labels not in predict() signature "
+                            "markdown_ignore_labels not in predict_iter() signature "
                             "for this paddleocr version; kwarg will be skipped at runtime",
                         )
                     )
@@ -1293,16 +1373,17 @@ def main() -> None:
             )
             if _ignore_labels is not None:
                 _predict_sig = inspect.signature(
-                    pipeline.predict
+                    pipeline.predict_iter
                 )
                 if "markdown_ignore_labels" in _predict_sig.parameters:
                     predict_kwargs[
                         "markdown_ignore_labels"
                     ] = _ignore_labels
 
-            results = list(
-                pipeline.predict(**predict_kwargs)
-            )
+            predict_iter = getattr(pipeline, "predict_iter", None)
+            if not callable(predict_iter):
+                raise RuntimeError("PPStructureV3.predict_iter is unavailable")
+            results = list(predict_iter(**predict_kwargs))
 
             extraction_seconds = (
                 perf_counter()
@@ -1344,16 +1425,40 @@ def main() -> None:
             results
         )
 
+        official_markdown = aggregate_official_markdown(pipeline, results)
+        native_bundle_manifest: dict[str, Any] | None = None
+        native_markdown = official_markdown
+        if args.artifact_policy.includes("native"):
+            native_markdown, native_bundle_manifest = persist_official_markdown_bundle(
+                results=results,
+                official_markdown=official_markdown,
+                destination=paths.native_dir,
+                parser_name=PARSER_NAME,
+                profile_name=args.profile,
+            )
+        raw_origin_kind = (
+            "parser_native_links_relocated"
+            if native_markdown != official_markdown
+            else "parser_native_exact"
+        )
+
         artifact_input = ParserArtifactInput(
-            native_markdown=join_page_texts(page_texts),
+            native_markdown=native_markdown,
             source_page_markdown=page_texts,
             enriched_page_markdown=None,
             page_mapping_status="complete",
             parser_page_elements=parser_page_elements,
             parser_native_pages=parser_native_pages,
             derived_content_by_page=[[] for _ in page_texts],
-            raw_origin_kind="adapter_assembled_declared",
-            raw_origin_details="page_texts join",
+            raw_origin_kind=raw_origin_kind,
+            raw_origin_details=(
+                "PPStructureV3.concatenate_markdown_pages with only local asset links "
+                "relocated into native/assets"
+                if raw_origin_kind == "parser_native_links_relocated"
+                else "PPStructureV3.concatenate_markdown_pages"
+            ),
+            content_expected=inventory_requires_content(inventory)[0],
+            content_expectation_reason=inventory_requires_content(inventory)[1],
         )
 
         artifact_result = finalize_artifacts(
@@ -1375,6 +1480,11 @@ def main() -> None:
     except Exception:
         monitor.stop()
         raise
+    finally:
+        if pipeline is not None:
+            close_pipeline = getattr(pipeline, "close", None)
+            if callable(close_pipeline):
+                close_pipeline()
 
     resources = monitor.stop()
 
@@ -1902,6 +2012,7 @@ def main() -> None:
         "artifacts": artifact_result["artifacts"],
 
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
 
         "output": (
             output_metrics
@@ -1965,6 +2076,11 @@ def main() -> None:
             ),
             "intermediate_assets_persisted": (
                 False
+            ),
+            "official_markdown_bundle_available": native_bundle_manifest is not None,
+            "official_markdown_bundle_files": (
+                len(native_bundle_manifest.get("files", []))
+                if native_bundle_manifest is not None else 0
             ),
         },
     }

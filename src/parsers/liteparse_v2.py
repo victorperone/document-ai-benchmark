@@ -8,7 +8,6 @@ import json
 import platform
 import re
 import shutil
-import subprocess
 import sys
 import warnings
 from collections import Counter
@@ -29,6 +28,8 @@ from src.benchmark.config import (
 from src.benchmark.cpu_resources import resolve_parallelism
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.process_tree import run_process_tree
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -40,6 +41,7 @@ LITEPARSE_REQUIRED_VERSION = "2.13.0"
 TRANSFORMERS_REQUIRED_VERSION = "5.16.1"
 
 SMOLVLM_ARTIFACT_DIRECTORY = "HuggingFaceTB--SmolVLM-256M-Instruct"
+SMOLVLM_MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct"
 DEFAULT_MODEL_ARTIFACTS = Path("/models/liteparse/smolvlm")
 
 FULL_PAGE_OCR_REASONS: frozenset[str] = frozenset(
@@ -62,6 +64,21 @@ _TESSDATA_CANDIDATES = (
 
 # Module-level SmolVLM model cache (avoids reloading between images)
 _smolvlm_cache: dict[str, Any] = {}
+
+
+def _model_artifact_directory(model_id: str) -> str:
+    """Map an explicit Hugging Face repository id to its local bundle leaf."""
+    parts = model_id.strip().split("/")
+    if (
+        len(parts) != 2
+        or any(not part or part in {".", ".."} for part in parts)
+        or any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in parts)
+    ):
+        raise BenchmarkConfigurationError(
+            "LiteParse image_description_model must be a safe "
+            f"Hugging Face repository id, got {model_id!r}."
+        )
+    return "--".join(parts)
 
 # ---------------------------------------------------------------------------
 # Markdown block parsing
@@ -165,6 +182,8 @@ def _is_usable_text(text: str) -> bool:
 
 def _detect_and_correct_orientation(
     image_bytes: bytes,
+    *,
+    failure_fatal: bool = False,
 ) -> tuple[bytes, int]:
     """Detect orientation via Tesseract OSD and rotate if needed.
 
@@ -191,6 +210,8 @@ def _detect_and_correct_orientation(
         return buf.getvalue(), rotation
 
     except Exception:
+        if failure_fatal:
+            raise
         return image_bytes, 0
 
 
@@ -202,6 +223,8 @@ def _detect_and_correct_orientation(
 def _ocr_image_bytes(
     image_bytes: bytes,
     lang: str = "por+eng",
+    *,
+    failure_fatal: bool = False,
 ) -> str:
     import pytesseract
     from PIL import Image
@@ -215,6 +238,8 @@ def _ocr_image_bytes(
         )
         return text.strip()
     except Exception:
+        if failure_fatal:
+            raise
         return ""
 
 
@@ -227,10 +252,11 @@ def _describe_image_with_smolvlm(
     image_bytes: bytes,
     model_root: Path,
     prompt: str,
+    model_artifact_directory: str = SMOLVLM_ARTIFACT_DIRECTORY,
 ) -> str:
     model_dir = (
         model_root
-        / SMOLVLM_ARTIFACT_DIRECTORY
+        / model_artifact_directory
     )
 
     if not model_dir.is_dir():
@@ -382,6 +408,12 @@ def _process_document_images(
 ) -> dict[str, dict[str, Any]]:
     """Process extracted images with OCR and optional SmolVLM."""
 
+    orientation_detection_enabled = bool(
+        profile.get("orientation_detection", False)
+    )
+    image_ocr_enabled = bool(profile.get("image_ocr", False))
+    ocr_failure_fatal = bool(profile.get("ocr_failure_fatal", False))
+
     image_description_enabled = bool(
         profile.get(
             "image_description",
@@ -404,6 +436,12 @@ def _process_document_images(
                 "and factually."
             ),
         )
+    )
+    description_model = str(
+        profile.get("image_description_model", SMOLVLM_MODEL_ID)
+    )
+    description_model_directory = _model_artifact_directory(
+        description_model
     )
 
     enrichments: dict[
@@ -473,16 +511,24 @@ def _process_document_images(
             img_file.read_bytes()
         )
 
-        corrected_bytes, rotation = (
-            _detect_and_correct_orientation(
-                image_bytes
+        if orientation_detection_enabled:
+            corrected_bytes, rotation = (
+                _detect_and_correct_orientation(
+                    image_bytes,
+                    failure_fatal=ocr_failure_fatal,
+                )
             )
-        )
+        else:
+            corrected_bytes, rotation = image_bytes, 0
 
-        ocr_text = _ocr_image_bytes(
-            corrected_bytes,
-            lang=ocr_language,
-        )
+        if image_ocr_enabled:
+            ocr_text = _ocr_image_bytes(
+                corrected_bytes,
+                lang=ocr_language,
+                failure_fatal=ocr_failure_fatal,
+            )
+        else:
+            ocr_text = ""
 
         has_usable_text = (
             _is_usable_text(
@@ -497,7 +543,7 @@ def _process_document_images(
             "file": key,
             "hash": file_hash,
             "rotation_applied": rotation,
-            "ocr_attempted": True,
+            "ocr_attempted": image_ocr_enabled,
             "ocr_text": (
                 ocr_text
                 if has_usable_text
@@ -522,11 +568,20 @@ def _process_document_images(
         description: str | None = None
 
         if should_describe:
+            effective_prompt = description_prompt
+            if ocr_text.strip():
+                effective_prompt += (
+                    "\n\nThe following text has already been extracted by OCR. "
+                    "Do not transcribe or repeat it; describe only additional "
+                    "visual information:\n"
+                    + ocr_text.strip()[:2000]
+                )
             description = (
                 _describe_image_with_smolvlm(
                     corrected_bytes,
                     model_root,
-                    description_prompt,
+                    effective_prompt,
+                    description_model_directory,
                 )
             )
             enrichment[
@@ -534,9 +589,7 @@ def _process_document_images(
             ] = description
             enrichment[
                 "model"
-            ] = (
-                SMOLVLM_ARTIFACT_DIRECTORY
-            )
+            ] = description_model
 
         if (
             has_usable_text
@@ -700,6 +753,7 @@ def _merge_page_texts(
     native_texts: list[str],
     ocr_texts_by_page: dict[int, str],
     page_count: int,
+    compatible_geometry_by_page: set[int] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Merge native and OCR texts using MergeDecision policy.
 
@@ -716,6 +770,10 @@ def _merge_page_texts(
             decisions.append(MergeDecision.keep_native)
             continue
         ocr = ocr_texts_by_page[page_num]
+        if not compatible_geometry_by_page or page_num not in compatible_geometry_by_page:
+            merged.append(native)
+            decisions.append(MergeDecision.derived_only)
+            continue
         decision = _decide_merge(native, ocr)
         if decision in (
             MergeDecision.replace_empty_page,
@@ -763,7 +821,7 @@ def _build_page_text_with_enrichments(
             continue
 
         enrichment = enrichments.get(key)
-        if not enrichment:
+        if not enrichment or enrichment.get("duplicate", False):
             continue
 
         kind = enrichment.get("kind", "none")
@@ -794,6 +852,15 @@ def _build_page_text_with_enrichments(
         prev_blank = is_blank
 
     return "\n".join(output_lines).rstrip() + "\n"
+
+
+def _text_already_present(reference: str, candidate: str) -> bool:
+    """Return whether meaningful OCR text is already present in another source."""
+    normalized_candidate = " ".join(candidate.casefold().split())
+    if len(normalized_candidate) < 12:
+        return False
+    normalized_reference = " ".join(reference.casefold().split())
+    return normalized_candidate in normalized_reference
 
 
 # ---------------------------------------------------------------------------
@@ -924,10 +991,9 @@ def _package_version(name: str) -> str | None:
 
 def _get_tesseract_version() -> str | None:
     try:
-        result = subprocess.run(
+        result = run_process_tree(
             ["tesseract", "--version"],
             capture_output=True,
-            text=True,
             timeout=5,
         )
         first_line = (result.stdout or result.stderr).splitlines()
@@ -1081,6 +1147,7 @@ def _build_metrics(
         "normalization": artifact_result["normalization"],
         "artifacts": artifact_result["artifacts"],
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,
@@ -1099,6 +1166,46 @@ def _resolve_profile_runtime(
     profile: dict[str, Any],
 ) -> dict[str, Any]:
     resolved = dict(profile)
+
+    ocr_enabled = bool(resolved.get("ocr_enabled", False))
+    ocr_strategy = str(
+        resolved.get(
+            "ocr_strategy",
+            "selective" if ocr_enabled else "disabled",
+        )
+    ).strip().lower()
+    expected_strategy = "selective" if ocr_enabled else "disabled"
+    if ocr_strategy != expected_strategy:
+        raise BenchmarkConfigurationError(
+            "LiteParse supports ocr_strategy='selective' when OCR is enabled "
+            "and 'disabled' otherwise; got "
+            f"{ocr_strategy!r}."
+        )
+    resolved["ocr_strategy"] = ocr_strategy
+
+    if ocr_enabled:
+        ocr_engine = str(resolved.get("ocr_engine", "")).strip().lower()
+        if ocr_engine != "tesseract":
+            raise BenchmarkConfigurationError(
+                "LiteParse local OCR requires ocr_engine='tesseract', got "
+                f"{ocr_engine!r}."
+            )
+        resolved["ocr_engine"] = ocr_engine
+
+    resolved["orientation_detection"] = bool(
+        resolved.get("orientation_detection", False)
+    )
+    resolved["image_ocr"] = bool(resolved.get("image_ocr", False))
+    resolved["ocr_failure_fatal"] = bool(
+        resolved.get("ocr_failure_fatal", False)
+    )
+
+    image_description = bool(resolved.get("image_description", False))
+    resolved["image_description"] = image_description
+    if image_description:
+        model_id = str(resolved.get("image_description_model", "")).strip()
+        _model_artifact_directory(model_id)
+        resolved["image_description_model"] = model_id
 
     configured_workers = int(
         resolved.get(
@@ -1143,9 +1250,9 @@ def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "ocr_enabled": ocr_enabled,
-        "output_format": "markdown",
-        "image_mode": "off",
-        "extract_images": True,
+        "output_format": str(profile.get("output_format", "markdown")),
+        "image_mode": str(profile.get("image_mode", "off")),
+        "extract_images": bool(profile.get("extract_images", True)),
         "extract_links": bool(profile.get("extract_links", False)),
         "keep_headers_footers": bool(profile.get("keep_headers_footers", True)),
         "preserve_very_small_text": bool(profile.get("preserve_very_small_text", False)),
@@ -1158,7 +1265,7 @@ def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
         "extract_screenshots": bool(profile.get("extract_screenshots", False)),
         "quiet": True,
         "continue_on_page_error": False,
-        "ocr_server_url": None,
+        "ocr_server_url": profile.get("ocr_server_url"),
         "num_workers": int(profile.get("num_workers", 2)),
         "dpi": int(profile.get("dpi", 150)),
         "max_pages": 2000,
@@ -1395,6 +1502,41 @@ def preflight_profile(
     ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     if ocr_enabled:
+        checks.append(
+            make_check(
+                "ocr strategy",
+                "pass" if profile["ocr_strategy"] == "selective" else "fail",
+                str(profile["ocr_strategy"]),
+            )
+        )
+        checks.append(
+            make_check(
+                "ocr engine",
+                "pass" if profile.get("ocr_engine") == "tesseract" else "fail",
+                str(profile.get("ocr_engine") or "not set"),
+            )
+        )
+        checks.append(
+            make_check(
+                "orientation detection",
+                "pass" if profile["orientation_detection"] else "warn",
+                "enabled" if profile["orientation_detection"] else "disabled",
+            )
+        )
+        checks.append(
+            make_check(
+                "embedded image OCR",
+                "pass" if profile["image_ocr"] else "warn",
+                "enabled" if profile["image_ocr"] else "disabled",
+            )
+        )
+        checks.append(
+            make_check(
+                "OCR failure policy",
+                "pass",
+                "fatal" if profile["ocr_failure_fatal"] else "continue",
+            )
+        )
         from src.benchmark.external_tools import resolve_tesseract_executable
         tess_bin = resolve_tesseract_executable()
         checks.append(
@@ -1483,12 +1625,13 @@ def preflight_profile(
             if model_artifacts_override is not None
             else DEFAULT_MODEL_ARTIFACTS
         )
-        smolvlm_path = effective_artifacts / SMOLVLM_ARTIFACT_DIRECTORY
+        model_id = str(profile["image_description_model"])
+        smolvlm_path = effective_artifacts / _model_artifact_directory(model_id)
         checks.append(
             make_check(
                 "smolvlm model",
                 "pass" if smolvlm_path.is_dir() else "fail",
-                str(smolvlm_path),
+                f"{model_id} -> {smolvlm_path}",
             )
         )
 
@@ -1639,7 +1782,7 @@ def main() -> None:
                 ocr_decisions: dict[int, dict[str, Any]] = {}
                 pages_needing_ocr: list[int] = []
 
-                if ocr_enabled:
+                if ocr_enabled and profile["ocr_strategy"] == "selective":
                     complexity_parser = _liteparse.LiteParse(
                         ocr_enabled=False,
                         quiet=True,
@@ -1693,6 +1836,7 @@ def main() -> None:
                 # ── Selective OCR for pages that need it ──────────────────
                 ocr_page_texts: dict[int, str] = {}
                 ocr_mapped_pages: set[int] = set()
+                ocr_global_text = ""
 
                 if ocr_enabled and pages_needing_ocr:
                     target_str = ",".join(
@@ -1705,6 +1849,7 @@ def main() -> None:
 
                     ocr_parser = _liteparse.LiteParse(**ocr_config)
                     ocr_result = ocr_parser.parse(input_path)
+                    ocr_global_text = str(getattr(ocr_result, "text", "") or "")
                     ocr_page_texts_raw, ocr_mapped_pages = _extract_page_texts(
                         ocr_result, page_count
                     )
@@ -1720,13 +1865,9 @@ def main() -> None:
                     page_count,
                 )
 
-                # Determine page mapping status based on actual lib coverage,
-                # not on whether text content is non-empty.
-                all_expected = set(range(1, page_count + 1))
-                effective_mapped = native_mapped_pages | ocr_mapped_pages
-                page_mapping_status = (
-                    "complete" if effective_mapped >= all_expected else "unavailable"
-                )
+                # LiteParse text_items are diagnostic geometry, not a certified
+                # Markdown page API. Never claim a page mapping from them.
+                page_mapping_status = "unavailable"
 
                 # ── Collect all images ────────────────────────────────────
                 all_images: list[Any] = list(
@@ -1791,7 +1932,7 @@ def main() -> None:
                         else:
                             continue
                         enrichment = image_enrichments.get(key)
-                        if not enrichment:
+                        if not enrichment or enrichment.get("duplicate", False):
                             continue
                         file_hash = enrichment.get("hash", "")
                         idx = page_image_counter.get(page_num, 0)
@@ -1801,6 +1942,19 @@ def main() -> None:
                         ocr_text_val = (enrichment.get("ocr_text") or "").strip() or None
                         desc_val = (enrichment.get("image_description") or "").strip() or None
                         has_useful_ocr = bool(ocr_text_val and enrichment.get("has_usable_text"))
+                        ocr_is_duplicate = bool(
+                            ocr_text_val
+                            and (
+                                _text_already_present(
+                                    raw_text + "\n" + ocr_global_text,
+                                    ocr_text_val,
+                                )
+                                or _text_already_present(
+                                    desc_val or "",
+                                    ocr_text_val,
+                                )
+                            )
+                        )
 
                         if desc_val:
                             derived_item: dict[str, Any] = {
@@ -1829,7 +1983,7 @@ def main() -> None:
                                 f"model={enrichment.get('model', '')}",
                                 "-->",
                             ]
-                            if ocr_text_val:
+                            if ocr_text_val and not ocr_is_duplicate:
                                 block_lines.append(
                                     f"> **Texto OCR:** {ocr_text_val}"
                                 )
@@ -1843,7 +1997,7 @@ def main() -> None:
                                 + "\n\n"
                                 + block
                             )
-                        elif has_useful_ocr:
+                        elif has_useful_ocr and not ocr_is_duplicate:
                             # OCR-only derived item (no VLM description)
                             derived_item = {
                                 "type": "image_ocr",
@@ -1904,18 +2058,41 @@ def main() -> None:
 
     pipeline_seconds = perf_counter() - pipeline_started
 
+    global_derived_blocks: list[str] = []
+    if ocr_global_text.strip() and ocr_global_text.strip() not in raw_text:
+        global_derived_blocks.append(
+            "<!-- derived:start\n"
+            "type=ocr_global\n"
+            "engine=liteparse\n"
+            "-->\n"
+            + ocr_global_text.strip()
+            + "\n<!-- derived:end -->"
+        )
+    if enriched_page_markdown is not None:
+        global_derived_blocks.extend(re.findall(
+            r"<!-- derived:start.*?<!-- derived:end -->",
+            join_page_texts(enriched_page_markdown),
+            flags=re.DOTALL,
+        ))
+    enriched_document_markdown = None
+    if global_derived_blocks:
+        enriched_document_markdown = (
+            raw_text.rstrip() + "\n\n" + "\n\n".join(global_derived_blocks)
+        )
+
     artifact_input = ParserArtifactInput(
         native_markdown=raw_text,
-        source_page_markdown=(
-            source_page_texts if page_mapping_status == "complete" else None
-        ),
-        enriched_page_markdown=enriched_page_markdown,
-        page_mapping_status=page_mapping_status,
+        source_page_markdown=None,
+        enriched_page_markdown=None,
+        enriched_document_markdown=enriched_document_markdown,
+        page_mapping_status="unavailable",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
         derived_content_by_page=derived_content_by_page,
         raw_origin_kind="parser_native_exact",
         raw_origin_details="result.text",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = finalize_artifacts(

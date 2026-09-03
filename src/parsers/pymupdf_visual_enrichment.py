@@ -17,6 +17,7 @@ import hashlib
 from typing import Any
 
 _VISUAL_CLASSES = frozenset({"picture", "chart", "diagram"})
+_MASK_CLASSES = frozenset({"mask", "background", "artifact"})
 _MIN_AREA_FRACTION = 0.002
 _MIN_WIDTH_PX = 80
 _MAX_DIMENSION_PX = 2500
@@ -84,6 +85,7 @@ def _derived_block(
     ocr_text: str,
     description_model: str,
     ocr_engine: str,
+    base_text: str = "",
 ) -> str:
     lines = [
         "<!-- derived:start",
@@ -94,12 +96,87 @@ def _derived_block(
         f"model={description_model}",
         "-->",
     ]
-    if ocr_text.strip():
+    normalized_base = " ".join(base_text.casefold().split())
+    normalized_ocr = " ".join(ocr_text.casefold().split())
+    normalized_description = " ".join(description.casefold().split())
+    emit_ocr = bool(
+        normalized_ocr
+        and normalized_ocr not in normalized_base
+        and normalized_ocr not in normalized_description
+    )
+    emit_description = bool(
+        normalized_description and normalized_description not in normalized_base
+    )
+    if emit_ocr:
         lines.append(f"> **Texto OCR:** {ocr_text.strip()}")
-    if description.strip():
+    if emit_description:
         lines.append(f"> **Descrição visual:** {description.strip()}")
+    if not emit_ocr and not emit_description:
+        return ""
     lines.append("<!-- derived:end -->")
     return "\n".join(lines)
+
+
+def _embedded_image_boxes(document: Any, page_index: int) -> list[dict[str, Any]]:
+    """Return positioned non-mask embedded images not classified by layout."""
+    try:
+        page = document[page_index]
+        images = list(page.get_images(full=True) or [])
+        mask_xrefs = {
+            int(row[1]) for row in images
+            if len(row) > 1 and isinstance(row[1], int) and row[1] > 0
+        }
+        boxes: list[dict[str, Any]] = []
+        for row in images:
+            xref = int(row[0])
+            if xref in mask_xrefs:
+                continue
+            for rect in page.get_image_rects(xref):
+                if rect.width <= 0 or rect.height <= 0:
+                    continue
+                boxes.append({
+                    "class": "embedded_image",
+                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+                    "xref": xref,
+                })
+        return boxes
+    except Exception:
+        return []
+
+
+def _overlaps_classified_image(candidate: dict[str, Any], boxes: list[dict[str, Any]]) -> bool:
+    rect = _box_to_rect(candidate)
+    if rect is None:
+        return False
+    x0, y0, x1, y1 = rect
+    area = (x1 - x0) * (y1 - y0)
+    for box in boxes:
+        other = _box_to_rect(box)
+        if other is None:
+            continue
+        ox0, oy0, ox1, oy1 = other
+        intersection = max(0.0, min(x1, ox1) - max(x0, ox0)) * max(
+            0.0, min(y1, oy1) - max(y0, oy0)
+        )
+        if area > 0 and intersection / area >= 0.75:
+            return True
+    return False
+
+
+def _insert_blocks(text: str, positioned: list[tuple[int | None, str]]) -> str:
+    result = text
+    tail: list[str] = []
+    valid = []
+    for position, block in positioned:
+        if isinstance(position, int) and 0 <= position <= len(text):
+            valid.append((position, block))
+        else:
+            tail.append(block)
+    for position, block in sorted(valid, reverse=True):
+        result = result[:position].rstrip() + "\n\n" + block + "\n\n" + result[position:].lstrip()
+    if tail:
+        result = result.rstrip() + "\n\n" + "\n\n".join(tail)
+    return result
 
 
 def enrich_pages(
@@ -111,6 +188,7 @@ def enrich_pages(
     language: str,
     description_model: str,
     render_dpi: int = _RENDER_DPI,
+    failure_fatal: bool = False,
 ) -> tuple[list[str] | None, list[list[dict[str, Any]]], dict[str, Any]]:
     """Run visual enrichment for all pages.
 
@@ -127,6 +205,7 @@ def enrich_pages(
     regions_processed = 0
     regions_failed = 0
     successful_derived_blocks = 0
+    processed_hashes: set[str] = set()
 
     for page_index, native in enumerate(native_pages):
         page_number = page_index + 1
@@ -134,24 +213,44 @@ def enrich_pages(
         if not isinstance(boxes, list):
             continue
 
-        visual_boxes = [
+        classified_boxes = [
             b for b in boxes
-            if isinstance(b, dict) and b.get("class") in _VISUAL_CLASSES
+            if isinstance(b, dict)
+            and b.get("class") in _VISUAL_CLASSES
+            and b.get("class") not in _MASK_CLASSES
         ]
+        embedded_boxes = [
+            box for box in _embedded_image_boxes(document, page_index)
+            if not _overlaps_classified_image(box, classified_boxes)
+        ]
+        visual_boxes = classified_boxes + embedded_boxes
         regions_detected += len(visual_boxes)
 
-        page_extra_blocks: list[str] = []
+        page_extra_blocks: list[tuple[int | None, str]] = []
 
         for region_index, box in enumerate(visual_boxes):
             rect = _box_to_rect(box)
             if rect is None:
                 regions_failed += 1
+                if failure_fatal:
+                    raise RuntimeError(
+                        f"invalid visual region on page {page_number}: {box!r}"
+                    )
                 continue
 
             image_bytes = _render_region(document, page_index, rect, render_dpi=render_dpi)
             if image_bytes is None:
                 regions_failed += 1
+                if failure_fatal:
+                    raise RuntimeError(
+                        f"visual region render failed on page {page_number}: {rect!r}"
+                    )
                 continue
+
+            image_hash = hashlib.sha256(image_bytes).hexdigest()
+            if image_hash in processed_hashes:
+                continue
+            processed_hashes.add(image_hash)
 
             rid = _region_id(page_number, region_index, image_bytes)
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -172,7 +271,15 @@ def enrich_pages(
                 regions_processed += 1
             except Exception:
                 regions_failed += 1
+                if failure_fatal:
+                    raise
                 continue
+
+            if failure_fatal and (resp.status != "success" or resp.error_detail):
+                raise RuntimeError(
+                    f"visual enrichment failed for {rid}: "
+                    f"{resp.error_detail or resp.status}"
+                )
 
             ocr_text_val = resp.ocr_text.strip() if resp.ocr_text else None
             description_val = resp.description.strip() if resp.description else None
@@ -183,7 +290,7 @@ def enrich_pages(
                 "region_id": rid,
                 "page_number": page_number,
                 "box_class": box.get("class"),
-                "sha256": hashlib.sha256(image_bytes).hexdigest(),
+                "sha256": image_hash,
                 "storage_policy": "transient",
                 "deleted_after_processing": True,
                 "status": resp.status,
@@ -207,18 +314,21 @@ def enrich_pages(
                     ocr_text=resp.ocr_text,
                     description_model=resp.description_model,
                     ocr_engine=resp.ocr_engine,
+                    base_text=page_texts[page_index],
                 )
-                page_extra_blocks.append(block)
+                if not block:
+                    continue
+                raw_pos = box.get("pos")
+                position = raw_pos if isinstance(raw_pos, int) else None
+                page_extra_blocks.append((position, block))
                 successful_derived_blocks += 1
 
             # Explicit cleanup — image_bytes released here
             del image_bytes
 
         if page_extra_blocks:
-            enriched_pages[page_index] = (
-                page_texts[page_index].rstrip()
-                + "\n\n"
-                + "\n\n".join(page_extra_blocks)
+            enriched_pages[page_index] = _insert_blocks(
+                page_texts[page_index], page_extra_blocks
             )
 
     metrics: dict[str, Any] = {

@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import dataclasses
+import hashlib
 import importlib.metadata
+import json
 import platform
+import re
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from enum import Enum
 
 from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError
 from src.benchmark.config import (
@@ -21,6 +26,9 @@ from src.benchmark.config import (
 )
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.native_bundle import clean_native_bundle, write_native_manifest
+from src.benchmark.process_tree import run_process_tree
 
 PARSER_NAME = "xberg"
 PARSER_DISPLAY_NAME = "Xberg"
@@ -88,9 +96,9 @@ def _package_version(name: str) -> str | None:
 
 def _get_tesseract_version() -> str | None:
     try:
-        r = subprocess.run(
+        r = run_process_tree(
             ["tesseract", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         )
         lines = (r.stdout or r.stderr).splitlines()
         return lines[0].strip() if lines else None
@@ -499,7 +507,11 @@ def _page_tables(page_obj: Any) -> list[Any]:
 _JSON_PRIMITIVES = (bool, int, float, str, type(None))
 
 
-def _to_json_safe(v: Any) -> Any:
+def _to_json_safe(
+    v: Any,
+    _depth: int = 0,
+    _ancestors: set[int] | None = None,
+) -> Any:
     """Recursively convert a Xberg result value to a JSON-serializable form.
 
     Xberg dataclasses may use __slots__ (no __dict__) or C extensions,
@@ -511,11 +523,45 @@ def _to_json_safe(v: Any) -> Any:
         return v
     if isinstance(v, (bytes, bytearray)):
         return None
+    if _depth >= 8:
+        return f"<truncated:{type(v).__name__}>"
+    ancestors = _ancestors if _ancestors is not None else set()
+    identity = id(v)
+    if identity in ancestors:
+        return f"<circular:{type(v).__name__}>"
+    ancestors.add(identity)
+    try:
+        return _to_json_safe_complex(v, _depth, ancestors)
+    finally:
+        ancestors.discard(identity)
+
+
+def _to_json_safe_complex(v: Any, depth: int, ancestors: set[int]) -> Any:
+    """Serialize one non-primitive value with bounded recursion."""
+    if isinstance(v, Enum):
+        return _to_json_safe(v.value, depth + 1, ancestors)
+    if isinstance(v, Path):
+        return str(v)
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return _to_json_safe(dataclasses.asdict(v), depth + 1, ancestors)
     if isinstance(v, dict):
-        return {str(k): _to_json_safe(val) for k, val in v.items()}
+        return {
+            str(key): _to_json_safe(value, depth + 1, ancestors)
+            for key, value in v.items()
+        }
     if isinstance(v, (list, tuple)):
-        result = [_to_json_safe(item) for item in v]
+        result = [_to_json_safe(item, depth + 1, ancestors) for item in v]
         return [item for item in result if item is not None]
+    for method_name in ("model_dump", "to_dict", "dict"):
+        method = getattr(v, method_name, None)
+        if callable(method):
+            try:
+                dumped = method()
+                if dumped is v:
+                    continue
+                return _to_json_safe(dumped, depth + 1, ancestors)
+            except Exception:
+                continue
     return str(v)
 
 
@@ -535,7 +581,7 @@ def _table_to_native(table_obj: Any) -> dict[str, Any]:
 def _page_native(page_obj: Any) -> dict[str, Any]:
     """Extract additional native fields from a PageContent object for retention."""
     record: dict[str, Any] = {}
-    for attr in ("elements", "images", "form_fields", "annotations",
+    for attr in ("elements", "form_fields", "annotations",
                  "hierarchy", "layout_regions", "formulas", "warnings",
                  "ocr_metadata", "reading_order", "document_structure",
                  "language", "quality"):
@@ -544,6 +590,74 @@ def _page_native(page_obj: Any) -> dict[str, Any]:
         if safe is not None:
             record[attr] = safe
     return record
+
+
+def _xberg_image_bytes(image: Any) -> bytes:
+    data = getattr(image, "data", None)
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    if isinstance(data, (list, tuple)) and all(isinstance(item, int) for item in data):
+        return bytes(data)
+    encoded = getattr(image, "data_base64", None)
+    if isinstance(encoded, str) and encoded:
+        return base64.b64decode(encoded, validate=True)
+    return b""
+
+
+def persist_xberg_native_bundle(
+    document: Any,
+    *,
+    destination: Path,
+    profile_name: str,
+) -> dict[str, Any]:
+    """Persist official Xberg image bytes and an index without altering content."""
+    clean_native_bundle(destination)
+    (destination / "document.md").write_text(
+        str(getattr(document, "content", "") or ""), encoding="utf-8"
+    )
+    candidates = list(getattr(document, "images", None) or [])
+    for page in _get_pages(document):
+        candidates.extend(list(getattr(page, "images", None) or []))
+    seen: set[str] = set()
+    index: list[dict[str, Any]] = []
+    for sequence, image in enumerate(candidates):
+        content = _xberg_image_bytes(image)
+        if not content:
+            continue
+        digest = hashlib.sha256(content).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        extension = re.sub(
+            r"[^a-z0-9]", "", str(getattr(image, "format", "bin") or "bin").casefold()
+        ) or "bin"
+        if extension == "jpeg":
+            extension = "jpg"
+        page_number = getattr(image, "page_number", None)
+        image_index = getattr(image, "image_index", sequence)
+        relative = Path("assets") / f"p{page_number or 0}-i{image_index}-{digest[:12]}.{extension}"
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        index.append({
+            "path": relative.as_posix(),
+            "sha256": digest,
+            "size_bytes": len(content),
+            "page_number": page_number,
+            "image_index": image_index,
+            "format": str(getattr(image, "format", "") or ""),
+            "width": getattr(image, "width", None),
+            "height": getattr(image, "height", None),
+            "caption": getattr(image, "caption", None),
+        })
+    (destination / "assets.json").write_text(
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return write_native_manifest(
+        destination, parser=PARSER_NAME, profile=profile_name, bundle_status="available"
+    )
 
 
 def _collect_qr_results(document: Any, page_count: int) -> list[dict[str, Any]]:
@@ -709,17 +823,9 @@ def _result_to_artifacts(
         page = page_map.get(page_num)
 
         if page is None:
-            page_texts.append("")
-            parser_page_elements.append({
-                "page_number": page_num,
-                "tables_detected": 0,
-            })
-            parser_native_pages.append({
-                "page_number": page_num,
-                "missing_from_parser_result": True,
-                "tables": [],
-            })
-            continue
+            raise XbergConfigurationError(
+                f"Xberg omitted source page {page_num}; page mapping cannot be complete"
+            )
 
         raw_text = _page_text(page)
         page_texts.append((raw_text + "\n") if raw_text else "")
@@ -827,6 +933,7 @@ def _build_metrics(
     run_log_path: Path | None,
     metrics_json_path: Path | None,
     qr_results: list[dict[str, Any]] | None = None,
+    native_bundle_manifest: dict[str, Any] | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
@@ -936,6 +1043,14 @@ def _build_metrics(
         "normalization": artifact_result["normalization"],
         "artifacts": artifact_result["artifacts"],
         "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
+        "xberg_native": {
+            "bundle_available": native_bundle_manifest is not None,
+            "bundle_files": (
+                len(native_bundle_manifest.get("files", []))
+                if native_bundle_manifest is not None else 0
+            ),
+        },
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,
@@ -1129,7 +1244,9 @@ def main() -> None:
     inventory = _load_cached_inventory(input_path, args.output_root)
     page_count = int(inventory["pages"])
 
-    model_root = args.model_root if args.model_root is not None else Path("models/xberg")
+    model_root = (
+        args.model_root if args.model_root is not None else Path("models/xberg")
+    ).resolve()
     ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     print("=" * 72)
@@ -1198,16 +1315,24 @@ def main() -> None:
         derived_content_by_page = [[] for _ in page_texts]
         enriched_page_markdown = None
 
+    native_bundle_manifest: dict[str, Any] | None = None
+    if artifact_policy.includes("native"):
+        native_bundle_manifest = persist_xberg_native_bundle(
+            document, destination=paths.native_dir, profile_name=args.profile
+        )
+
     artifact_input = ParserArtifactInput(
-        native_markdown=join_page_texts(page_texts),
+        native_markdown=str(document.content or ""),
         source_page_markdown=page_texts,
         enriched_page_markdown=enriched_page_markdown,
         page_mapping_status="complete",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
         derived_content_by_page=derived_content_by_page,
-        raw_origin_kind="parser_native_per_page_join",
-        raw_origin_details="page_texts join from ExtractedDocument.pages",
+        raw_origin_kind="parser_native_exact",
+        raw_origin_details="ExtractedDocument.content",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = finalize_artifacts(
@@ -1240,6 +1365,7 @@ def main() -> None:
         tokenizer_name=tokenizer_name,
         artifact_selected_list=artifact_policy.as_list(),
         qr_results=qr_results,
+        native_bundle_manifest=native_bundle_manifest,
         verbose=args.verbose,
         run_log_path=paths.run_log if artifact_policy.includes("run.log") else None,
         metrics_json_path=paths.metrics_json if artifact_policy.includes("metrics.json") else None,

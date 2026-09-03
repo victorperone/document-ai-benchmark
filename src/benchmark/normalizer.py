@@ -415,3 +415,18 @@ def normalize_pages(
             removed_records
         ),
     )
+
+
+def normalize_global_markdown(
+    markdown: str,
+    config: dict[str, Any],
+) -> NormalizationResult:
+    """Normalize one global Markdown stream without page-repetition logic.
+
+    A parser that cannot prove page boundaries must not manufacture them just
+    so header/footer heuristics can run. The ordinary whitespace policy still
+    applies, but repeated page-margin detection is explicitly disabled.
+    """
+    global_config = dict(config)
+    global_config["header_footer_cleanup"] = False
+    return normalize_pages([markdown], global_config)

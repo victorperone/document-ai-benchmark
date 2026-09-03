@@ -79,13 +79,54 @@ def collect_local_markdown_links(markdown: str) -> list[MarkdownLocalLink]:
     return links
 
 
-def _descendant(path: Path, root: Path) -> Path:
+def _relative_to_root(
+    path: Path,
+    root: Path,
+) -> Path:
     candidate = path.resolve()
     resolved_root = root.resolve()
+
     try:
-        candidate.relative_to(resolved_root)
+        return candidate.relative_to(
+            resolved_root
+        )
     except ValueError as exc:
-        raise ValueError(f"asset escapes source root: {path}") from exc
+        # Windows may expose the same directory through
+        # both its long path and an 8.3 short-name alias.
+        # Path.relative_to() compares path components and
+        # therefore cannot detect that equivalence.
+        for ancestor in (candidate, *candidate.parents):
+            try:
+                if ancestor.samefile(
+                    resolved_root
+                ):
+                    return candidate.relative_to(
+                        ancestor
+                    )
+            except OSError:
+                continue
+
+        raise ValueError(
+            f"path escapes source root: {path}"
+        ) from exc
+
+
+def _descendant(
+    path: Path,
+    root: Path,
+) -> Path:
+    candidate = path.resolve()
+
+    try:
+        _relative_to_root(
+            candidate,
+            root,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"asset escapes source root: {path}"
+        ) from exc
+
     return candidate
 
 
@@ -204,7 +245,16 @@ def copy_native_bundle(
         if source in seen or not source.is_file():
             continue
         seen.add(source)
-        target = destination / "artifacts" / source.relative_to(source_root)
+        relative_source = _relative_to_root(
+            source,
+            source_root,
+        )
+
+        target = (
+            destination
+            / "artifacts"
+            / relative_source
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 

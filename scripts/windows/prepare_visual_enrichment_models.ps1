@@ -52,60 +52,127 @@ $TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction Silently
     Select-Object -ExpandProperty FullName)
 
 $Inference = @'
-import os, sys, tempfile, importlib.util
+import base64
+import io
+import os
+import sys
 from pathlib import Path
 
-root = Path(os.environ["BENCHMARK_VISUAL_ROOT"])
-repo_root = Path(os.environ.get("BENCHMARK_REPO_ROOT", "")).resolve()
-if not repo_root.name:
-    # fallback: three levels up from this script's location
-    repo_root = Path(__file__).resolve().parents[2]
+root = Path(os.environ["BENCHMARK_VISUAL_ROOT"]).resolve()
+repo_root = Path(os.environ["BENCHMARK_REPO_ROOT"]).resolve()
 
-# Inject src/ so VisualWorkerClient is importable
-src_path = str(repo_root / "src")
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-from benchmark.visual_worker_client import VisualWorkerClient
-
-# Build a crisp test image with readable text using PIL
 from PIL import Image, ImageDraw, ImageFont
-img = Image.new("RGB", (480, 80), color=(255, 255, 255))
+from src.enrichment.visual_contract import VisualRequest
+from src.enrichment.visual_worker_client import VisualWorkerClient
+
+det_model_dir = (
+    root
+    / "paddleocr"
+    / "PP-OCRv6_medium_det"
+)
+
+rec_model_dir = (
+    root
+    / "paddleocr"
+    / "PP-OCRv6_medium_rec"
+)
+
+smolvlm_dir = (
+    root
+    / "smolvlm"
+    / "HuggingFaceTB--SmolVLM-256M-Instruct"
+)
+
+for label, path in (
+    ("det model", det_model_dir),
+    ("rec model", rec_model_dir),
+    ("SmolVLM", smolvlm_dir),
+):
+    if not path.is_dir():
+        raise RuntimeError(
+            f"{label} directory not found: {path}"
+        )
+
+img = Image.new(
+    "RGB",
+    (480, 80),
+    color=(255, 255, 255),
+)
+
 draw = ImageDraw.Draw(img)
+
 try:
-    font = ImageFont.truetype("arial.ttf", 20)
+    font = ImageFont.truetype(
+        "arial.ttf",
+        20,
+    )
 except Exception:
     font = ImageFont.load_default()
-draw.text((10, 20), "Teste de OCR em portugues", fill=(0, 0, 0), font=font)
 
-import io as _io
-buf = _io.BytesIO()
+draw.text(
+    (10, 20),
+    "Teste de OCR em portugues",
+    fill=(0, 0, 0),
+    font=font,
+)
+
+buf = io.BytesIO()
 img.save(buf, format="PNG")
-image_bytes = buf.getvalue()
 
-ocr_model_dir = str(root / "paddleocr")
-smolvlm_dir = str(root / "smolvlm" / "HuggingFaceTB--SmolVLM-256M-Instruct")
+request = VisualRequest(
+    request_id="visual-model-verify",
+    operation="ocr_and_describe",
+    image_base64=base64.b64encode(
+        buf.getvalue()
+    ).decode("ascii"),
+    language="por",
+    prompt="Descreva a imagem.",
+    page_number=1,
+    region_id="visual-model-verify",
+)
 
-client = VisualWorkerClient(
-    language="pt",
+with VisualWorkerClient(
+    language="por",
     smolvlm_model_path=str(smolvlm_dir),
     python_executable=sys.executable,
     det_model_dir=str(det_model_dir),
     rec_model_dir=str(rec_model_dir),
+) as client:
+    result = client.process(request)
+
+assert result.status == "success", (
+    f"status={result.status!r}; "
+    f"error_detail={result.error_detail!r}"
 )
-try:
-    result = client.ocr_and_describe(image_bytes, prompt="Descreva a imagem.")
-    assert result.get("status") == "success", f"status={result.get('status')!r}"
-    assert not result.get("error_detail"), f"error_detail={result.get('error_detail')!r}"
-    desc = result.get("description") or ""
-    assert len(desc) > 0, "description is empty"
-    ocr_text = (result.get("ocr_text") or "").lower()
-    for token in ("teste", "ocr", "portugu"):
-        assert token in ocr_text, f"OCR missing expected token {token!r}; got: {ocr_text!r}"
-    print("VISUAL_MODEL_INFERENCE=PASS")
-finally:
-    client.close()
+
+assert not result.error_detail, (
+    f"error_detail={result.error_detail!r}"
+)
+
+description = result.description or ""
+
+assert description.strip(), (
+    "description is empty"
+)
+
+ocr_text = (result.ocr_text or "").lower()
+
+for token in (
+    "teste",
+    "ocr",
+    "portugu",
+):
+    assert token in ocr_text, (
+        f"OCR missing expected token "
+        f"{token!r}; got: {ocr_text!r}"
+    )
+
+print("VISUAL_MODEL_INFERENCE=PASS")
 '@
+
 $env:BENCHMARK_REPO_ROOT = $Root
 Invoke-PythonScriptChecked -Python $Python -ScriptText $Inference
 

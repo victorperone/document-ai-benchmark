@@ -632,12 +632,15 @@ def _process_document_images(
 # ---------------------------------------------------------------------------
 
 
-def _text_items_to_text(text_items: list[Any]) -> str:
-    """Reconstruct page text from LiteParse text items in reading order."""
+def _debug_text_items_projection(text_items: list[Any]) -> str:
+    """Diagnostic-only projection of text_items to a string (geometric sort).
+
+    MUST NOT be called during production of any Markdown artifact.
+    Use result.text as the sole certified source of native Markdown.
+    """
     if not text_items:
         return ""
 
-    # Sort by vertical position (y) then horizontal (x)
     items = sorted(
         text_items,
         key=lambda ti: (
@@ -649,15 +652,13 @@ def _text_items_to_text(text_items: list[Any]) -> str:
     lines: list[str] = []
     current_y: float | None = None
     current_line: list[str] = []
-    y_threshold = 5.0  # px tolerance for same line
+    y_threshold = 5.0
 
     for item in items:
         text = str(getattr(item, "text", "") or "").strip()
         if not text:
             continue
-
         y = float(getattr(item, "y", 0))
-
         if current_y is None or abs(y - current_y) > y_threshold:
             if current_line:
                 lines.append(" ".join(current_line))
@@ -678,6 +679,9 @@ def _extract_page_texts(
 ) -> tuple[list[str], set[int]]:
     """Extract per-page text strings from a LiteParse result.
 
+    Uses only the page.text attribute — _debug_text_items_projection is
+    explicitly excluded to keep text_items as a diagnostic-only artifact.
+
     Returns:
         texts: one string per page (empty string when page has no text or is missing)
         mapped_pages: set of page numbers that were actually present in the lib result,
@@ -691,12 +695,7 @@ def _extract_page_texts(
         page_num = int(getattr(page, "page_num", 0) or 0)
         if page_num < 1:
             continue
-
-        text_items = getattr(page, "text_items", None) or []
-        page_text = _text_items_to_text(text_items)
-        if not page_text:
-            # Fallback: use any text attribute on the page object
-            page_text = str(getattr(page, "text", "") or "")
+        page_text = str(getattr(page, "text", "") or "")
         page_map[page_num] = page_text
         mapped_pages.add(page_num)
 

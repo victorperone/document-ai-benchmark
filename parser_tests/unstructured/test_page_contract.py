@@ -31,7 +31,7 @@ class TestPageBoundaries(unittest.TestCase):
     def test_exactly_n_page_texts_returned(self):
         page_count = 3
         elements = [_make_el("NarrativeText", f"text p{i+1}", i + 1) for i in range(3)]
-        texts, native = _elements_to_page_texts(elements, page_count)
+        texts, native, _observed = _elements_to_page_texts(elements, page_count)
         self.assertEqual(len(texts), 3)
 
     def test_elements_routed_to_correct_page(self):
@@ -39,27 +39,27 @@ class TestPageBoundaries(unittest.TestCase):
             _make_el("NarrativeText", "page one", 1),
             _make_el("NarrativeText", "page two", 2),
         ]
-        texts, native = _elements_to_page_texts(elements, 2)
+        texts, native, _observed = _elements_to_page_texts(elements, 2)
         self.assertIn("page one", texts[0])
         self.assertIn("page two", texts[1])
 
     def test_page_below_range_goes_to_no_page_bucket(self):
         elements = [_make_el("NarrativeText", "orphan", 0)]
-        texts, native = _elements_to_page_texts(elements, 2)
+        texts, native, _observed = _elements_to_page_texts(elements, 2)
         self.assertEqual(texts[0], "")
         self.assertEqual(texts[1], "")
         self.assertIn(0, native)  # stored in key-0 diagnostic bucket
 
     def test_page_above_range_goes_to_no_page_bucket(self):
         elements = [_make_el("NarrativeText", "orphan", 99)]
-        texts, native = _elements_to_page_texts(elements, 2)
+        texts, native, _observed = _elements_to_page_texts(elements, 2)
         self.assertEqual(texts[0], "")
         self.assertEqual(texts[1], "")
         self.assertIn(0, native)
 
     def test_none_page_number_goes_to_no_page_bucket(self):
         elements = [_make_el("NarrativeText", "no page", None)]
-        texts, native = _elements_to_page_texts(elements, 2)
+        texts, native, _observed = _elements_to_page_texts(elements, 2)
         self.assertIn(0, native)
         self.assertEqual(texts[0], "")
 
@@ -69,13 +69,13 @@ class TestPageBoundaries(unittest.TestCase):
             _make_el("PageBreak", "", 1),
             _make_el("NarrativeText", "after", 1),
         ]
-        texts, native = _elements_to_page_texts(elements, 1)
+        texts, native, _observed = _elements_to_page_texts(elements, 1)
         self.assertNotIn("PageBreak", texts[0])
         self.assertIn("before", texts[0])
         self.assertIn("after", texts[0])
 
     def test_empty_page_is_empty_string(self):
-        texts, native = _elements_to_page_texts([], 3)
+        texts, native, _observed = _elements_to_page_texts([], 3)
         for t in texts:
             self.assertEqual(t, "")
 
@@ -85,7 +85,7 @@ class TestPageBoundaries(unittest.TestCase):
             _make_el("NarrativeText", "second", 1),
             _make_el("NarrativeText", "third", 1),
         ]
-        texts, native = _elements_to_page_texts(elements, 1)
+        texts, native, _observed = _elements_to_page_texts(elements, 1)
         idx_first = texts[0].index("first")
         idx_second = texts[0].index("second")
         idx_third = texts[0].index("third")
@@ -97,7 +97,7 @@ class TestPageBoundaries(unittest.TestCase):
             _make_el("NarrativeText", "a", 1),
             _make_el("NarrativeText", "b", 2),
         ]
-        texts, native = _elements_to_page_texts(elements, 2)
+        texts, native, _observed = _elements_to_page_texts(elements, 2)
         self.assertIn(1, native)
         self.assertIn(2, native)
         self.assertEqual(len(native[1]), 1)
@@ -107,7 +107,7 @@ class TestPageBoundaries(unittest.TestCase):
         """Output must come from elements, not from character-count splitting."""
         long_text = "x" * 1000
         elements = [_make_el("NarrativeText", long_text, 1)]
-        texts, native = _elements_to_page_texts(elements, 3)
+        texts, native, _observed = _elements_to_page_texts(elements, 3)
         # All text on page 1; pages 2 and 3 are empty
         self.assertIn(long_text, texts[0])
         self.assertEqual(texts[1], "")

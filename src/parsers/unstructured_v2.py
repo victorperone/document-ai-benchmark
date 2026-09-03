@@ -194,16 +194,19 @@ def _render_element(element: Any, *, image_description: bool = False) -> str:
 def _elements_to_page_texts(
     elements: list[Any],
     page_count: int,
-) -> tuple[list[str], dict[int, list[dict[str, Any]]]]:
+) -> tuple[list[str], dict[int, list[dict[str, Any]]], set[int]]:
     """Group elements by page and render each page's Markdown text.
 
-    Returns (page_texts, native_pages) where native_pages maps page_num → list of element records.
-    The last entry in native_pages (key 0) holds elements with no valid page assignment.
+    Returns (page_texts, native_pages, observed_pages) where:
+    - native_pages maps page_num → list of element records; key 0 holds unassigned elements
+    - observed_pages is the set of page numbers that had at least one useful (non-PageBreak) element
     """
     page_buckets: dict[int, list[Any]] = {i + 1: [] for i in range(page_count)}
     no_page_elements: list[Any] = []
 
     for el in elements:
+        if type(el).__name__ == "PageBreak":
+            continue
         meta = getattr(el, "metadata", None)
         page_num = getattr(meta, "page_number", None) if meta else None
         if isinstance(page_num, int) and 1 <= page_num <= page_count:
@@ -213,10 +216,9 @@ def _elements_to_page_texts(
 
     page_texts: list[str] = []
     native_pages: dict[int, list[dict[str, Any]]] = {
-        # key 0 = elements with no valid page_number (diagnostic only, not in page_texts)
-        0: [_element_to_native(el) for el in no_page_elements
-            if type(el).__name__ != "PageBreak"],
+        0: [_element_to_native(el) for el in no_page_elements],
     }
+    observed_pages: set[int] = set()
 
     for page_num in range(1, page_count + 1):
         page_els = page_buckets[page_num]
@@ -224,8 +226,7 @@ def _elements_to_page_texts(
         native_records: list[dict[str, Any]] = []
 
         for el in page_els:
-            if type(el).__name__ == "PageBreak":
-                continue
+            observed_pages.add(page_num)
             rendered = _render_element(el)
             if rendered:
                 parts.append(rendered)
@@ -235,7 +236,71 @@ def _elements_to_page_texts(
         page_texts.append(text)
         native_pages[page_num] = native_records
 
-    return page_texts, native_pages
+    return page_texts, native_pages, observed_pages
+
+
+def _check_missing_pages(
+    observed_pages: set[int],
+    page_count: int,
+    inventory: dict[str, Any],
+    profile_name: str,
+) -> tuple[set[int], set[int]]:
+    """Classify pages absent from parser output.
+
+    Returns (legitimately_empty, suspect_missing).
+    Raises BenchmarkConfigurationError for full_cpu_local profiles when
+    a missing page has evidence of content or an incomplete measurement.
+    """
+    all_pages = set(range(1, page_count + 1))
+    missing = all_pages - observed_pages
+    if not missing:
+        return set(), set()
+
+    per_page = inventory.get("per_page", {})
+    legitimately_empty: set[int] = set()
+    suspect_missing: set[int] = set()
+
+    for page_num in missing:
+        page_inv = per_page.get(str(page_num)) or per_page.get(page_num)
+        if page_inv is None:
+            # Inventory has no entry for this page — measurement is incomplete
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output and source_inventory "
+                    "has no per-page entry (incomplete measurement). "
+                    f"Profile '{profile_name}' requires complete page coverage."
+                )
+            suspect_missing.add(page_num)
+            continue
+
+        measurement_complete = bool(page_inv.get("measurement_complete", True))
+        text_chars = int(page_inv.get("text_chars", 0) or 0)
+        image_count = int(page_inv.get("image_count", 0) or 0)
+        drawing_count = int(page_inv.get("drawing_count", 0) or 0)
+        has_content = text_chars > 0 or image_count > 0 or drawing_count > 0
+
+        if not measurement_complete:
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output and its source_inventory "
+                    "measurement is incomplete. "
+                    f"Profile '{profile_name}' requires complete page coverage."
+                )
+            suspect_missing.add(page_num)
+        elif has_content:
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output but source_inventory "
+                    f"shows content (text_chars={text_chars}, images={image_count}, "
+                    f"drawings={drawing_count}). "
+                    f"Profile '{profile_name}' requires all content pages to be processed."
+                )
+            suspect_missing.add(page_num)
+        else:
+            # measurement_complete AND no content → legitimately empty
+            legitimately_empty.add(page_num)
+
+    return legitimately_empty, suspect_missing
 
 
 def _element_to_native(element: Any) -> dict[str, Any]:
@@ -1298,7 +1363,10 @@ def main() -> None:
             elements = partition_pdf(**partition_kwargs)
             extraction_seconds = perf_counter() - extraction_start
 
-            page_texts, native_pages = _elements_to_page_texts(elements, page_count)
+            page_texts, native_pages, observed_pages = _elements_to_page_texts(elements, page_count)
+            _legitimately_empty, _suspect_missing = _check_missing_pages(
+                observed_pages, page_count, inventory, args.profile
+            )
             element_counts = _count_elements(elements)
             # U3: per-page counts (fixes prior bug that put all counts on page 1)
             per_page_counts = _count_elements_by_page(elements, page_count)
@@ -1359,7 +1427,11 @@ def main() -> None:
 
     pipeline_seconds = perf_counter() - pipeline_started
 
-    mapping_complete = not unassigned_elements and not unassigned_derived
+    mapping_complete = (
+        not unassigned_elements
+        and not unassigned_derived
+        and not _suspect_missing
+    )
     native_markdown = join_page_texts(page_texts)
     if unassigned_markdown:
         native_markdown = native_markdown.rstrip() + "\n\n" + unassigned_markdown + "\n"

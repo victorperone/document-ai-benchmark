@@ -445,7 +445,18 @@ def validate_profile(
         )
 
 
-def build_pipeline_kwargs(
+_PREDICT_ONLY_KWARGS = frozenset({
+    "use_wired_table_cells_trans_to_html",
+    "use_wireless_table_cells_trans_to_html",
+    "use_table_orientation_classify",
+    "use_ocr_results_with_table_cells",
+    "use_e2e_wired_table_rec_model",
+    "use_e2e_wireless_table_rec_model",
+    "markdown_ignore_labels",
+})
+
+
+def build_pipeline_init_kwargs(
     model_paths: dict[str, Path],
     profile: dict[str, Any],
 ) -> dict[str, Any]:
@@ -550,21 +561,12 @@ def build_pipeline_kwargs(
     if profile.get("format_block_content") is True:
         kwargs["format_block_content"] = True
 
-    # Detection/recognition thresholds (P3)
-    # Values absent in profile → PPStructureV3 uses its own defaults.
+    # Detection/recognition thresholds passed to constructor (P3).
+    # The 7 predict-only kwargs are intentionally excluded here — see build_predict_kwargs.
     _threshold_map = {
         "layout_threshold": "layout_threshold",
         "text_det_thresh": "text_det_thresh",
         "text_rec_score_thresh": "text_rec_score_thresh",
-        "use_wired_table_cells_trans_to_html": (
-            "use_wired_table_cells_trans_to_html"
-        ),
-        "use_e2e_wired_table_rec_model": (
-            "use_e2e_wired_table_rec_model"
-        ),
-        "use_e2e_wireless_table_rec_model": (
-            "use_e2e_wireless_table_rec_model"
-        ),
     }
     for profile_key, kwarg_name in _threshold_map.items():
         if profile.get(profile_key) is not None:
@@ -611,12 +613,65 @@ def build_pipeline_kwargs(
     return kwargs
 
 
+def build_pipeline_kwargs(
+    model_paths: dict[str, Path],
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """Alias for build_pipeline_init_kwargs (backward compatibility)."""
+    return build_pipeline_init_kwargs(model_paths, profile)
+
+
+_PREDICT_CERTIFIED_DEFAULTS: dict[str, Any] = {
+    "use_wired_table_cells_trans_to_html": False,
+    "use_wireless_table_cells_trans_to_html": False,
+    "use_table_orientation_classify": True,
+    "use_ocr_results_with_table_cells": True,
+    "use_e2e_wired_table_rec_model": False,
+    "use_e2e_wireless_table_rec_model": True,
+}
+
+
+def build_predict_kwargs(
+    input_path: Path,
+    profile: dict[str, Any],
+    pipeline: Any,
+) -> dict[str, Any]:
+    """Build kwargs for PPStructureV3.predict_iter — disjoint from init kwargs."""
+    kwargs: dict[str, Any] = {
+        "input": str(input_path),
+        "use_doc_orientation_classify": profile["document_orientation_classification"],
+        "use_doc_unwarping": profile["document_unwarping"],
+        "use_textline_orientation": profile["textline_orientation"],
+        "use_seal_recognition": profile["seal_recognition"],
+        "use_table_recognition": profile["table_recognition"],
+        "use_formula_recognition": profile["formula_recognition"],
+        "use_chart_recognition": profile["chart_recognition"],
+        "use_region_detection": profile["region_detection"],
+    }
+    # Add certified predict-only defaults for full_cpu_local profile.
+    for key, default in _PREDICT_CERTIFIED_DEFAULTS.items():
+        profile_val = profile.get(key)
+        kwargs[key] = profile_val if profile_val is not None else default
+
+    # markdown_ignore_labels requires signature detection.
+    ignore_labels = profile.get("markdown_ignore_labels")
+    if ignore_labels is not None:
+        try:
+            predict_sig = inspect.signature(pipeline.predict_iter)
+            if "markdown_ignore_labels" in predict_sig.parameters:
+                kwargs["markdown_ignore_labels"] = ignore_labels
+        except Exception:
+            pass
+
+    return kwargs
+
+
 def build_pipeline(
     model_paths: dict[str, Path],
     profile: dict[str, Any],
 ) -> PPStructureV3:
     return PPStructureV3(
-        **build_pipeline_kwargs(
+        **build_pipeline_init_kwargs(
             model_paths,
             profile,
         )
@@ -961,7 +1016,6 @@ def preflight_profile(
     # Profile configuration
     # --------------------------------------------------
 
-    pipeline: Any | None = None
     try:
         profile = get_profile(
             PARSER_NAME,
@@ -1083,7 +1137,7 @@ def preflight_profile(
     # --------------------------------------------------
 
     try:
-        pipeline_kwargs = build_pipeline_kwargs(
+        pipeline_kwargs = build_pipeline_init_kwargs(
             candidate_paths,
             profile,
         )
@@ -1111,6 +1165,27 @@ def preflight_profile(
                     "PPStructureV3 API",
                     "pass",
                     f"{len(pipeline_kwargs)} argument(s) validated",
+                )
+            )
+
+        # Verify init and predict-only kwargs sets are disjoint.
+        predict_only_in_init = sorted(
+            key for key in pipeline_kwargs if key in _PREDICT_ONLY_KWARGS
+        )
+        if predict_only_in_init:
+            checks.append(
+                make_check(
+                    "PPStructureV3 init/predict kwargs disjoint",
+                    "fail",
+                    "Predict-only kwargs found in constructor args: "
+                    + ", ".join(predict_only_in_init),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "PPStructureV3 init/predict kwargs disjoint",
+                    "pass",
                 )
             )
 
@@ -1314,6 +1389,8 @@ def main() -> None:
     initialization_seconds = None
     extraction_seconds = None
 
+    # Declared before try so finally can safely test truthiness.
+    pipeline = None
     try:
         with parser_output_context(
             run_log_path=paths.run_log,
@@ -1340,97 +1417,98 @@ def main() -> None:
 
             extraction_started = perf_counter()
 
-            predict_kwargs: dict[str, Any] = {
-                "input": str(input_path),
-                "use_doc_orientation_classify": profile[
-                    "document_orientation_classification"
-                ],
-                "use_doc_unwarping": profile[
-                    "document_unwarping"
-                ],
-                "use_textline_orientation": profile[
-                    "textline_orientation"
-                ],
-                "use_seal_recognition": profile[
-                    "seal_recognition"
-                ],
-                "use_table_recognition": profile[
-                    "table_recognition"
-                ],
-                "use_formula_recognition": profile[
-                    "formula_recognition"
-                ],
-                "use_chart_recognition": profile[
-                    "chart_recognition"
-                ],
-                "use_region_detection": profile[
-                    "region_detection"
-                ],
-            }
-
-            _ignore_labels = profile.get(
-                "markdown_ignore_labels"
-            )
-            if _ignore_labels is not None:
-                _predict_sig = inspect.signature(
-                    pipeline.predict_iter
-                )
-                if "markdown_ignore_labels" in _predict_sig.parameters:
-                    predict_kwargs[
-                        "markdown_ignore_labels"
-                    ] = _ignore_labels
-
-            predict_iter = getattr(pipeline, "predict_iter", None)
-            if not callable(predict_iter):
+            predict_iter_fn = getattr(pipeline, "predict_iter", None)
+            if not callable(predict_iter_fn):
                 raise RuntimeError("PPStructureV3.predict_iter is unavailable")
-            results = list(predict_iter(**predict_kwargs))
+
+            predict_kwargs = build_predict_kwargs(input_path, profile, pipeline)
+
+            # Process pages one at a time — never materialise the full iterator.
+            page_texts: list[str] = []
+            parser_page_elements: list[dict[str, Any]] = []
+            parser_native_pages: list[dict[str, Any]] = []
+            markdown_pages_for_concat: list[Any] = []
+            seen_indexes: set[int] = set()
+
+            for result in predict_iter_fn(**predict_kwargs):
+                page_idx = result["page_index"]
+                if not isinstance(page_idx, int):
+                    raise TypeError(
+                        f"PaddleOCR page_index must be int, got {page_idx!r}."
+                    )
+                if page_idx < 0 or page_idx >= page_count:
+                    raise RuntimeError(
+                        f"PaddleOCR page_index {page_idx} out of range "
+                        f"[0, {page_count - 1}]."
+                    )
+                if page_idx in seen_indexes:
+                    raise RuntimeError(
+                        f"Duplicate PaddleOCR page_index: {page_idx}."
+                    )
+                seen_indexes.add(page_idx)
+
+                # Build per-page contract immediately and release heavy refs.
+                (
+                    p_texts,
+                    p_elements,
+                    p_native,
+                ) = build_paddleocr_page_contract([result])
+                page_texts.extend(p_texts)
+                parser_page_elements.extend(p_elements)
+                parser_native_pages.extend(p_native)
+                markdown_pages_for_concat.append(result.markdown)
 
             extraction_seconds = (
                 perf_counter()
                 - extraction_started
             )
 
-        if not results:
+        if not page_texts:
             raise RuntimeError(
                 "PPStructureV3 returned no pages."
             )
 
-        results.sort(
-            key=lambda result: result[
-                "page_index"
-            ]
-        )
-
-        page_indexes = [
-            result["page_index"]
-            for result in results
-        ]
-
-        expected_indexes = list(
-            range(page_count)
-        )
-
-        if page_indexes != expected_indexes:
+        received_indexes = sorted(seen_indexes)
+        expected_indexes = list(range(page_count))
+        if received_indexes != expected_indexes:
             raise RuntimeError(
                 "Unexpected PaddleOCR page indexes. "
                 f"Expected {expected_indexes}, "
-                f"got {page_indexes}."
+                f"got {received_indexes}."
             )
 
-        (
-            page_texts,
-            parser_page_elements,
-            parser_native_pages,
-        ) = build_paddleocr_page_contract(
-            results
-        )
+        # Official aggregation — called exactly once after full iteration.
+        concatenate = getattr(pipeline, "concatenate_markdown_pages", None)
+        if not callable(concatenate):
+            raise RuntimeError("PPStructureV3.concatenate_markdown_pages is unavailable")
+        combined = concatenate(markdown_pages_for_concat)
+        if isinstance(combined, str):
+            official_markdown = combined
+        else:
+            official_markdown = None
+            for key in ("markdown_texts", "markdown", "content", "text"):
+                value = _result_value(combined, key, None)
+                if isinstance(value, str):
+                    official_markdown = value
+                    break
+            if official_markdown is None:
+                raise TypeError(
+                    "PPStructureV3 official Markdown aggregator returned "
+                    f"{type(combined).__name__}, expected str or mapping"
+                )
 
-        official_markdown = aggregate_official_markdown(pipeline, results)
         native_bundle_manifest: dict[str, Any] | None = None
         native_markdown = official_markdown
         if args.artifact_policy.includes("native"):
+            # persist_official_markdown_bundle needs the markdown_images from results;
+            # since we cleared result refs, reconstruct from markdown_pages_for_concat.
+            # The function only needs result.markdown — wrap the collected pages.
+            class _MarkdownOnly:
+                def __init__(self, md: Any) -> None:
+                    self.markdown = md
+            wrapped = [_MarkdownOnly(md) for md in markdown_pages_for_concat]
             native_markdown, native_bundle_manifest = persist_official_markdown_bundle(
-                results=results,
+                results=wrapped,
                 official_markdown=official_markdown,
                 destination=paths.native_dir,
                 parser_name=PARSER_NAME,
@@ -1477,14 +1555,13 @@ def main() -> None:
             ),
         )
 
-    except Exception:
-        monitor.stop()
-        raise
     finally:
+        # Close only if the constructor succeeded; preserves the original exception
+        # when pipeline is None (constructor failure).
         if pipeline is not None:
-            close_pipeline = getattr(pipeline, "close", None)
-            if callable(close_pipeline):
-                close_pipeline()
+            close_fn = getattr(pipeline, "close", None)
+            if callable(close_fn):
+                close_fn()
 
     resources = monitor.stop()
 

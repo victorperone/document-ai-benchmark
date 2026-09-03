@@ -58,7 +58,7 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         doc = _DocumentStub([
             _TextItemStub("paragraph text", [1]),
         ])
-        enriched, derived = _build_picture_description_blocks(doc, 2, ["page1", "page2"])
+        enriched, derived = _build_picture_description_blocks(doc, 2, ["page1", "page2"], effective_prompt="test prompt")
         self.assertIsNone(enriched)
         self.assertEqual(derived, [[], []])
 
@@ -66,7 +66,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         doc = _DocumentStub([
             _PictureItemStub(None, [1]),
         ])
-        enriched, derived = _build_picture_description_blocks(doc, 1, ["page1"])
+        enriched, derived = _build_picture_description_blocks(
+            doc, 1, ["page1"], effective_prompt="test prompt"
+        )
         self.assertIsNone(enriched)
         self.assertEqual(derived, [[]])
 
@@ -76,7 +78,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
             _PictureItemStub(desc, [1]),
         ])
         page_texts = ["some native text"]
-        enriched, derived = _build_picture_description_blocks(doc, 1, page_texts)
+        enriched, derived = _build_picture_description_blocks(
+            doc, 1, page_texts, effective_prompt="Describe this image."
+        )
         self.assertIsNotNone(enriched)
         self.assertIn("derived:start", enriched[0])
         self.assertIn("A bar chart showing growth.", enriched[0])
@@ -89,7 +93,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         ])
         original = ["native text"]
         page_texts = list(original)
-        enriched, _ = _build_picture_description_blocks(doc, 1, page_texts)
+        enriched, _ = _build_picture_description_blocks(
+            doc, 1, page_texts, effective_prompt="Describe this image."
+        )
         # source page_texts (original) must not contain derived markers
         self.assertNotIn("derived:start", original[0])
         # enriched must contain them
@@ -100,7 +106,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         doc = _DocumentStub([
             _PictureItemStub(desc, [2]),
         ])
-        _, derived = _build_picture_description_blocks(doc, 3, ["", "", ""])
+        _, derived = _build_picture_description_blocks(
+            doc, 3, ["", "", ""], effective_prompt="Describe."
+        )
         self.assertEqual(len(derived[1]), 1)
         region_id = derived[1][0]["region_id"]
         self.assertTrue(
@@ -115,7 +123,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
             _PictureItemStub(desc1, [1]),
             _PictureItemStub(desc2, [1]),
         ])
-        _, derived = _build_picture_description_blocks(doc, 1, ["text"])
+        _, derived = _build_picture_description_blocks(
+            doc, 1, ["text"], effective_prompt="Describe."
+        )
         self.assertEqual(len(derived[0]), 2)
         self.assertEqual(derived[0][0]["region_id"], "p1-picture-0")
         self.assertEqual(derived[0][1]["region_id"], "p1-picture-1")
@@ -127,7 +137,9 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
             _PictureItemStub(desc1, [1]),
             _PictureItemStub(desc2, [2]),
         ])
-        enriched, derived = _build_picture_description_blocks(doc, 2, ["p1", "p2"])
+        enriched, derived = _build_picture_description_blocks(
+            doc, 2, ["p1", "p2"], effective_prompt="Describe."
+        )
         self.assertIsNotNone(enriched)
         self.assertIn("page one image", enriched[0])
         self.assertIn("page two image", enriched[1])
@@ -139,19 +151,30 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         doc = _DocumentStub([
             _PictureItemStub(desc, [1]),
         ])
-        _, derived = _build_picture_description_blocks(doc, 1, ["text"])
+        prompt = "Describe this image in detail."
+        _, derived = _build_picture_description_blocks(
+            doc, 1, ["text"], effective_prompt=prompt
+        )
         entry = derived[0][0]
-        self.assertEqual(entry["type"], "visual_description")
+        # Canonical type is picture_description (not visual_description)
+        self.assertEqual(entry["type"], "picture_description")
         self.assertEqual(entry["page_number"], 1)
         self.assertEqual(entry["storage_policy"], "inline")
         self.assertIn("engine", entry)
         self.assertIn("model", entry)
+        self.assertIn("prompt_sha256", entry)
+        # prompt_sha256 must be the SHA-256 of the effective prompt
+        import hashlib
+        expected_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        self.assertEqual(entry["prompt_sha256"], expected_sha)
 
     def test_picture_without_provenance_skipped(self):
         desc = _DescriptionStub("orphan")
         item = _PictureItemStub(desc, [])  # no prov
         doc = _DocumentStub([item])
-        enriched, derived = _build_picture_description_blocks(doc, 1, ["text"])
+        enriched, derived = _build_picture_description_blocks(
+            doc, 1, ["text"], effective_prompt="Describe."
+        )
         self.assertIsNone(enriched)
         self.assertEqual(derived, [[]])
 
@@ -159,9 +182,18 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
         desc = _DescriptionStub("chart")
         doc = _DocumentStub([_PictureItemStub(desc, [1])])
         page_texts = ["## Heading\n\nSome text."]
-        enriched, _ = _build_picture_description_blocks(doc, 1, page_texts)
+        enriched, _ = _build_picture_description_blocks(
+            doc, 1, page_texts, effective_prompt="Describe."
+        )
         self.assertTrue(enriched[0].startswith("## Heading"))
         self.assertIn("chart", enriched[0])
+
+    def test_empty_effective_prompt_raises(self):
+        """Without a prompt, provenance would be incomplete — must fail."""
+        desc = _DescriptionStub("some image")
+        doc = _DocumentStub([_PictureItemStub(desc, [1])])
+        with self.assertRaises(RuntimeError):
+            _build_picture_description_blocks(doc, 1, ["text"], effective_prompt="")
 
 
 class TestPageExportContract(unittest.TestCase):

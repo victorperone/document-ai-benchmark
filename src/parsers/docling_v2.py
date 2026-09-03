@@ -985,6 +985,8 @@ def _build_picture_description_blocks(
     document: Any,
     page_count: int,
     page_texts: list[str],
+    *,
+    effective_prompt: str,
 ) -> tuple[list[str] | None, list[list[dict[str, Any]]]]:
     """Build enriched_page_markdown and derived_content_by_page from picture descriptions.
 
@@ -994,6 +996,13 @@ def _build_picture_description_blocks(
     derived_content_by_page: list[list[dict[str, Any]]] = [
         [] for _ in range(page_count)
     ]
+
+    if not effective_prompt:
+        raise RuntimeError(
+            "_build_picture_description_blocks requires effective_prompt; "
+            "a description without a prompt would produce incomplete provenance."
+        )
+    prompt_sha256 = hashlib.sha256(effective_prompt.encode("utf-8")).hexdigest()
 
     picture_index_by_page: list[int] = [0] * page_count
     has_derived = False
@@ -1020,6 +1029,13 @@ def _build_picture_description_blocks(
         idx = picture_index_by_page[page_number - 1]
         picture_index_by_page[page_number - 1] += 1
         region_id = f"p{page_number}-picture-{idx}"
+
+        # Resolve bbox from the first provenance entry on the canonical page.
+        bbox_dict: dict[str, Any] | None = None
+        for prov_entry in provenance:
+            if getattr(prov_entry, "page_no", None) == page_number:
+                bbox_dict = _bbox_to_dict(getattr(prov_entry, "bbox", None))
+                break
 
         # --- Description ---
         description = getattr(meta, "description", None) if meta is not None else None
@@ -1050,8 +1066,10 @@ def _build_picture_description_blocks(
                     "region_id": region_id,
                     "page_number": page_number,
                     "self_ref": self_ref,
+                    "bbox": bbox_dict,
                     "engine": engine_name,
                     "model": model_name,
+                    "prompt_sha256": prompt_sha256,
                     "storage_policy": "inline",
                     "text": desc_text.strip(),
                 })
@@ -1127,6 +1145,8 @@ def _build_picture_description_blocks(
 def build_docling_page_contract(
     document: Any,
     page_count: int,
+    *,
+    effective_prompt: str = "",
 ) -> tuple[
     list[str],
     list[dict[str, Any]],
@@ -1270,6 +1290,7 @@ def build_docling_page_contract(
         document,
         page_count,
         enriched_page_texts,
+        effective_prompt=effective_prompt,
     )
 
     return (
@@ -2643,6 +2664,11 @@ def main() -> None:
     except Exception as exc:
         raise RuntimeError(f"Docling global Markdown export failed: {exc}") from exc
 
+    _effective_prompt = (
+        str(profile.get("picture_description_prompt", "")).strip()
+        if profile.get("picture_description")
+        else ""
+    )
     (
         page_texts,
         parser_page_elements,
@@ -2654,6 +2680,7 @@ def main() -> None:
     ) = build_docling_page_contract(
         document,
         page_count,
+        effective_prompt=_effective_prompt,
     )
 
     artifact_input = ParserArtifactInput(
@@ -2987,7 +3014,7 @@ def main() -> None:
                 "requested_page_numbers": None,
                 "failed_page_numbers": None,
                 "tracking_note": (
-                    "Docling 2.119.0 does not expose "
+                    f"Docling {parser_version or 'unknown'} does not expose "
                     "a stable per-page OCR callback "
                     "equivalent to the PyMuPDF adapter. "
                     "OCR page counts are therefore not "

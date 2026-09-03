@@ -160,10 +160,27 @@ def validate_post_execution(
                         if metrics else {}
                     )
                     # §3.1: inventory is authoritative; fall back to metrics, then False
-                    if inventory_content_expected is not None:
-                        expected = inventory_content_expected
+                    if artifact in {
+                        "raw.md",
+                        "document.md",
+                        "document.enriched.md",
+                    }:
+                        if inventory_content_expected is not None:
+                            expected = inventory_content_expected
+                        else:
+                            expected = bool(
+                                content_entry.get(
+                                    "content_expected",
+                                    False,
+                                )
+                            )
                     else:
-                        expected = bool(content_entry.get("content_expected", False))
+                        expected = bool(
+                            content_entry.get(
+                                "content_expected",
+                                False,
+                            )
+                        )
                     if expected and not _has_meaningful_text(content):
                         checks.append(make_check(
                             check_name,

@@ -283,6 +283,11 @@ def analyze_pdf_source(
 
         "pages": page_count,
 
+        "measurement_complete": (
+            image_measurement_complete
+            and drawing_measurement_complete
+        ),
+
         "native_text": {
             "characters": (
                 total_native_characters

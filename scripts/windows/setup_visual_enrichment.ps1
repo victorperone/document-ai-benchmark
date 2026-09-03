@@ -87,9 +87,9 @@ if failures:
 print("OK: visual enrichment smoke test passed")
 '@
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
-    '-c', $Smoke
-)
+Invoke-PythonScriptChecked `
+    -Python "$VenvPath\Scripts\python.exe" `
+    -ScriptText $Smoke
 
 Write-Host "[visual-enrichment] Setup complete."
 Write-Host ""

@@ -31,6 +31,7 @@ def _load_paddleocr(
     kwargs: dict[str, Any] = {
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
+        "use_textline_orientation": False,
     }
     if det_model_dir:
         kwargs["text_detection_model_dir"] = det_model_dir

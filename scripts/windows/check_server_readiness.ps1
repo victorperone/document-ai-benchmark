@@ -127,18 +127,55 @@ try {
             -Arguments $SmokeArgs -FunctionalTests | Out-Null
     }
 
+    # Snapshot temp dir before deep smoke runs, to detect residues afterwards.
+    $TempDir = [System.IO.Path]::GetTempPath()
+    $TempResiduePatterns = @(
+        '^document-ai-',
+        '^document-ai-visual-',
+        '^unstructured_images_',
+        '^mineru-verify-',
+        '^visual_crops'
+    )
+    $TempBefore = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty Name)
+
+    # Derive PARSERS_READY exclusively from DEEP_SMOKE_PARSER=PASS lines in the deep smoke log.
+    # deep_smoke gate log is written by Invoke-ReadinessGate to $ReportRoot\deep_smoke.log
+    $Ready = New-Object System.Collections.Generic.List[string]
+    $DeepSmokeLog = Join-Path $ReportRoot 'deep_smoke.log'
+    if (Test-Path $DeepSmokeLog -PathType Leaf) {
+        $LogLines = Get-Content -LiteralPath $DeepSmokeLog -Encoding utf8
+        # Accept exit code zero from the gate (Invoke-ReadinessGate writes GATE_deep_smoke=PASS)
+        $GatePassed = $LogLines | Where-Object { $_ -match '^GATE_deep_smoke=PASS' }
+        if ($GatePassed) {
+            foreach ($Line in $LogLines) {
+                if ([string]$Line -match '^DEEP_SMOKE_PARSER=PASS\s+parser=(\S+)') {
+                    $ParserName = $Matches[1].ToLower()
+                    if ($Parsers -contains $ParserName -and -not $Ready.Contains($ParserName)) {
+                        $Ready.Add($ParserName)
+                    }
+                }
+            }
+        }
+    }
+
+    # Temp file residue check — run after all gates complete
+    $TempAfter = @(Get-ChildItem -LiteralPath $TempDir -Force -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty Name)
+    $NewTempItems = $TempAfter | Where-Object { $TempBefore -notcontains $_ }
+    $TempResidues = @($NewTempItems | Where-Object {
+        $name = $_
+        $TempResiduePatterns | Where-Object { $name -match $_ }
+    })
+    if ($TempResidues.Count -gt 0) {
+        $Failures.Add("hygiene: $($TempResidues.Count) temporary item(s) remained in TEMP: $($TempResidues -join ', ')")
+        $TempResidues | Out-File (Join-Path $ReportRoot 'hygiene_temp_residues.log') -Encoding utf8
+    }
+
     $ResolvedOutput = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
         $OutputRoot
     } else { Join-Path $RepoRoot $OutputRoot }
     $HostOutput = Join-Path $ResolvedOutput 'host'
-    $Ready = New-Object System.Collections.Generic.List[string]
-    foreach ($Parser in $Parsers) {
-        $Profile = if ($Parser -eq 'pymupdf') { 'full_cpu_local_visual' } `
-            elseif ($Parser -eq 'xberg') { 'full_cpu_layout' } else { 'full_cpu_local' }
-        $Metrics = Join-Path $HostOutput "$Parser\deep_smoke\$Profile\metrics.json"
-        if (Test-Path $Metrics -PathType Leaf) { $Ready.Add($Parser) }
-    }
-
     if (Test-Path $HostOutput -PathType Container) {
         $Debris = @(Get-ChildItem -LiteralPath $HostOutput -Recurse -Force -File |
             Where-Object { $_.Name -match '\.(tmp|download|part)$' -or $_.FullName -match 'visual[_-]crops' })

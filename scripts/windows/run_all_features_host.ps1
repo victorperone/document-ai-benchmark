@@ -8,7 +8,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$InputDir = "data",
+    [Alias("InputDirectory")]
+    [string]$InputDir = "data\raw\batch",
     [string]$OutputRoot = "outputs",
     [switch]$Resume,
     [switch]$DryRun,

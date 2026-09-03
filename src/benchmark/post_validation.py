@@ -120,7 +120,7 @@ def validate_post_execution(
                 continue
             entry = cv.get(md_artifact, {})
             metrics_ce = entry.get("content_expected")
-            if metrics_ce is not None and not bool(metrics_ce):
+            if not bool(metrics_ce):
                 checks.append(make_check(
                     f"inventory vs metrics content_expected ({md_artifact})",
                     "fail",
@@ -299,7 +299,7 @@ def validate_resume_candidate(
                     continue
                 entry = cv_block.get(md_artifact, {})
                 metrics_ce = entry.get("content_expected")
-                if metrics_ce is not None and not bool(metrics_ce):
+                if not bool(metrics_ce):
                     checks.append(make_check(
                         f"inventory vs metrics content_expected ({md_artifact})",
                         "fail",

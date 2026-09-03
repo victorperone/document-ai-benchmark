@@ -1295,7 +1295,7 @@ def build_docling_page_contract(
         )
     else:
         enriched_page_markdown = list(page_texts)
-        derived_content_by_page = {}
+        derived_content_by_page = []
 
     return (
         page_texts,

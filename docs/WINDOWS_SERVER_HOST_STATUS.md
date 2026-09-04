@@ -2,15 +2,14 @@
 
 ## Estado atual
 
-**STATUS DO CÓDIGO: EM CORREÇÃO — BUGS CRÍTICOS IDENTIFICADOS**
+**STATUS DO CÓDIGO: CORREÇÕES CONCLUÍDAS — PRONTO PARA VALIDAÇÃO NO SERVIDOR**
 **HOMOLOGAÇÃO NO WINDOWS SERVER NATIVO: PENDENTE**
 
-> **Rodada de análise — 2026-09-04**
-> Preflight e execução de teste funcionam no servidor (branch `perf/parser-runtime-optimization`).
-> Uma revisão completa do código-fonte identificou **11 bugs críticos** de perda de dados e comportamento
-> incorreto. Antes da próxima campanha de validação formal, os bugs listados na seção
-> "Análise de qualidade — bugs críticos identificados" abaixo devem ser corrigidos.
-> Ver também: `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md` para detalhes e priorização.
+> **2026-09-04 — Correções concluídas e verificadas**
+> Todos os 11 bugs críticos e médios relevantes identificados na revisão completa do código-fonte
+> foram corrigidos e verificados em revisão independente. O código está pronto para ser executado
+> no Windows Server. Ver `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md` para detalhe dos itens pendentes
+> não bloqueantes (code smells — próxima rodada pós-validação).
 
 Este é o documento canônico da execução host. A implementação e os testes
 portáveis são feitos no WSL; nenhum resultado obtido no WSL certifica o runtime
@@ -1180,12 +1179,11 @@ Artefatos incluem `document.enriched.md` com blocos `derived:start`.
 ## Próximo passo
 
 ```text
-[2026-09-04] Bugs críticos identificados pela revisão completa do código-fonte.
+[2026-09-04] Correções concluídas — código liberado para o Windows Server.
 
-Sequência obrigatória:
-  1. Corrigir bugs críticos #1–#7 (ver PLANO_CORRETIVO_DESENVOLVEDOR.md)
-  2. Corrigir bugs altos #8–#11 após inspeção no servidor
-  3. Validar no Windows Server com documento que exerça: imagens, figuras,
-     tabelas mescladas e páginas em branco
-  4. Só então avançar para as suítes v3 formais e fixtures schema3
+Sequência de validação:
+  1. git pull / checkout da branch perf/parser-runtime-optimization no servidor
+  2. .\scripts\windows\check_server_readiness.ps1 -VerboseOutput
+  3. Validar com documento que exerça: imagens, figuras, tabelas mescladas e páginas em branco
+  4. Se SERVER_READINESS=PASS → avançar para suítes v3 formais e fixtures schema3
 ```

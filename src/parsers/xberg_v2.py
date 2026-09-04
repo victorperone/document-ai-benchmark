@@ -106,14 +106,7 @@ def _get_tesseract_version() -> str | None:
         return None
 
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 
 def _find_tessdata_prefix() -> str | None:
@@ -823,9 +816,21 @@ def _result_to_artifacts(
         page = page_map.get(page_num)
 
         if page is None:
-            raise XbergConfigurationError(
-                f"Xberg omitted source page {page_num}; page mapping cannot be complete"
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Xberg omitted source page %d (likely blank); producing empty page.", page_num
             )
+            page_texts.append("")
+            parser_page_elements.append({
+                "page_number": page_num,
+                "tables_detected": 0,
+            })
+            parser_native_pages.append({
+                "page_number": page_num,
+                "missing_from_parser_result": True,
+                "tables": [],
+            })
+            continue
 
         raw_text = _page_text(page)
         page_texts.append((raw_text + "\n") if raw_text else "")

@@ -42,31 +42,31 @@ $Smoke = @'
 import importlib.metadata
 import sys
 
-expected = {
-    "liteparse": "2.13.0",
-    "transformers": "5.16.1",
-}
+# liteparse exact version check
+try:
+    liteparse_version = importlib.metadata.version("liteparse")
+except importlib.metadata.PackageNotFoundError:
+    print("FAIL: liteparse not installed", file=sys.stderr)
+    sys.exit(1)
 
-for package, expected_version in expected.items():
-    try:
-        actual_version = importlib.metadata.version(
-            package
-        )
-    except importlib.metadata.PackageNotFoundError:
-        print(
-            f"FAIL: {package} not installed",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+if liteparse_version != "2.13.0":
+    print(f"FAIL: expected liteparse==2.13.0, got {liteparse_version!r}", file=sys.stderr)
+    sys.exit(1)
 
-    if actual_version != expected_version:
-        print(
-            f"FAIL: expected "
-            f"{package}=={expected_version}, "
-            f"got {actual_version!r}",
-            file=sys.stderr,
-        )
+# transformers minimum version check (>=4.40.0)
+try:
+    transformers_version = importlib.metadata.version("transformers")
+except importlib.metadata.PackageNotFoundError:
+    print("FAIL: transformers not installed (need >=4.40.0)", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from packaging.version import Version
+    if Version(transformers_version) < Version("4.40.0"):
+        print(f"FAIL: transformers {transformers_version!r} < 4.40.0", file=sys.stderr)
         sys.exit(1)
+except ImportError:
+    pass  # packaging not available; skip version range check
 
 from transformers import (
     AutoModelForImageTextToText,

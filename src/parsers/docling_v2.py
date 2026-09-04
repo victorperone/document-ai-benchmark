@@ -200,87 +200,14 @@ def _validate_granite_chart_v4_artifacts(
             + ", ".join(missing_files),
         )
 
-    index_path = (
-        model_dir
-        / "model.safetensors.index.json"
+    ok, reason = _validate_sharded_safetensors(
+        model_dir,
+        model_dir / "model.safetensors.index.json",
     )
+    if not ok:
+        return False, f"Granite chart v4 shard validation failed: {reason}"
 
-    try:
-        index_data = json.loads(
-            index_path.read_text(
-                encoding="utf-8"
-            )
-        )
-    except (
-        OSError,
-        json.JSONDecodeError,
-    ) as exc:
-        return (
-            False,
-            (
-                "invalid model.safetensors.index.json: "
-                f"{type(exc).__name__}: {exc}"
-            ),
-        )
-
-    weight_map = index_data.get("weight_map")
-
-    if not isinstance(weight_map, dict) or not weight_map:
-        return (
-            False,
-            (
-                "model.safetensors.index.json "
-                "does not contain a valid weight_map"
-            ),
-        )
-
-    shards = sorted(
-        {
-            str(value)
-            for value in weight_map.values()
-            if value
-        }
-    )
-
-    if not shards:
-        return (
-            False,
-            "no model shards declared by weight_map",
-        )
-
-    missing_shards = [
-        shard
-        for shard in shards
-        if not (model_dir / shard).is_file()
-    ]
-
-    if missing_shards:
-        return (
-            False,
-            "missing shard(s): "
-            + ", ".join(missing_shards),
-        )
-
-    empty_shards = [
-        shard
-        for shard in shards
-        if (model_dir / shard).stat().st_size <= 0
-    ]
-
-    if empty_shards:
-        return (
-            False,
-            "empty shard(s): "
-            + ", ".join(empty_shards),
-        )
-
-    return (
-        True,
-        (
-            f"{len(shards)} shard(s) verified "
-            f"at {model_dir}"
-        ),
-    )
+    return True, reason
 
 def _validate_sharded_safetensors(
     model_dir: Path,
@@ -513,6 +440,9 @@ def _validate_tableformer_artifacts(
 
 def _validate_rapidocr_artifacts(
     artifacts_path: Path,
+    *,
+    backend: str = "torch",
+    lang: str = "pt",
 ) -> tuple[bool, str]:
     try:
         from docling.models.stages.ocr.rapid_ocr_model import (  # type: ignore
@@ -523,9 +453,6 @@ def _validate_rapidocr_artifacts(
         )
     except ImportError as exc:
         return False, f"cannot import RapidOCR internals: {exc}"
-
-    backend = "torch"
-    lang = "pt"
 
     try:
         model_folder = RapidOcrModel._model_repo_folder
@@ -550,7 +477,7 @@ def _validate_rapidocr_artifacts(
             need_rec=True,
         )
     except Exception as exc:
-        return False, f"failed to resolve RapidOCR torch:pt artifacts: {exc}"
+        return False, f"failed to resolve RapidOCR {backend}:{lang} artifacts: {exc}"
 
     required_roles = {"det", "cls", "rec"}
     missing_roles = required_roles - set(artifacts)
@@ -1308,21 +1235,6 @@ def build_docling_page_contract(
     )
 
 
-def calculate_sha256(
-    path: Path,
-) -> str:
-    digest = hashlib.sha256()
-
-    with path.open("rb") as file:
-        for block in iter(
-            lambda: file.read(1024 * 1024),
-            b"",
-        ):
-            digest.update(block)
-
-    return digest.hexdigest()
-
-
 def load_cached_inventory(
     input_path: Path,
     output_root: Path,
@@ -1354,7 +1266,7 @@ def load_cached_inventory(
         )
     )
 
-    current_sha = calculate_sha256(
+    current_sha = sha256_file(
         input_path
     )
     inventory_sha = inventory.get(
@@ -1659,7 +1571,9 @@ def _build_pipeline_options(
             rapidocr_ok,
             rapidocr_detail,
         ) = _validate_rapidocr_artifacts(
-            model_artifacts_path
+            model_artifacts_path,
+            backend=str(profile.get("ocr_backend", "torch")),
+            lang=str(profile.get("ocr_language", "pt")),
         )
         if not rapidocr_ok:
             raise BenchmarkConfigurationError(
@@ -2160,7 +2074,11 @@ def preflight_profile(
         (
             rapidocr_ok,
             rapidocr_detail,
-        ) = _validate_rapidocr_artifacts(artifacts_path)
+        ) = _validate_rapidocr_artifacts(
+            artifacts_path,
+            backend=str(profile.get("ocr_backend", "torch")),
+            lang=str(profile.get("ocr_language", "pt")),
+        )
         checks.append(
             make_check(
                 "ocr model RapidOCR",

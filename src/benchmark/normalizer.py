@@ -216,7 +216,7 @@ def normalize_pages(
 
         footer_indexes = set(
             non_empty[-footer_lines:]
-        )
+        ) - header_indexes  # avoid double-counting on short pages
 
         header_positions.append(
             header_indexes

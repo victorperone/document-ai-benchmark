@@ -1183,6 +1183,16 @@ def render_mineru_item(
             item.get("text", "")
         ).strip()
 
+    if item_type == "image":
+        blocks: list[str] = []
+        blocks.extend(
+            _text_list(item.get("img_caption"))
+        )
+        blocks.extend(
+            _text_list(item.get("img_footnote"))
+        )
+        return "\n\n".join(blocks)
+
     if item_type == "code":
         blocks: list[str] = []
 

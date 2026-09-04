@@ -63,14 +63,7 @@ from src.benchmark.source_inventory import (
 
 PARSER_NAME = "pymupdf"
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 
 def _resolve_visual_worker_python(project_root: Path) -> Path:

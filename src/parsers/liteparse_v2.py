@@ -38,7 +38,10 @@ from src.benchmark.process_tree import run_process_tree
 PARSER_NAME = "liteparse"
 PARSER_DISPLAY_NAME = "LiteParse"
 LITEPARSE_REQUIRED_VERSION = "2.13.0"
-TRANSFORMERS_REQUIRED_VERSION = "5.16.1"
+TRANSFORMERS_MIN_VERSION = "4.40.0"
+
+_DEFAULT_NATIVE_DPI = 150
+_DEFAULT_OCR_DPI = 150
 
 SMOLVLM_ARTIFACT_DIRECTORY = "HuggingFaceTB--SmolVLM-256M-Instruct"
 SMOLVLM_MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct"
@@ -53,14 +56,7 @@ FULL_PAGE_OCR_REASONS: frozenset[str] = frozenset(
     }
 )
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 # Module-level SmolVLM model cache (avoids reloading between images)
 _smolvlm_cache: dict[str, Any] = {}
@@ -253,6 +249,7 @@ def _describe_image_with_smolvlm(
     model_root: Path,
     prompt: str,
     model_artifact_directory: str = SMOLVLM_ARTIFACT_DIRECTORY,
+    max_new_tokens: int = 256,
 ) -> str:
     model_dir = (
         model_root
@@ -346,7 +343,7 @@ def _describe_image_with_smolvlm(
         with torch.no_grad():
             generated = model.generate(
                 **inputs,
-                max_new_tokens=128,
+                max_new_tokens=max_new_tokens,
                 do_sample=False,
             )
 
@@ -582,6 +579,9 @@ def _process_document_images(
                     model_root,
                     effective_prompt,
                     description_model_directory,
+                    max_new_tokens=int(
+                        profile.get("image_description_max_tokens", 256)
+                    ),
                 )
             )
             enrichment[
@@ -807,6 +807,7 @@ def _build_page_text_with_enrichments(
     raw_text: str,
     page_images: list[Any],
     enrichments: dict[str, dict[str, Any]],
+    image_output_dir: Path | None = None,
 ) -> str:
     parts: list[str] = [raw_text.rstrip() if raw_text else ""]
 
@@ -815,7 +816,9 @@ def _build_page_text_with_enrichments(
         img_name = getattr(img_obj, "name", None) or ""
 
         if img_path_attr:
-            key = str(img_path_attr)
+            key = str(Path(img_path_attr))
+        elif img_name and image_output_dir is not None and image_output_dir.exists():
+            key = str(image_output_dir / img_name)
         else:
             continue
 
@@ -1266,7 +1269,7 @@ def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
         "continue_on_page_error": False,
         "ocr_server_url": profile.get("ocr_server_url"),
         "num_workers": int(profile.get("num_workers", 2)),
-        "dpi": int(profile.get("dpi", 150)),
+        "dpi": int(profile.get("dpi", _DEFAULT_NATIVE_DPI)),
         "max_pages": 2000,
     }
 
@@ -1356,65 +1359,64 @@ def preflight_profile(
             make_check("liteparse version", "pass", installed_version)
         )
 
-    # Transformers runtime required by local SmolVLM
-    transformers_version = _package_version(
-        "transformers"
-    )
-
-    if (
-        transformers_version
-        != TRANSFORMERS_REQUIRED_VERSION
-    ):
-        checks.append(
-            make_check(
-                "transformers version",
-                "fail",
-                (
-                    "expected "
-                    f"{TRANSFORMERS_REQUIRED_VERSION!r}, "
-                    f"got {transformers_version!r}"
-                ),
+    # Transformers runtime — only required when SmolVLM image description is enabled
+    if profile.get("image_description"):
+        transformers_version = _package_version("transformers")
+        if transformers_version is None:
+            checks.append(
+                make_check(
+                    "transformers version",
+                    "fail",
+                    f"transformers not installed (need >={TRANSFORMERS_MIN_VERSION})",
+                )
             )
-        )
-    else:
-        checks.append(
-            make_check(
-                "transformers version",
-                "pass",
-                transformers_version,
+        else:
+            from importlib.metadata import version as _pkg_ver
+            try:
+                from packaging.version import Version as _V
+                _ok = _V(transformers_version) >= _V(TRANSFORMERS_MIN_VERSION)
+            except Exception:
+                _ok = transformers_version >= TRANSFORMERS_MIN_VERSION
+            checks.append(
+                make_check(
+                    "transformers version",
+                    "pass" if _ok else "fail",
+                    transformers_version
+                    if _ok
+                    else f"need >={TRANSFORMERS_MIN_VERSION}, got {transformers_version!r}",
+                )
             )
-        )
 
-    try:
-        from transformers import (
-            AutoModelForImageTextToText,
-            AutoProcessor,
-        )
-
-        _ = (
-            AutoModelForImageTextToText,
-            AutoProcessor,
-        )
-
-    except Exception as exc:
-        checks.append(
-            make_check(
-                "smolvlm transformers API",
-                "fail",
-                (
-                    f"{type(exc).__name__}: "
-                    f"{exc}"
-                ),
+        try:
+            from transformers import (
+                AutoModelForImageTextToText,
+                AutoProcessor,
             )
-        )
-    else:
-        checks.append(
-            make_check(
-                "smolvlm transformers API",
-                "pass",
-                "AutoModelForImageTextToText",
+
+            _ = (
+                AutoModelForImageTextToText,
+                AutoProcessor,
             )
-        )
+
+        except Exception as exc:
+            checks.append(
+                make_check(
+                    "smolvlm transformers API",
+                    "fail",
+                    (
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                make_check(
+                    "smolvlm transformers API",
+                    "pass",
+                    "AutoModelForImageTextToText",
+                )
+            )
 
     # CPU only
     device = str(profile.get("accelerator_device", "cpu"))
@@ -1843,7 +1845,7 @@ def main() -> None:
                     )
                     ocr_config = dict(parser_config)
                     ocr_config["ocr_enabled"] = True
-                    ocr_config["dpi"] = int(profile.get("dpi", 300))
+                    ocr_config["dpi"] = int(profile.get("dpi", _DEFAULT_OCR_DPI))
                     ocr_config["target_pages"] = target_str
 
                     ocr_parser = _liteparse.LiteParse(**ocr_config)
@@ -1901,6 +1903,7 @@ def main() -> None:
                         text,
                         page_images,
                         image_enrichments,
+                        image_output_dir,
                     )
                     page_texts.append(enriched)
 

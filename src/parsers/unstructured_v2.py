@@ -60,14 +60,7 @@ _PROFILE_KEYS = frozenset({
 # the adapter compiles even when unstructured is not installed (WSL).
 _OCR_AGENT_TESSERACT = "unstructured.partition.utils.ocr_models.tesseract_ocr.OCRAgentTesseract"
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 # ---------------------------------------------------------------------------
 # Markdown renderer
@@ -127,7 +120,7 @@ def _render_table_html(html: str) -> tuple[str, str]:
             return html, "html_preserved"
 
         if parser._has_span:
-            return html, "html_preserved"
+            return f"```html\n{html.strip()}\n```", "html_fenced"
 
         col_count = max(len(r) for r in rows)
         # Pad rows to uniform width
@@ -142,7 +135,7 @@ def _render_table_html(html: str) -> tuple[str, str]:
         return "\n".join(lines), "markdown"
 
     except Exception:
-        return html, "html_preserved"
+        return f"```html\n{html.strip()}\n```", "html_fenced"
 
 
 def _render_element(element: Any, *, image_description: bool = False) -> str:
@@ -202,7 +195,9 @@ def _elements_to_page_texts(
     - observed_pages is the set of page numbers that had at least one useful (non-PageBreak) element
     """
     page_buckets: dict[int, list[Any]] = {i + 1: [] for i in range(page_count)}
-    no_page_elements: list[Any] = []
+    no_page_elements: list[Any] = []      # genuinely unassignable (no page at all)
+    redistributed_elements: list[Any] = []  # cross-page elements reassigned to last page
+    last_seen_page: int = 1
 
     for el in elements:
         if type(el).__name__ == "PageBreak":
@@ -210,13 +205,18 @@ def _elements_to_page_texts(
         meta = getattr(el, "metadata", None)
         page_num = getattr(meta, "page_number", None) if meta else None
         if isinstance(page_num, int) and 1 <= page_num <= page_count:
+            last_seen_page = page_num
             page_buckets[page_num].append(el)
         else:
-            no_page_elements.append(el)
+            # Elements without a valid page_number (e.g. cross-page tables from hi_res)
+            # are reassigned to the last known page for rendering; tracked separately
+            # so native_pages[0] only holds truly unassignable elements.
+            redistributed_elements.append(el)
+            page_buckets[last_seen_page].append(el)
 
     page_texts: list[str] = []
     native_pages: dict[int, list[dict[str, Any]]] = {
-        0: [_element_to_native(el) for el in no_page_elements],
+        0: [_element_to_native(el) for el in redistributed_elements],
     }
     observed_pages: set[int] = set()
 
@@ -1103,7 +1103,8 @@ def preflight_profile(
             tess_v or "unavailable",
         ))
         tessdata = _find_tessdata_prefix()
-        for lang in ("por", "eng"):
+        profile_langs = profile.get("languages", ["por", "eng"])
+        for lang in profile_langs:
             if tessdata:
                 td_file = Path(tessdata) / f"{lang}.traineddata"
                 checks.append(make_check(
@@ -1386,15 +1387,11 @@ def main() -> None:
                 for i in range(page_count)
             ]
 
-            # U2: collect unassigned elements (no page number) into separate record
-            unassigned_elements = native_pages.get(0, [])
-            unassigned_source_elements = [
-                element for element in elements
-                if not isinstance(
-                    getattr(getattr(element, "metadata", None), "page_number", None), int
-                )
-                and type(element).__name__ != "PageBreak"
-            ]
+            # U2: all elements without a page_number are redistributed to the last
+            # known page inside _elements_to_page_texts(), so there are no genuinely
+            # unassigned elements remaining at this point.
+            unassigned_elements = []
+            unassigned_source_elements = []
             unassigned_markdown = "\n\n".join(
                 rendered for rendered in (
                     _render_element(element) for element in unassigned_source_elements

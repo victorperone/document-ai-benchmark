@@ -639,14 +639,6 @@ def build_pipeline_init_kwargs(
     return kwargs
 
 
-def build_pipeline_kwargs(
-    model_paths: dict[str, Path],
-    profile: dict[str, Any],
-) -> dict[str, Any]:
-    """Alias for build_pipeline_init_kwargs (backward compatibility)."""
-    return build_pipeline_init_kwargs(model_paths, profile)
-
-
 _PREDICT_CERTIFIED_DEFAULTS: dict[str, Any] = {
     "use_wired_table_cells_trans_to_html": False,
     "use_wireless_table_cells_trans_to_html": False,
@@ -795,7 +787,7 @@ def build_paddleocr_page_contract(
     ] = []
 
     for result in results:
-        page_idx = result["page_index"]
+        page_idx = _result_value(result, "page_index", None)
 
         if not isinstance(page_idx, int):
             raise TypeError(
@@ -952,25 +944,6 @@ def build_paddleocr_page_contract(
         page_texts,
         parser_page_elements,
         parser_native_pages,
-    )
-
-
-def aggregate_official_markdown(pipeline: Any, results: list[Any]) -> str:
-    """Use PaddleOCR's official multi-page Markdown aggregator."""
-    concatenate = getattr(pipeline, "concatenate_markdown_pages", None)
-    if not callable(concatenate):
-        raise RuntimeError("PPStructureV3.concatenate_markdown_pages is unavailable")
-    markdown_pages = [result.markdown for result in results]
-    combined = concatenate(markdown_pages)
-    if isinstance(combined, str):
-        return combined
-    for key in ("markdown_texts", "markdown", "content", "text"):
-        value = _result_value(combined, key, None)
-        if isinstance(value, str):
-            return value
-    raise TypeError(
-        "PPStructureV3 official Markdown aggregator returned "
-        f"{type(combined).__name__}, expected str or mapping"
     )
 
 
@@ -1477,7 +1450,7 @@ def main() -> None:
             seen_indexes: set[int] = set()
 
             for result in predict_iter_fn(**predict_kwargs):
-                page_idx = result["page_index"]
+                page_idx = _result_value(result, "page_index", None)
                 if not isinstance(page_idx, int):
                     raise TypeError(
                         f"PaddleOCR page_index must be int, got {page_idx!r}."
@@ -1517,11 +1490,20 @@ def main() -> None:
         received_indexes = sorted(seen_indexes)
         expected_indexes = list(range(page_count))
         if received_indexes != expected_indexes:
-            raise RuntimeError(
-                "Unexpected PaddleOCR page indexes. "
-                f"Expected {expected_indexes}, "
-                f"got {received_indexes}."
-            )
+            # Detect 1-based indexing: if all received indexes are offset by 1
+            # from the expected 0-based range, normalise silently.
+            offset_indexes = [i - 1 for i in received_indexes]
+            if offset_indexes == expected_indexes:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "PPStructureV3 returned 1-based page indexes; normalising to 0-based."
+                )
+            else:
+                raise RuntimeError(
+                    "Unexpected PaddleOCR page indexes. "
+                    f"Expected {expected_indexes}, "
+                    f"got {received_indexes}."
+                )
 
         # Official aggregation — called exactly once after full iteration.
         concatenate = getattr(pipeline, "concatenate_markdown_pages", None)

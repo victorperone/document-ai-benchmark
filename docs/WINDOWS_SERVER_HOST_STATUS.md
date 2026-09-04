@@ -2,8 +2,15 @@
 
 ## Estado atual
 
-**STATUS DO CÓDIGO: EM CORREÇÃO**
+**STATUS DO CÓDIGO: EM CORREÇÃO — BUGS CRÍTICOS IDENTIFICADOS**
 **HOMOLOGAÇÃO NO WINDOWS SERVER NATIVO: PENDENTE**
+
+> **Rodada de análise — 2026-09-04**
+> Preflight e execução de teste funcionam no servidor (branch `perf/parser-runtime-optimization`).
+> Uma revisão completa do código-fonte identificou **11 bugs críticos** de perda de dados e comportamento
+> incorreto. Antes da próxima campanha de validação formal, os bugs listados na seção
+> "Análise de qualidade — bugs críticos identificados" abaixo devem ser corrigidos.
+> Ver também: `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md` para detalhes e priorização.
 
 Este é o documento canônico da execução host. A implementação e os testes
 portáveis são feitos no WSL; nenhum resultado obtido no WSL certifica o runtime
@@ -98,6 +105,43 @@ FUNCTIONAL_TESTS_SKIPPED=<n>
 
 Qualquer parser ausente, teste funcional pulado, mutação de modelo, tentativa de
 rede, link inválido, artifact vazio inesperado ou processo vazado impede PASS.
+
+---
+
+## Análise de qualidade — bugs críticos identificados (2026-09-04)
+
+Revisão completa do código-fonte realizada com o servidor operacional na branch
+`perf/parser-runtime-optimization`. Preflight e execução passam. Os itens abaixo
+são bugs que causam **perda de dados silenciosa ou comportamento incorreto** em
+cenários que o documento de teste atual (TC_007646_2021.pdf, 48 páginas sem
+imagens/QR) não exercita.
+
+### 🔴 Bugs críticos
+
+| # | Parser | Arquivo | Problema |
+|---|---|---|---|
+| 1 | Xberg | `src/parsers/xberg_v2.py` linha ~826 | PDFs com páginas em branco crasham: `_result_to_artifacts()` trata página ausente como erro fatal em vez de string vazia |
+| 2 | LiteParse | `src/parsers/liteparse_v2.py` linhas ~41, ~1364 | Preflight sempre retorna `ok=False`: `TRANSFORMERS_REQUIRED_VERSION = "5.16.1"` não existe como versão real; check roda incondicionalmente |
+| 3 | LiteParse | `src/parsers/liteparse_v2.py` linhas ~817–820 | OCR de imagens calculado corretamente mas nunca inserido no Markdown: mismatch de chave entre `_process_document_images()` e `_build_page_text_with_enrichments()` |
+| 4 | MinerU | `src/parsers/mineru_v2.py` linhas ~1175, ~1241 | Legendas e rodapés de figuras descartados silenciosamente: `render_mineru_item()` sem handler para `"type": "image"`; texto está em `img_caption`/`img_footnote`, não em `text` |
+| 5 | Unstructured | `src/parsers/unstructured_v2.py` linhas ~129, ~167 | Tabelas com `rowspan`/`colspan` inserem HTML bruto em `page_texts`, corrompendo o Markdown e as métricas de token |
+| 6 | Unstructured | `src/parsers/unstructured_v2.py` linha ~214 | Tabelas que cruzam limites de página (`page_number=None`) nunca são renderizadas em `page_texts` |
+| 7 | Todos | `src/benchmark/normalizer.py` linha ~213 | Páginas com menos de 6 linhas não-vazias: `header_indexes` e `footer_indexes` se sobrepõem, causando contagem dupla e remoção de conteúdo real como se fosse cabeçalho/rodapé repetido |
+
+### 🟠 Bugs altos
+
+| # | Parser | Arquivo | Problema |
+|---|---|---|---|
+| 8 | PaddleOCR | `src/parsers/paddleocr_v2.py` linhas ~798, ~1480 | `result["page_index"]` via subscript dict em objeto Pydantic pode levantar `TypeError`; usar `_result_value()` que já existe |
+| 9 | PaddleOCR | `src/parsers/paddleocr_v2.py` linha ~1519 | `expected_indexes = range(page_count)` assume 0-based; PPStructureV3 pode retornar 1-based |
+| 10 | LiteParse | `src/parsers/liteparse_v2.py` linhas ~1269, ~1846 | DPI default 150 no parse nativo vs. 300 na passagem OCR: coordenadas incompatíveis corrompem lógica de merge |
+| 11 | Docling | `src/parsers/docling_v2.py` linha ~1194 | `export_to_markdown(page_no=N)` com loop 1-based: se `docling==2.122.0` usa 0-based, todo conteúdo de página é exportado com deslocamento +1 |
+
+### Ação requerida antes da próxima campanha formal
+
+1. Corrigir os bugs 1–7 (críticos) antes de executar qualquer suite v3 com documentos que contenham imagens, figuras, tabelas mescladas ou páginas em branco
+2. Verificar bugs 8–11 com inspeção do resultado real no servidor (`result["page_index"]` valor concreto; `page_no` comportamento na versão docling instalada)
+3. Detalhes e correções propostas: `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md`
 
 ---
 
@@ -1136,7 +1180,12 @@ Artefatos incluem `document.enriched.md` com blocos `derived:start`.
 ## Próximo passo
 
 ```text
-Aguardando validação no Windows Server das correções corretivas e das suítes v3.
-Itens pendentes após validação: fixtures schema3, métricas por dimensão,
-migrações de versão em branches separadas.
+[2026-09-04] Bugs críticos identificados pela revisão completa do código-fonte.
+
+Sequência obrigatória:
+  1. Corrigir bugs críticos #1–#7 (ver PLANO_CORRETIVO_DESENVOLVEDOR.md)
+  2. Corrigir bugs altos #8–#11 após inspeção no servidor
+  3. Validar no Windows Server com documento que exerça: imagens, figuras,
+     tabelas mescladas e páginas em branco
+  4. Só então avançar para as suítes v3 formais e fixtures schema3
 ```

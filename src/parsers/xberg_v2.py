@@ -330,7 +330,7 @@ def _build_xberg_config(
             )
         acceleration_provider = str(profile.get("layout_acceleration_provider", "cpu"))
         try:
-            acceleration = AccelerationConfig(provider=acceleration_provider, device_id=None)
+            acceleration = AccelerationConfig(provider=acceleration_provider)
             layout_cfg = LayoutDetectionConfig(
                 strategy=profile.get("layout_strategy") or None,
                 confidence_threshold=profile.get("layout_confidence_threshold") or None,

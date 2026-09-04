@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+from src.parsers.xberg_v2 import _to_json_safe, persist_xberg_native_bundle
 
 
 def _build_minimal_metrics() -> dict:
@@ -120,3 +123,42 @@ class TestEnumSerialization(unittest.TestCase):
         metrics = _build_minimal_metrics()
         strategy = metrics["processing"]["ocr"]["strategy"]
         self.assertIsInstance(strategy, str)
+
+    def test_circular_values_are_bounded(self):
+        value = []
+        value.append(value)
+        self.assertEqual(_to_json_safe(value), ["<circular:list>"])
+
+    def test_recursive_dump_api_is_bounded(self):
+        class RecursiveDump:
+            def model_dump(self):
+                return RecursiveDump()
+
+        serialized = str(_to_json_safe(RecursiveDump()))
+        self.assertIn("<truncated:RecursiveDump>", serialized)
+
+
+class TestNativeImageBundle(unittest.TestCase):
+    def test_official_image_bytes_are_indexed_and_hashed(self):
+        image = MagicMock()
+        image.data = [137, 80, 78, 71]
+        image.data_base64 = None
+        image.format = "png"
+        image.image_index = 2
+        image.page_number = 1
+        image.width = 10
+        image.height = 20
+        image.caption = None
+        document = MagicMock()
+        document.content = "# exact native"
+        document.images = [image]
+        document.pages = []
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "native"
+            manifest = persist_xberg_native_bundle(
+                document, destination=destination, profile_name="full_cpu_layout"
+            )
+            self.assertEqual((destination / "document.md").read_text(), "# exact native")
+            index = json.loads((destination / "assets.json").read_text())
+            self.assertEqual(len(index), 1)
+            self.assertEqual(manifest["bundle_status"], "available")

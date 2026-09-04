@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -8,7 +9,6 @@ import json
 import platform
 import re
 import shutil
-import subprocess
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -26,6 +26,8 @@ from src.benchmark.config import (
 )
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.process_tree import run_process_tree
 
 PARSER_NAME = "unstructured"
 PARSER_DISPLAY_NAME = "Unstructured"
@@ -46,16 +48,19 @@ _PROFILE_KEYS = frozenset({
     "password", "pdfminer_line_margin", "pdfminer_char_margin",
     "pdfminer_line_overlap", "pdfminer_word_margin",
     "remote_services_enabled", "network_allowed_during_run",
+    # U1: explicit OCR agent selection
+    "ocr_agent",
+    "table_ocr_agent",
+    "visual_enrichment_enabled", "visual_ocr_language",
+    "visual_description_model", "visual_det_model_dir",
+    "visual_rec_model_dir", "visual_failure_fatal",
 })
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+# Constant for Tesseract OCR agent — mirrors unstructured's own constant so
+# the adapter compiles even when unstructured is not installed (WSL).
+_OCR_AGENT_TESSERACT = "unstructured.partition.utils.ocr_models.tesseract_ocr.OCRAgentTesseract"
+
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 # ---------------------------------------------------------------------------
 # Markdown renderer
@@ -115,7 +120,7 @@ def _render_table_html(html: str) -> tuple[str, str]:
             return html, "html_preserved"
 
         if parser._has_span:
-            return html, "html_preserved"
+            return f"```html\n{html.strip()}\n```", "html_fenced"
 
         col_count = max(len(r) for r in rows)
         # Pad rows to uniform width
@@ -130,7 +135,7 @@ def _render_table_html(html: str) -> tuple[str, str]:
         return "\n".join(lines), "markdown"
 
     except Exception:
-        return html, "html_preserved"
+        return f"```html\n{html.strip()}\n```", "html_fenced"
 
 
 def _render_element(element: Any, *, image_description: bool = False) -> str:
@@ -169,11 +174,8 @@ def _render_element(element: Any, *, image_description: bool = False) -> str:
         return text
 
     if category in ("Image",):
-        # No base64; no VLM — just a placeholder if there's a path
-        img_path = getattr(meta, "image_path", None) if meta else None
-        if img_path:
-            return f"<!-- image: {Path(img_path).name} -->"
-        return ""
+        # Preserve parser-provided text, but never persist a temporary crop path.
+        return text
 
     if category == "CodeSnippet":
         return f"```\n{text}\n```" if text else ""
@@ -185,29 +187,38 @@ def _render_element(element: Any, *, image_description: bool = False) -> str:
 def _elements_to_page_texts(
     elements: list[Any],
     page_count: int,
-) -> tuple[list[str], dict[int, list[dict[str, Any]]]]:
+) -> tuple[list[str], dict[int, list[dict[str, Any]]], set[int]]:
     """Group elements by page and render each page's Markdown text.
 
-    Returns (page_texts, native_pages) where native_pages maps page_num → list of element records.
-    The last entry in native_pages (key 0) holds elements with no valid page assignment.
+    Returns (page_texts, native_pages, observed_pages) where:
+    - native_pages maps page_num → list of element records; key 0 holds unassigned elements
+    - observed_pages is the set of page numbers that had at least one useful (non-PageBreak) element
     """
     page_buckets: dict[int, list[Any]] = {i + 1: [] for i in range(page_count)}
-    no_page_elements: list[Any] = []
+    no_page_elements: list[Any] = []      # genuinely unassignable (no page at all)
+    redistributed_elements: list[Any] = []  # cross-page elements reassigned to last page
+    last_seen_page: int = 1
 
     for el in elements:
+        if type(el).__name__ == "PageBreak":
+            continue
         meta = getattr(el, "metadata", None)
         page_num = getattr(meta, "page_number", None) if meta else None
         if isinstance(page_num, int) and 1 <= page_num <= page_count:
+            last_seen_page = page_num
             page_buckets[page_num].append(el)
         else:
-            no_page_elements.append(el)
+            # Elements without a valid page_number (e.g. cross-page tables from hi_res)
+            # are reassigned to the last known page for rendering; tracked separately
+            # so native_pages[0] only holds truly unassignable elements.
+            redistributed_elements.append(el)
+            page_buckets[last_seen_page].append(el)
 
     page_texts: list[str] = []
     native_pages: dict[int, list[dict[str, Any]]] = {
-        # key 0 = elements with no valid page_number (diagnostic only, not in page_texts)
-        0: [_element_to_native(el) for el in no_page_elements
-            if type(el).__name__ != "PageBreak"],
+        0: [_element_to_native(el) for el in redistributed_elements],
     }
+    observed_pages: set[int] = set()
 
     for page_num in range(1, page_count + 1):
         page_els = page_buckets[page_num]
@@ -215,8 +226,7 @@ def _elements_to_page_texts(
         native_records: list[dict[str, Any]] = []
 
         for el in page_els:
-            if type(el).__name__ == "PageBreak":
-                continue
+            observed_pages.add(page_num)
             rendered = _render_element(el)
             if rendered:
                 parts.append(rendered)
@@ -226,7 +236,71 @@ def _elements_to_page_texts(
         page_texts.append(text)
         native_pages[page_num] = native_records
 
-    return page_texts, native_pages
+    return page_texts, native_pages, observed_pages
+
+
+def _check_missing_pages(
+    observed_pages: set[int],
+    page_count: int,
+    inventory: dict[str, Any],
+    profile_name: str,
+) -> tuple[set[int], set[int]]:
+    """Classify pages absent from parser output.
+
+    Returns (legitimately_empty, suspect_missing).
+    Raises BenchmarkConfigurationError for full_cpu_local profiles when
+    a missing page has evidence of content or an incomplete measurement.
+    """
+    all_pages = set(range(1, page_count + 1))
+    missing = all_pages - observed_pages
+    if not missing:
+        return set(), set()
+
+    per_page = inventory.get("per_page", {})
+    legitimately_empty: set[int] = set()
+    suspect_missing: set[int] = set()
+
+    for page_num in missing:
+        page_inv = per_page.get(str(page_num)) or per_page.get(page_num)
+        if page_inv is None:
+            # Inventory has no entry for this page — measurement is incomplete
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output and source_inventory "
+                    "has no per-page entry (incomplete measurement). "
+                    f"Profile '{profile_name}' requires complete page coverage."
+                )
+            suspect_missing.add(page_num)
+            continue
+
+        measurement_complete = bool(page_inv.get("measurement_complete", True))
+        text_chars = int(page_inv.get("text_chars", 0) or 0)
+        image_count = int(page_inv.get("image_count", 0) or 0)
+        drawing_count = int(page_inv.get("drawing_count", 0) or 0)
+        has_content = text_chars > 0 or image_count > 0 or drawing_count > 0
+
+        if not measurement_complete:
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output and its source_inventory "
+                    "measurement is incomplete. "
+                    f"Profile '{profile_name}' requires complete page coverage."
+                )
+            suspect_missing.add(page_num)
+        elif has_content:
+            if profile_name == "full_cpu_local":
+                raise BenchmarkConfigurationError(
+                    f"Page {page_num} absent from parser output but source_inventory "
+                    f"shows content (text_chars={text_chars}, images={image_count}, "
+                    f"drawings={drawing_count}). "
+                    f"Profile '{profile_name}' requires all content pages to be processed."
+                )
+            suspect_missing.add(page_num)
+        else:
+            # measurement_complete AND no content → legitimately empty
+            legitimately_empty.add(page_num)
+
+    return legitimately_empty, suspect_missing
 
 
 def _element_to_native(element: Any) -> dict[str, Any]:
@@ -261,6 +335,145 @@ def _element_to_native(element: Any) -> dict[str, Any]:
     return {k: v for k, v in record.items() if v is not None}
 
 
+def _process_visual_crops(
+    elements: list[Any],
+    *,
+    crop_root: Path,
+    page_count: int,
+    profile: dict[str, Any],
+    resource_monitor: Any,
+) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Describe transient Image/Table crops while their temp directory exists."""
+    by_page: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+    unassigned: list[dict[str, Any]] = []
+    if not profile.get("visual_enrichment_enabled", False):
+        return by_page, unassigned
+
+    from PIL import Image
+    from src.enrichment.visual_contract import VisualRequest
+    from src.enrichment.visual_worker_client import VisualWorkerClient
+
+    repo_root = Path(__file__).resolve().parents[2]
+
+    def resolved_profile_path(key: str) -> str:
+        value = Path(str(profile.get(key, "")))
+        return str((repo_root / value).resolve() if not value.is_absolute() else value.resolve())
+
+    worker_python = repo_root / ".venvs" / "visual-enrichment" / "Scripts" / "python.exe"
+    seen_hashes: set[str] = set()
+    crop_root_resolved = crop_root.resolve()
+
+    with VisualWorkerClient(
+        language=str(profile.get("visual_ocr_language", "pt")),
+        smolvlm_model_path=resolved_profile_path("visual_description_model"),
+        python_executable=str(worker_python),
+        resource_monitor=resource_monitor,
+        det_model_dir=resolved_profile_path("visual_det_model_dir"),
+        rec_model_dir=resolved_profile_path("visual_rec_model_dir"),
+    ) as worker:
+        for index, element in enumerate(elements):
+            category = type(element).__name__
+            if category not in {"Image", "Table"}:
+                continue
+            metadata = getattr(element, "metadata", None)
+            raw_path = getattr(metadata, "image_path", None) if metadata else None
+            if not raw_path:
+                continue
+            path = Path(raw_path).resolve()
+            try:
+                path.relative_to(crop_root_resolved)
+            except ValueError as exc:
+                raise RuntimeError(f"Unstructured crop escaped its temp root: {path}") from exc
+            image_bytes = path.read_bytes()
+            digest = hashlib.sha256(image_bytes).hexdigest()
+            if digest in seen_hashes:
+                continue
+            seen_hashes.add(digest)
+            with Image.open(path) as image:
+                width, height = image.size
+
+            page_number_raw = getattr(metadata, "page_number", None) if metadata else None
+            page_number = page_number_raw if isinstance(page_number_raw, int) else None
+            region_id = f"p{page_number or 0}-{category.lower()}-{index}-{digest[:8]}"
+            response = worker.process(VisualRequest(
+                request_id=region_id,
+                operation="ocr_and_describe",
+                image_base64=base64.b64encode(image_bytes).decode("ascii"),
+                language=str(profile.get("visual_ocr_language", "pt")),
+                prompt="Descreva objetivamente esta região documental.",
+                page_number=page_number or 0,
+                region_id=region_id,
+            ))
+            coords = getattr(metadata, "coordinates", None) if metadata else None
+            record = {
+                "type": "visual_crop",
+                "category": category,
+                "region_id": region_id,
+                "page_number": page_number,
+                "sha256": digest,
+                "width": width,
+                "height": height,
+                "bbox": getattr(coords, "points", None),
+                "storage_policy": "transient",
+                "deleted_after_processing": True,
+                "cleanup_state": "scheduled",
+                "status": response.status,
+                "ocr_engine": response.ocr_engine,
+                "description_model": response.description_model,
+                "ocr_text": response.ocr_text.strip() or None,
+                "text": response.description.strip() or response.ocr_text.strip() or None,
+            }
+            if response.error_detail:
+                record["error_detail"] = response.error_detail
+            if profile.get("visual_failure_fatal", False) and (
+                response.status != "success" or response.error_detail
+            ):
+                raise RuntimeError(
+                    f"visual crop {region_id} failed: "
+                    f"{response.error_detail or response.status}"
+                )
+            if page_number and page_number <= len(by_page):
+                by_page[page_number - 1].append(record)
+            else:
+                unassigned.append(record)
+    return by_page, unassigned
+
+
+def _render_visual_items(base: str, items: list[dict[str, Any]]) -> str:
+    blocks = []
+    for item in items:
+        text = str(item.get("text") or "").strip()
+        ocr_text = str(item.get("ocr_text") or "").strip()
+        if not text and not ocr_text:
+            continue
+        lines = [
+            "<!-- derived:start",
+            "type=visual_crop",
+            f"page={item.get('page_number') or 0}",
+            f"region_id={item['region_id']}",
+            "-->",
+        ]
+        normalized_base = " ".join(base.casefold().split())
+        normalized_ocr = " ".join(ocr_text.casefold().split())
+        normalized_text = " ".join(text.casefold().split())
+        payload_added = False
+        if (
+            normalized_ocr
+            and normalized_ocr not in normalized_base
+            and normalized_ocr not in normalized_text
+        ):
+            lines.append(f"> **Texto OCR:** {ocr_text}")
+            payload_added = True
+        if normalized_text and normalized_text not in normalized_base:
+            lines.append(f"> **Descrição visual:** {text}")
+            payload_added = True
+        if not payload_added:
+            continue
+        lines.append("<!-- derived:end -->")
+        blocks.append("\n".join(lines))
+    return base.rstrip() + (("\n\n" + "\n\n".join(blocks)) if blocks else "")
+
+
 def _count_elements(elements: list[Any]) -> dict[str, Any]:
     counts: Counter[str] = Counter(type(el).__name__ for el in elements)
     return {
@@ -281,6 +494,46 @@ def _count_elements(elements: list[Any]) -> dict[str, Any]:
     }
 
 
+def _count_elements_by_page(
+    elements: list[Any],
+    page_count: int,
+) -> list[dict[str, Any]]:
+    """Return per-page element counts. Fixes the prior bug that accumulated
+    all counts on page 1 (index 0) instead of distributing by page_number."""
+    page_counters: list[Counter[str]] = [Counter() for _ in range(page_count)]
+    unassigned: list[Any] = []
+
+    for el in elements:
+        if type(el).__name__ == "PageBreak":
+            continue
+        meta = getattr(el, "metadata", None)
+        page_num = getattr(meta, "page_number", None) if meta else None
+        if isinstance(page_num, int) and 1 <= page_num <= page_count:
+            page_counters[page_num - 1][type(el).__name__] += 1
+        else:
+            unassigned.append(el)
+
+    result: list[dict[str, Any]] = []
+    for page_num, counts in enumerate(page_counters, start=1):
+        result.append({
+            "page_number": page_num,
+            "tables_detected": counts.get("Table", 0),
+            "images_detected": counts.get("Image", 0),
+            "headings_detected": counts.get("Title", 0),
+            "lists_detected": counts.get("ListItem", 0),
+            "formulas_detected": counts.get("Formula", 0),
+            "captions_detected": counts.get("FigureCaption", 0),
+            "page_headers_detected": counts.get("Header", 0),
+            "page_footers_detected": counts.get("Footer", 0),
+            "text_blocks_detected": (
+                counts.get("NarrativeText", 0) + counts.get("Text", 0)
+            ),
+            "layout_boxes": sum(counts.values()),
+        })
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -294,9 +547,9 @@ def _package_version(name: str) -> str | None:
 
 def _get_tesseract_version() -> str | None:
     try:
-        r = subprocess.run(
+        r = run_process_tree(
             ["tesseract", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         )
         lines = (r.stdout or r.stderr).splitlines()
         return lines[0].strip() if lines else None
@@ -309,9 +562,9 @@ def _get_poppler_version() -> str | None:
         path = shutil.which(tool)
         if path:
             try:
-                r = subprocess.run(
+                r = run_process_tree(
                     [path, "-v"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True, timeout=5,
                 )
                 lines = (r.stdout or r.stderr).splitlines()
                 return lines[0].strip() if lines else tool
@@ -409,6 +662,10 @@ def _build_metrics(
     run_log_path: Path | None,
     metrics_json_path: Path | None,
     verbose: bool = False,
+    ocr_agent_effective: str | None = None,
+    strategy_effective: str | None = None,
+    images_extracted_total: int = 0,
+    unassigned_elements_count: int = 0,
 ) -> dict[str, Any]:
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
     input_bytes = input_path.stat().st_size
@@ -419,7 +676,7 @@ def _build_metrics(
 
     return {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "reference_tokenizer": tokenizer_name,
         },
@@ -467,11 +724,17 @@ def _build_metrics(
             ),
             "ocr": {
                 "enabled": ocr_enabled,
-                "strategy": strategy,
+                "strategy_requested": strategy,
+                "strategy_effective": strategy_effective or strategy,
                 "engine": profile.get("ocr_engine"),
+                "ocr_agent_requested": profile.get("ocr_agent"),
+                "ocr_agent_effective": ocr_agent_effective,
+                "table_ocr_agent_requested": profile.get("table_ocr_agent"),
                 "languages": profile.get("languages"),
                 "infer_table_structure": profile.get("infer_table_structure", False),
                 "hi_res_model_name": profile.get("hi_res_model_name"),
+                "images_extracted_transient": images_extracted_total,
+                "unassigned_elements": unassigned_elements_count,
                 # Public API in 0.27.1 does not expose stable per-page OCR tracking
                 "pages_requested": None,
                 "pages_processed": None,
@@ -494,6 +757,9 @@ def _build_metrics(
         "heuristics": artifact_result["heuristics"],
         "tokens": artifact_result["tokens"],
         "normalization": artifact_result["normalization"],
+        "artifacts": artifact_result["artifacts"],
+        "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,
@@ -775,11 +1041,11 @@ def preflight_profile(
             ))
 
     # Table structure only with compatible strategy
-    if bool(profile.get("infer_table_structure")) and strategy not in ("hi_res",):
+    if bool(profile.get("infer_table_structure")) and strategy not in ("hi_res", "auto"):
         checks.append(make_check(
             "table structure strategy",
             "fail",
-            f"infer_table_structure=true requires hi_res, got {strategy!r}",
+            f"infer_table_structure=true requires hi_res or auto, got {strategy!r}",
         ))
     else:
         checks.append(make_check("table structure strategy", "pass"))
@@ -837,7 +1103,8 @@ def preflight_profile(
             tess_v or "unavailable",
         ))
         tessdata = _find_tessdata_prefix()
-        for lang in ("por", "eng"):
+        profile_langs = profile.get("languages", ["por", "eng"])
+        for lang in profile_langs:
             if tessdata:
                 td_file = Path(tessdata) / f"{lang}.traineddata"
                 checks.append(make_check(
@@ -917,6 +1184,7 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
     from src.benchmark.artifacts import finalize_artifacts
     from src.benchmark.metrics_writer import write_json
     from src.benchmark.paths import build_output_paths
@@ -1001,6 +1269,30 @@ def main() -> None:
         "form_extraction_skip_tables": bool(profile.get("form_extraction_skip_tables", True)),
     }
 
+    # U1: explicit OCR agent — use profile value or fall back to Tesseract constant.
+    # Import the library constant when available so the value stays in sync with
+    # whatever version is installed; fall back to the string we know from 0.27.x.
+    _ocr_agent_requested = profile.get("ocr_agent")
+    if ocr_enabled and _ocr_agent_requested:
+        try:
+            from unstructured.partition.utils.constants import (  # type: ignore  # noqa: PLC0415
+                OCR_AGENT_TESSERACT,
+            )
+            _resolved_ocr_agent = OCR_AGENT_TESSERACT if _ocr_agent_requested == "tesseract" else _ocr_agent_requested
+        except ImportError:
+            _resolved_ocr_agent = _OCR_AGENT_TESSERACT
+        partition_kwargs["ocr_agent"] = _resolved_ocr_agent
+
+        _table_ocr_agent = profile.get("table_ocr_agent", _ocr_agent_requested)
+        try:
+            from unstructured.partition.utils.constants import (  # type: ignore  # noqa: PLC0415
+                OCR_AGENT_TESSERACT,
+            )
+            _resolved_table_agent = OCR_AGENT_TESSERACT if _table_ocr_agent == "tesseract" else _table_ocr_agent
+        except ImportError:
+            _resolved_table_agent = _OCR_AGENT_TESSERACT
+        partition_kwargs["table_ocr_agent"] = _resolved_table_agent
+
     infer_table_structure = bool(profile.get("infer_table_structure", False))
     if infer_table_structure:
         partition_kwargs["infer_table_structure"] = True
@@ -1014,6 +1306,12 @@ def main() -> None:
     )
 
     image_temp_dir: TemporaryDirectory | None = None
+    unassigned_elements: list[Any] = []
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in range(page_count)
+    ]
+    unassigned_derived: list[dict[str, Any]] = []
+    unassigned_markdown = ""
 
     if image_block_types:
         image_temp_dir = TemporaryDirectory(
@@ -1066,36 +1364,103 @@ def main() -> None:
             elements = partition_pdf(**partition_kwargs)
             extraction_seconds = perf_counter() - extraction_start
 
-            page_texts, native_pages = _elements_to_page_texts(elements, page_count)
+            page_texts, native_pages, observed_pages = _elements_to_page_texts(elements, page_count)
+            _legitimately_empty, _suspect_missing = _check_missing_pages(
+                observed_pages, page_count, inventory, args.profile
+            )
             element_counts = _count_elements(elements)
+            # U3: per-page counts (fixes prior bug that put all counts on page 1)
+            per_page_counts = _count_elements_by_page(elements, page_count)
 
-            parser_page_elements = [
-                {
-                    "page_number": i + 1,
-                    **({
-                        k: element_counts[k]
-                        for k in ("tables_detected", "images_detected", "headings_detected",
-                                  "lists_detected", "text_blocks_detected")
-                    } if i == 0 else {}),
-                }
-                for i in range(page_count)
-            ]
+            parser_page_elements = per_page_counts
+
             parser_native_pages = [
                 {
                     "page_number": i + 1,
                     "elements": native_pages.get(i + 1, []),
+                    # U2: count images extracted to temp dir (never persist paths)
+                    "images_extracted": sum(
+                        1 for el in native_pages.get(i + 1, [])
+                        if el.get("category") == "Image"
+                    ),
                 }
                 for i in range(page_count)
             ]
+
+            # Elements without a reliable page_number are rendered on the last
+            # known page to preserve document-level content, but their page mapping
+            # remains uncertain. Keep them flagged so Schema 3 does not advertise
+            # a fabricated complete page mapping.
+            unassigned_elements = list(
+                native_pages.get(0, [])
+            )
+            unassigned_source_elements = []
+            unassigned_markdown = "\n\n".join(
+                rendered for rendered in (
+                    _render_element(element) for element in unassigned_source_elements
+                ) if rendered
+            )
+
+            if image_temp_dir is not None:
+                derived_content_by_page, unassigned_derived = _process_visual_crops(
+                    elements,
+                    crop_root=Path(image_temp_dir.name),
+                    page_count=page_count,
+                    profile=profile,
+                    resource_monitor=monitor,
+                )
 
     except Exception:
         monitor.stop()
         raise
     finally:
+        # U2: always cleanup — even on exception — so no temp images linger on disk
         if image_temp_dir is not None:
             image_temp_dir.cleanup()
+            image_temp_dir = None
+        for item in [
+            entry
+            for page_items in derived_content_by_page
+            for entry in page_items
+        ] + unassigned_derived:
+            item["cleanup_state"] = "cleaned"
 
     pipeline_seconds = perf_counter() - pipeline_started
+
+    mapping_complete = (
+        not unassigned_elements
+        and not unassigned_derived
+        and not _suspect_missing
+    )
+    native_markdown = join_page_texts(page_texts)
+    if unassigned_markdown:
+        native_markdown = native_markdown.rstrip() + "\n\n" + unassigned_markdown + "\n"
+    enriched_pages = [
+        _render_visual_items(page_texts[index], derived_content_by_page[index])
+        for index in range(page_count)
+    ]
+    has_derived = any(derived_content_by_page) or bool(unassigned_derived)
+    enriched_global = None
+    if has_derived and not mapping_complete:
+        enriched_global = join_page_texts(enriched_pages)
+        if unassigned_markdown:
+            enriched_global = enriched_global.rstrip() + "\n\n" + unassigned_markdown
+        enriched_global = _render_visual_items(enriched_global, unassigned_derived)
+
+    artifact_input = ParserArtifactInput(
+        native_markdown=native_markdown,
+        source_page_markdown=page_texts if mapping_complete else None,
+        enriched_page_markdown=enriched_pages if has_derived and mapping_complete else None,
+        enriched_document_markdown=enriched_global,
+        page_mapping_status="complete" if mapping_complete else "unavailable",
+        parser_page_elements=parser_page_elements,
+        parser_native_pages=parser_native_pages,
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="adapter_assembled_declared",
+        raw_origin_details="page_texts join",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
+    )
 
     artifact_result = finalize_artifacts(
         paths=paths,
@@ -1103,15 +1468,17 @@ def main() -> None:
         source_file=input_path.name,
         parser_name=PARSER_NAME,
         profile_name=args.profile,
-        page_texts=page_texts,
-        parser_page_elements=parser_page_elements,
-        parser_native_pages=parser_native_pages,
+        artifact_input=artifact_input,
         tokenizer_name=tokenizer_name,
         normalization_config=normalization_config,
         artifact_policy=artifact_policy,
     )
 
     resources = monitor.stop()
+
+    images_extracted_total = sum(
+        p.get("images_extracted", 0) for p in parser_native_pages
+    )
 
     metrics = _build_metrics(
         input_path=input_path,
@@ -1130,6 +1497,10 @@ def main() -> None:
         verbose=args.verbose,
         run_log_path=paths.run_log if artifact_policy.includes("run.log") else None,
         metrics_json_path=paths.metrics_json if artifact_policy.includes("metrics.json") else None,
+        ocr_agent_effective=partition_kwargs.get("ocr_agent"),
+        strategy_effective=strategy,
+        images_extracted_total=images_extracted_total,
+        unassigned_elements_count=len(unassigned_elements),
     )
 
     if artifact_policy.includes("metrics.json"):

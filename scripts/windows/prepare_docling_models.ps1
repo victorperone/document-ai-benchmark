@@ -42,6 +42,7 @@
 param(
     [string]$Python    = "",
     [string]$ModelRoot = "",
+    [ValidateSet('Prepare', 'Verify')][string]$Mode = 'Prepare',
     [switch]$Force,
     [switch]$ValidateOnly
 )
@@ -49,6 +50,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if ($ValidateOnly) { $Mode = 'Verify' }
+if ($Mode -eq 'Verify') { $ValidateOnly = $true }
 if ($Force -and $ValidateOnly) {
     throw (
         "[docling-models] -Force and -ValidateOnly are mutually exclusive. " +
@@ -75,7 +78,9 @@ $HfCache     = Join-Path $HfHome 'hub'
 $HfXet       = Join-Path $HfHome 'xet'
 $ManifestDir = Join-Path $Root 'models\docling\manifests'
 $ManifestPath = Join-Path $ManifestDir 'docling_models_manifest.json'
+$CommonManifestPath = Join-Path $ModelRoot 'manifest.json'
 $ValidateScript = Join-Path $Root 'scripts\validate_docling_models.py'
+$FixturePath = Join-Path $Root 'fixtures\deep_smoke\deep_smoke.pdf'
 
 # ============================================================
 # Phase 0 — prerequisites
@@ -175,7 +180,8 @@ $ManagedEnvironmentNames = @(
     'DO_NOT_TRACK',
     'SCARF_NO_ANALYTICS',
     'BENCHMARK_DOCLING_MODEL_ROOT',
-    'BENCHMARK_DOCLING_MANIFEST'
+    'BENCHMARK_DOCLING_MANIFEST',
+    'BENCHMARK_DEEP_SMOKE_FIXTURE'
 )
 
 $OriginalEnvironment = @{}
@@ -195,10 +201,16 @@ try {
     $env:BENCHMARK_DOCLING_MODEL_ROOT = $ModelRoot
     $env:BENCHMARK_DOCLING_MANIFEST   = $ManifestPath
 
-    New-Item -ItemType Directory -Force -Path $HfCache    | Out-Null
-    New-Item -ItemType Directory -Force -Path $HfXet      | Out-Null
-    New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $ModelRoot  | Out-Null
+    if (-not $ValidateOnly) {
+        New-Item -ItemType Directory -Force -Path $HfCache    | Out-Null
+        New-Item -ItemType Directory -Force -Path $HfXet      | Out-Null
+        New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
+        New-Item -ItemType Directory -Force -Path $ModelRoot  | Out-Null
+    } else {
+        Invoke-ModelManifest -Mode Verify -Python $Python -Component 'docling' `
+            -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+            -ManifestPath $CommonManifestPath
+    }
 
     if ($Force -and (Test-Path $ModelRoot)) {
         Write-Host "[docling-models] -Force: removing model root $ModelRoot"
@@ -209,10 +221,12 @@ try {
     # ============================================================
     # PHASE 1 - acquisition. Network may be available.
     # ============================================================
-    Remove-Item Env:HF_HUB_OFFLINE       -ErrorAction SilentlyContinue
-    Remove-Item Env:TRANSFORMERS_OFFLINE  -ErrorAction SilentlyContinue
+    if ($Mode -eq 'Prepare') {
+        Remove-Item Env:HF_HUB_OFFLINE       -ErrorAction SilentlyContinue
+        Remove-Item Env:TRANSFORMERS_OFFLINE  -ErrorAction SilentlyContinue
+    }
 
-    if (-not $ValidateOnly) {
+    if ($Mode -eq 'Prepare') {
         Write-Host ""
         Write-Host "[docling-models] PHASE 1 - acquisition" -ForegroundColor Cyan
 
@@ -299,6 +313,34 @@ print("DOCLING MODEL ACQUISITION: PASS")
             )
     }
 
+    # A pipeline initialization is insufficient for certification: convert the
+    # deterministic fixture and require real Markdown while sockets are blocked
+    # by validate_docling_models.py's offline policy/environment.
+    $env:BENCHMARK_DEEP_SMOKE_FIXTURE = $FixturePath
+    $Inference = @'
+from pathlib import Path
+import os,socket
+def blocked(*args,**kwargs): raise RuntimeError("network attempted during Docling Verify")
+class BlockedSocket(socket.socket):
+    def connect(self,*args,**kwargs): return blocked(*args,**kwargs)
+    def connect_ex(self,*args,**kwargs): return blocked(*args,**kwargs)
+socket.create_connection=blocked
+socket.socket=BlockedSocket
+from docling.datamodel.base_models import InputFormat
+from docling.document_converter import DocumentConverter,PdfFormatOption
+from src.benchmark.config import get_profile
+from src.parsers.docling_v2 import _build_pipeline_options,_resolve_profile_runtime
+root=Path(os.environ["BENCHMARK_DOCLING_MODEL_ROOT"]).resolve()
+fixture=Path(os.environ["BENCHMARK_DEEP_SMOKE_FIXTURE"]).resolve()
+profile=_resolve_profile_runtime(get_profile("docling","full_cpu_local"),model_artifacts_override=root)
+converter=DocumentConverter(allowed_formats=[InputFormat.PDF],format_options={InputFormat.PDF:PdfFormatOption(pipeline_options=_build_pipeline_options(profile))})
+result=converter.convert(str(fixture))
+markdown=str(result.document.export_to_markdown(blocked_meta_names={"description"}) or "")
+if not markdown.strip(): raise RuntimeError("Docling fixture inference produced empty Markdown")
+print("DOCLING_MODEL_INFERENCE=PASS")
+'@
+    Invoke-PythonScriptChecked -Python $Python -ScriptText $Inference
+
     # ============================================================
     # PHASE 3 - manifest verification.
     # ============================================================
@@ -315,6 +357,15 @@ print("DOCLING MODEL ACQUISITION: PASS")
             '--model-root', $ModelRoot,
             '--check-manifest'
         )
+
+    if ($Mode -eq 'Prepare') {
+        Invoke-ModelManifest -Mode Prepare -Python $Python -Component 'docling' `
+            -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+            -ManifestPath $CommonManifestPath
+    }
+    Invoke-ModelManifest -Mode Verify -Python $Python -Component 'docling' `
+        -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+        -ManifestPath $CommonManifestPath
 
     Write-Host ""
     Write-Host (

@@ -136,6 +136,22 @@ class LiteParseRotationTests(unittest.TestCase):
         self.assertEqual(result_bytes, original)
         self.assertEqual(applied, 0)
 
+    def test_osd_failure_is_raised_when_profile_requires_it(self) -> None:
+        original = _make_png_bytes()
+
+        with patch.dict("sys.modules", {"pytesseract": MagicMock()}):
+            import pytesseract as _pt
+
+            _pt.image_to_osd.side_effect = RuntimeError("OSD engine failed")
+            _pt.Output = MagicMock()
+            _pt.Output.DICT = "dict"
+
+            with self.assertRaisesRegex(RuntimeError, "OSD engine failed"):
+                liteparse_v2._detect_and_correct_orientation(
+                    original,
+                    failure_fatal=True,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

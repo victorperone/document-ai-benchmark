@@ -26,6 +26,7 @@ from src.benchmark.preflight import validate_result  # noqa: E402
 from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError  # noqa: E402
 from src.benchmark.paths import build_output_paths  # noqa: E402
 from src.benchmark.post_validation import validate_post_execution, validate_resume_candidate  # noqa: E402
+from src.benchmark.process_tree import run_process_tree  # noqa: E402
 from src.benchmark.execution_paths import (  # noqa: E402
     RUNTIME_DOCKER,
     RUNTIME_HOST,
@@ -205,6 +206,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip post-run summary scripts.",
     )
+    p.add_argument(
+        "--job-timeout-seconds",
+        type=parse_positive_int,
+        default=3600,
+        help="Maximum host job duration before its process tree is terminated (default: 3600).",
+    )
+    p.add_argument(
+        "--verbose-output",
+        action="store_true",
+        help="Stream verbose diagnostics from parser adapters.",
+    )
 
     args = p.parse_args()
 
@@ -334,7 +346,10 @@ def build_source_inventories(
                 "--only", doc.name,
             ]
             env = _build_host_environment("pymupdf")
-            code = subprocess.run(cmd, cwd=str(ROOT), env=env).returncode
+            result = run_process_tree(
+                cmd, cwd=ROOT, env=env, timeout=3600, capture_output=False
+            )
+            code = result.returncode
         else:
             container_input_dir = _to_container_input_dir(input_dir)
             container_inventory_dir = to_container_output_root(output_root) + "/_source_inventory"
@@ -462,6 +477,8 @@ def execute_plan(
     output_root: Path,
     artifact_policy: ArtifactPolicy,
     runtime: str = RUNTIME_DOCKER,
+    job_timeout_seconds: int = 3600,
+    verbose_output: bool = False,
 ) -> None:
     total = len(plan)
     current_doc: Path | None = None
@@ -476,11 +493,14 @@ def execute_plan(
             _append_result(results_path, rec)
             continue
 
+        clean_job_output(output_root, rec)
         log(f"  [START]  {rec.parser}/{rec.profile}")
         t0 = time.monotonic()
         rec.exit_code = _run_subprocess(
             compose_base, rec.parser, rec.doc, rec.profile, container_output_root, artifacts,
             runtime=runtime, output_root=output_root,
+            timeout_seconds=job_timeout_seconds,
+            verbose_output=verbose_output,
         )
         rec.elapsed = time.monotonic() - t0
 
@@ -520,6 +540,22 @@ def execute_plan(
                 remaining.status = "aborted"
                 _append_result(results_path, remaining)
             return
+
+
+def clean_job_output(output_root: Path, rec: JobRecord) -> None:
+    """Remove exactly one pending job leaf so stale assets cannot survive."""
+    root = output_root.resolve()
+    leaf = (output_root / rec.parser / rec.doc.stem / rec.profile).resolve()
+    try:
+        leaf.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"job output escapes output root: {leaf}") from exc
+    if leaf == root or len(leaf.parts) <= len(root.parts) + 2:
+        raise ValueError(f"refusing to clean non-leaf output path: {leaf}")
+    if leaf.exists():
+        if not leaf.is_dir():
+            raise ValueError(f"job output leaf is not a directory: {leaf}")
+        shutil.rmtree(leaf)
 
 
 def _append_result(results_path: Path, rec: JobRecord) -> None:
@@ -638,13 +674,18 @@ def _run_host_subprocess(
     parser_name: str,
     cmd: list[str],
     extra_env: dict[str, str],
+    timeout_seconds: int = 3600,
 ) -> int:
     env = _build_host_environment(parser_name, extra_env)
-    return subprocess.run(
+    result = run_process_tree(
         cmd,
         cwd=str(ROOT),
         env=env,
-    ).returncode
+        timeout=timeout_seconds,
+    )
+    if result.timed_out:
+        print(f"Host job timed out after {timeout_seconds}s: {parser_name}", file=sys.stderr)
+    return result.returncode
 
 
 def _run_subprocess(
@@ -657,6 +698,8 @@ def _run_subprocess(
     *,
     runtime: str = RUNTIME_DOCKER,
     output_root: Path | None = None,
+    timeout_seconds: int = 3600,
+    verbose_output: bool = False,
 ) -> int:
     if runtime == RUNTIME_HOST:
         if output_root is None:
@@ -664,11 +707,17 @@ def _run_subprocess(
         cmd, extra_env = _build_host_command(
             parser_name, doc_path, output_root, profile_name, artifacts
         )
-        return _run_host_subprocess(parser_name, cmd, extra_env)
+        if verbose_output:
+            cmd.append("--verbose")
+        return _run_host_subprocess(
+            parser_name, cmd, extra_env, timeout_seconds=timeout_seconds
+        )
 
     cmd = _build_docker_command(
         compose_base, parser_name, doc_path, profile_name, container_output_root, artifacts
     )
+    if verbose_output:
+        cmd.append("--verbose")
     return subprocess.run(cmd, cwd=str(ROOT)).returncode
 
 
@@ -785,11 +834,11 @@ def run_parser_preflight(
             k: v.replace("{model_root}", str(model_root))
             for k, v in (spec.model_env if spec else {}).items()
         }
-        result = subprocess.run(
+        result = run_process_tree(
             cmd,
             cwd=str(ROOT),
+            timeout=300,
             capture_output=True,
-            text=True,
             encoding="utf-8",
             errors="replace",
             env=_build_host_environment(parser_name, extra_env),
@@ -1458,6 +1507,8 @@ def main() -> None:
             "continue_on_error": args.continue_on_error,
             "no_summary": args.no_summary,
             "limit": args.limit,
+            "job_timeout_seconds": args.job_timeout_seconds,
+            "verbose_output": args.verbose_output,
         },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -1489,6 +1540,8 @@ def main() -> None:
             output_root=output_root,
             artifact_policy=artifact_policy,
             runtime=runtime,
+            job_timeout_seconds=args.job_timeout_seconds,
+            verbose_output=args.verbose_output,
         )
         elapsed = time.monotonic() - batch_start
 

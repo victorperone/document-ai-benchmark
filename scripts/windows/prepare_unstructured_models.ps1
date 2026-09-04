@@ -22,6 +22,7 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet('Prepare', 'Verify')][string]$Mode = 'Prepare',
     [switch]$Force
 )
 
@@ -29,6 +30,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\_helpers.ps1"
+
+if ($Mode -eq 'Verify' -and $Force) {
+    throw '-Force is invalid with -Mode Verify.'
+}
 
 Assert-WindowsLongPathsEnabled
 
@@ -50,6 +55,8 @@ $SpacyRoot = Join-Path $ModelRoot 'spacy'
 $SpacyWheel = Join-Path $SpacyRoot 'en_core_web_sm-3.8.0-py3-none-any.whl'
 $ManifestDir = Join-Path $ModelRoot 'manifests'
 $ManifestPath = Join-Path $ManifestDir 'unstructured_models_manifest.json'
+$CommonManifestPath = Join-Path $ModelRoot 'manifest.json'
+$FixturePath = Join-Path $Root 'fixtures\deep_smoke\deep_smoke.pdf'
 
 if (-not (Test-Path $Python -PathType Leaf)) {
     throw (
@@ -67,9 +74,11 @@ if ($Force) {
         -Args @('-m', 'pip', 'uninstall', '--yes', 'en-core-web-sm')
 }
 
-New-Item -ItemType Directory -Force -Path $HfCache   | Out-Null
-New-Item -ItemType Directory -Force -Path $SpacyRoot  | Out-Null
-New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
+if ($Mode -eq 'Prepare') {
+    New-Item -ItemType Directory -Force -Path $HfCache   | Out-Null
+    New-Item -ItemType Directory -Force -Path $SpacyRoot  | Out-Null
+    New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
+}
 
 $ManagedEnvironmentNames = @(
     'HF_HOME',
@@ -84,7 +93,8 @@ $ManagedEnvironmentNames = @(
     'BENCHMARK_UNSTRUCTURED_MODEL_ROOT',
     'BENCHMARK_UNSTRUCTURED_SPACY_WHEEL',
     'BENCHMARK_UNSTRUCTURED_SPACY_URL',
-    'BENCHMARK_UNSTRUCTURED_MANIFEST'
+    'BENCHMARK_UNSTRUCTURED_MANIFEST',
+    'BENCHMARK_DEEP_SMOKE_FIXTURE'
 )
 
 $OriginalEnvironment = @{}
@@ -107,6 +117,37 @@ try {
     $env:BENCHMARK_UNSTRUCTURED_SPACY_WHEEL = $SpacyWheel
     $env:BENCHMARK_UNSTRUCTURED_SPACY_URL = $SpacyModelUrl
     $env:BENCHMARK_UNSTRUCTURED_MANIFEST = $ManifestPath
+
+    if ($Mode -eq 'Verify') {
+        $env:HF_HUB_OFFLINE = '1'
+        $env:TRANSFORMERS_OFFLINE = '1'
+        $env:BENCHMARK_DEEP_SMOKE_FIXTURE = $FixturePath
+        Invoke-ModelManifest -Mode Verify -Python $Python -Component 'unstructured' `
+            -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+            -ManifestPath $CommonManifestPath
+        $VerifyInference = @'
+import os,socket
+from pathlib import Path
+def blocked(*args,**kwargs): raise RuntimeError("network attempted during Unstructured Verify")
+class BlockedSocket(socket.socket):
+    def connect(self,*args,**kwargs): return blocked(*args,**kwargs)
+    def connect_ex(self,*args,**kwargs): return blocked(*args,**kwargs)
+socket.create_connection=blocked
+socket.socket=BlockedSocket
+from unstructured.partition.pdf import partition_pdf
+fixture=Path(os.environ["BENCHMARK_DEEP_SMOKE_FIXTURE"]).resolve()
+elements=partition_pdf(filename=str(fixture),strategy="hi_res",languages=["por","eng"],infer_table_structure=True,hi_res_model_name="yolox",ocr_agent="tesseract",table_ocr_agent="tesseract")
+if not elements or not any(str(getattr(item,"text","")).strip() for item in elements):
+    raise RuntimeError("Unstructured fixture inference produced no text")
+print("UNSTRUCTURED_MODEL_INFERENCE=PASS")
+'@
+        Invoke-PythonScriptChecked -Python $Python -ScriptText $VerifyInference
+        Invoke-ModelManifest -Mode Verify -Python $Python -Component 'unstructured' `
+            -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+            -ManifestPath $CommonManifestPath
+        Write-Host '[unstructured-models] Verify completed successfully.' -ForegroundColor Green
+        return
+    }
 
     # ============================================================
     # PHASE 1 - acquisition. Network may be available.
@@ -465,6 +506,13 @@ print("UNSTRUCTURED MODEL MANIFEST: PASS")
             $ManifestPath
         )
     }
+
+    Invoke-ModelManifest -Mode Prepare -Python $Python -Component 'unstructured' `
+        -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+        -ManifestPath $CommonManifestPath
+    Invoke-ModelManifest -Mode Verify -Python $Python -Component 'unstructured' `
+        -Version 'full_cpu_local' -ModelRoot $ModelRoot `
+        -ManifestPath $CommonManifestPath
 
     Write-Host ""
     Write-Host "[unstructured-models] Completed successfully." -ForegroundColor Green

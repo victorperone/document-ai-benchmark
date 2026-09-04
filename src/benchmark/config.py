@@ -36,9 +36,9 @@ def load_config(
         )
     )
 
-    if config.get("schema_version") != 2:
+    if config.get("schema_version") != 3:
         raise BenchmarkConfigurationError(
-            "Benchmark schema version 2 is required."
+            "Benchmark schema version 3 is required."
         )
 
     return config

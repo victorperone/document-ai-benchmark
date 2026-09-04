@@ -1,28 +1,34 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from src.benchmark.artifact_policy import ArtifactPolicy
+from src.benchmark.content_validation import inventory_requires_content
 from src.benchmark.paths import build_output_paths
 
 SCHEMA_VERSION = 1
-METRICS_SCHEMA_VERSION = 2
+METRICS_SCHEMA_VERSION = 3
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 _ARTIFACT_PATH_ATTR: dict[str, str] = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "metrics.json": "metrics_json",
     "removed_content.jsonl": "removed_content_jsonl",
     "run.log": "run_log",
+    "native": "native_dir",
 }
 
-_TEXT_READABLE: frozenset[str] = frozenset({"raw.md", "document.md", "run.log"})
+_TEXT_READABLE: frozenset[str] = frozenset({"raw.md", "document.md", "document.enriched.md", "run.log"})
 
 _ARTIFACT_OUTPUT_KEY: dict[str, str] = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "removed_content.jsonl": "removed_content_jsonl",
     "run.log": "run_log",
@@ -32,6 +38,7 @@ _ARTIFACT_OUTPUT_KEY: dict[str, str] = {
 _ARTIFACT_BYTES_KEY: dict[str, str] = {
     "raw.md": "raw_markdown_bytes",
     "document.md": "clean_markdown_bytes",
+    "document.enriched.md": "enriched_markdown_bytes",
     "document.jsonl": "document_jsonl_bytes",
     "removed_content.jsonl": "removed_content_jsonl_bytes",
 }
@@ -62,6 +69,16 @@ def make_result(
     }
 
 
+def _has_meaningful_text(content: str) -> bool:
+    return any(character.isalnum() for character in _HTML_COMMENT_RE.sub("", content))
+
+
+def _inventory_content_expectation(inventory: dict | None) -> bool:
+    if not inventory:
+        return False
+    return inventory_requires_content(inventory)[0]
+
+
 def validate_post_execution(
     *,
     output_root: Path,
@@ -77,10 +94,16 @@ def validate_post_execution(
     doc_name = document_path.name
 
     source_pages: int | None = None
+    source_inventory: dict | None = None
     if source_inventory_path is not None:
-        source_pages = _check_source_inventory(
+        source_pages, source_inventory = _check_source_inventory(
             source_inventory_path, doc_name, expected_sha256, checks
         )
+
+    # §3.1: inventory is authoritative — derive content_expected from it when available
+    inventory_content_expected: bool | None = None
+    if source_inventory is not None:
+        inventory_content_expected = _inventory_content_expectation(source_inventory)
 
     metrics: dict | None = None
     if artifact_policy.includes("metrics.json"):
@@ -89,18 +112,83 @@ def validate_post_execution(
             expected_sha256, artifact_policy, source_pages, paths, checks,
         )
 
+    # §3.1: if inventory requires content, metrics must not claim content_expected=False
+    if metrics is not None and inventory_content_expected is True:
+        cv = metrics.get("content_validation") or {}
+        for md_artifact in ("raw.md", "document.md", "document.enriched.md"):
+            if not artifact_policy.includes(md_artifact):
+                continue
+            entry = cv.get(md_artifact, {})
+            metrics_ce = entry.get("content_expected")
+            if not bool(metrics_ce):
+                checks.append(make_check(
+                    f"inventory vs metrics content_expected ({md_artifact})",
+                    "fail",
+                    f"inventory requires content but metrics content_validation."
+                    f"{md_artifact}.content_expected={metrics_ce!r}",
+                ))
+
     for artifact in artifact_policy.as_list():
         if artifact == "metrics.json":
             continue
         artifact_path = getattr(paths, _ARTIFACT_PATH_ATTR[artifact])
         check_name = f"artifact {artifact}"
+        if artifact == "native":
+            checks.extend(_validate_native_dir(artifact_path, check_name, parser=parser, profile=profile))
+            continue
+        if artifact == "document.jsonl":
+            jsonl_block = (
+                (metrics.get("artifacts") or {}).get("document_jsonl", {})
+                if metrics else {}
+            )
+            jsonl_present = jsonl_block.get("present", True)  # conservative if no metrics
+            if not jsonl_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
         if not artifact_path.exists() or not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
         if artifact in _TEXT_READABLE:
             try:
-                artifact_path.read_text(encoding="utf-8")
-                checks.append(make_check(check_name, "pass"))
+                content = artifact_path.read_text(encoding="utf-8")
+                if artifact == "raw.md" and "<!-- derived:start" in content:
+                    checks.append(make_check(check_name, "fail",
+                        "raw.md contains derived:start marker — contamination detected"))
+                else:
+                    content_entry = (
+                        (metrics.get("content_validation") or {}).get(artifact, {})
+                        if metrics else {}
+                    )
+                    # §3.1: inventory is authoritative; fall back to metrics, then False
+                    if artifact in {
+                        "raw.md",
+                        "document.md",
+                        "document.enriched.md",
+                    }:
+                        if inventory_content_expected is not None:
+                            expected = inventory_content_expected
+                        else:
+                            expected = bool(
+                                content_entry.get(
+                                    "content_expected",
+                                    False,
+                                )
+                            )
+                    else:
+                        expected = bool(
+                            content_entry.get(
+                                "content_expected",
+                                False,
+                            )
+                        )
+                    if expected and not _has_meaningful_text(content):
+                        checks.append(make_check(
+                            check_name,
+                            "fail",
+                            "content expected but artifact is empty, comment-only, or separator-only",
+                        ))
+                    else:
+                        checks.append(make_check(check_name, "pass"))
             except (OSError, UnicodeDecodeError) as exc:
                 checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
         elif artifact == "document.jsonl":
@@ -125,6 +213,47 @@ def validate_resume_candidate(
     checks: list[dict] = []
     paths = build_output_paths(output_root, parser, document_path.stem, profile, create=False)
     doc_name = document_path.name
+
+    # §3.2: load and validate source inventory before approving resume
+    inv_path = output_root / "_source_inventory" / f"{document_path.stem}.json"
+    source_inventory: dict | None = None
+    if not inv_path.is_file():
+        checks.append(make_check(
+            "source inventory",
+            "fail",
+            f"not found: {inv_path} — output must not be reused without a valid inventory",
+        ))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    try:
+        source_inventory = json.loads(inv_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        checks.append(make_check("source inventory", "fail", f"unreadable: {exc}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    if source_inventory.get("file") != doc_name:
+        checks.append(make_check("source inventory", "fail",
+            f"file mismatch: expected {doc_name!r}, got {source_inventory.get('file')!r}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    if source_inventory.get("sha256") != expected_sha256:
+        checks.append(make_check("source inventory", "fail",
+            "sha256 mismatch — inventory was built from a different file version"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    inv_pages = source_inventory.get("pages")
+    if not isinstance(inv_pages, int) or inv_pages <= 0:
+        checks.append(make_check("source inventory", "fail",
+            f"pages must be a positive integer, got {inv_pages!r}"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    inv_complete = bool(source_inventory.get("measurement_complete", False))
+    if not inv_complete:
+        checks.append(make_check("source inventory", "fail",
+            "measurement_complete=false — inventory is incomplete; output must not be reused"))
+        return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    checks.append(make_check("source inventory", "pass"))
 
     if not paths.metrics_json.is_file():
         checks.append(make_check("metrics.json", "fail", "file not found — cannot verify provenance"))
@@ -177,6 +306,25 @@ def validate_resume_candidate(
             f"saved {sorted(saved_sel)} doesn't cover requested {sorted(requested_sel)}: missing {missing}"))
         return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
 
+    # §3.2: if inventory requires content, saved metrics must not say content_expected=False
+    if source_inventory is not None:
+        inventory_ce = _inventory_content_expectation(source_inventory)
+        if inventory_ce:
+            cv_block = metrics.get("content_validation") or {}
+            for md_artifact in ("raw.md", "document.md", "document.enriched.md"):
+                if not requested_artifacts.includes(md_artifact):
+                    continue
+                entry = cv_block.get(md_artifact, {})
+                metrics_ce = entry.get("content_expected")
+                if not bool(metrics_ce):
+                    checks.append(make_check(
+                        f"inventory vs metrics content_expected ({md_artifact})",
+                        "fail",
+                        f"inventory requires content but saved metrics says "
+                        f"content_expected={metrics_ce!r} — output must be regenerated",
+                    ))
+                    return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
     out_block = metrics.get("output", {})
     expected_pages = doc_block.get("pages")
     for artifact in requested_artifacts.as_list():
@@ -185,6 +333,16 @@ def validate_resume_candidate(
         if path_attr is None:
             continue
         artifact_path = getattr(paths, path_attr)
+        if artifact == "native":
+            checks.extend(_validate_native_dir(artifact_path, check_name, parser=parser, profile=profile))
+            continue
+        if artifact == "document.jsonl":
+            jsonl_present = (
+                metrics.get("artifacts", {}).get("document_jsonl", {}).get("present", True)
+            )
+            if not jsonl_present:
+                checks.append(make_check(check_name, "pass"))
+                continue
         if not artifact_path.is_file():
             checks.append(make_check(check_name, "fail", "file not found"))
             continue
@@ -207,6 +365,21 @@ def validate_resume_candidate(
             except (OSError, UnicodeDecodeError) as exc:
                 checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
                 continue
+        content_entry = (metrics.get("content_validation") or {}).get(artifact, {})
+        registered_sha = content_entry.get("sha256")
+        if registered_sha:
+            import hashlib as _hashlib
+            actual_sha = _hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+            if actual_sha != registered_sha:
+                checks.append(make_check(
+                    check_name, "fail", "sha256 mismatch against content_validation"
+                ))
+                continue
+        if content_entry.get("valid") is False:
+            checks.append(make_check(
+                check_name, "fail", "saved content_validation marks artifact invalid"
+            ))
+            continue
         checks.append(make_check(check_name, "pass"))
 
     return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
@@ -217,30 +390,170 @@ def _check_source_inventory(
     doc_name: str,
     expected_sha256: str,
     checks: list[dict],
-) -> int | None:
+) -> tuple[int | None, dict | None]:
     check_name = "source inventory"
     if not inv_path.is_file():
         checks.append(make_check(check_name, "fail", "file not found"))
-        return None
+        return None, None
     try:
         inv = json.loads(inv_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
-        return None
+        return None, None
     if inv.get("file") != doc_name:
         checks.append(make_check(check_name, "fail",
             f"file mismatch: expected {doc_name!r}, got {inv.get('file')!r}"))
-        return None
+        return None, inv
     if inv.get("sha256") != expected_sha256:
         checks.append(make_check(check_name, "fail", "sha256 mismatch"))
-        return None
+        return None, inv
     pages = inv.get("pages")
     if not isinstance(pages, int) or pages <= 0:
         checks.append(make_check(check_name, "fail",
             f"pages must be a positive integer, got {pages!r}"))
-        return None
+        return None, inv
+    if not bool(inv.get("measurement_complete", False)):
+        checks.append(make_check(check_name, "fail",
+            "measurement_complete is not True — inventory is incomplete"))
+        return None, inv
     checks.append(make_check(check_name, "pass"))
-    return pages
+    return pages, inv
+
+
+_VALID_BUNDLE_STATUS = frozenset({"unavailable", "available"})
+
+
+def _validate_native_dir(
+    artifact_path: Path,
+    check_name: str,
+    *,
+    parser: str,
+    profile: str,
+) -> list[dict]:
+    checks: list[dict] = []
+    if not artifact_path.is_dir():
+        checks.append(make_check(check_name, "fail", "directory not found"))
+        return checks
+
+    manifest_path = artifact_path / "manifest.json"
+    if not manifest_path.is_file():
+        checks.append(make_check(check_name, "fail", "manifest.json not found"))
+        return checks
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        checks.append(make_check(check_name, "fail", f"manifest.json unreadable: {exc}"))
+        return checks
+
+    # schema_version must be exactly 1
+    schema_ver = manifest.get("schema_version")
+    if schema_ver != 1:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: schema_version must be 1, got {schema_ver!r}"))
+        return checks
+
+    bundle_status = manifest.get("bundle_status")
+    if bundle_status not in _VALID_BUNDLE_STATUS:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: bundle_status must be one of {sorted(_VALID_BUNDLE_STATUS)}, "
+            f"got {bundle_status!r}"))
+        return checks
+
+    if not isinstance(manifest.get("files"), list):
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: files must be list"))
+        return checks
+
+    # unavailable → files must be empty
+    if bundle_status == "unavailable" and manifest["files"]:
+        checks.append(make_check(check_name, "fail",
+            "manifest.json: bundle_status=unavailable requires files=[]"))
+        return checks
+
+    # parser and profile must match the job
+    manifest_parser = manifest.get("parser")
+    if manifest_parser is not None and manifest_parser != parser:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: parser mismatch: expected {parser!r}, got {manifest_parser!r}"))
+        return checks
+
+    manifest_profile = manifest.get("profile")
+    if manifest_profile is not None and manifest_profile != profile:
+        checks.append(make_check(check_name, "fail",
+            f"manifest.json: profile mismatch: expected {profile!r}, got {manifest_profile!r}"))
+        return checks
+
+    native_root = artifact_path.resolve()
+    declared_paths: set[str] = set()
+    for i, entry in enumerate(manifest["files"]):
+        if not isinstance(entry, dict):
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: not a dict"))
+            return checks
+        rel = entry.get("path", "")
+        rel_path = Path(rel) if rel else None
+        if not rel or (rel_path is not None and rel_path.is_absolute()):
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: path must be non-empty relative"))
+            return checks
+        candidate = (artifact_path / rel).resolve()
+        if candidate == native_root or native_root not in candidate.parents:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: path escapes native/: {rel!r}"))
+            return checks
+        if not candidate.is_file():
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: declared file missing: {rel!r}"))
+            return checks
+        normalized_relative = candidate.relative_to(native_root).as_posix()
+        if normalized_relative in declared_paths:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: duplicate path: {rel!r}"))
+            return checks
+        declared_paths.add(normalized_relative)
+        declared_size = entry.get("size_bytes")
+        if not isinstance(declared_size, int) or declared_size < 0:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: size_bytes must be a non-negative integer"))
+            return checks
+        if candidate.stat().st_size != declared_size:
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: size mismatch for {rel!r}"))
+            return checks
+        declared_sha256 = entry.get("sha256")
+        if not isinstance(declared_sha256, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", declared_sha256
+        ):
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: sha256 must contain 64 hexadecimal characters"))
+            return checks
+        import hashlib as _hashlib
+        actual = _hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if actual != declared_sha256.lower():
+            checks.append(make_check(check_name, "fail",
+                f"manifest.json files[{i}]: sha256 mismatch for {rel!r}"))
+            return checks
+
+    actual_paths: set[str] = set()
+    for path in artifact_path.rglob("*"):
+        if not path.is_file() or path.resolve() == manifest_path.resolve():
+            continue
+        try:
+            relative = path.resolve().relative_to(native_root).as_posix()
+        except ValueError:
+            checks.append(make_check(check_name, "fail",
+                f"native bundle contains a file that resolves outside native/: {path}"))
+            return checks
+        actual_paths.add(relative)
+    unexpected = sorted(actual_paths - declared_paths)
+    if unexpected:
+        checks.append(make_check(check_name, "fail",
+            f"native bundle contains unlisted files: {unexpected[:10]}"))
+        return checks
+
+    checks.append(make_check(check_name, "pass"))
+    return checks
 
 
 def _load_and_check_metrics(
@@ -267,6 +580,75 @@ def _load_and_check_metrics(
     for block in ("benchmark", "run", "document", "processing", "output"):
         if block not in metrics:
             checks.append(make_check(f"metrics {block} block", "fail", "missing"))
+
+    # Schema 3 requires artifacts, quality_eligibility, and content validation.
+    artifacts_block = metrics.get("artifacts")
+    if not isinstance(artifacts_block, dict):
+        checks.append(make_check("metrics artifacts block", "fail",
+            "missing or not a dict (required in schema v3)"))
+    else:
+        for sub in ("raw", "clean", "enriched"):
+            if not isinstance(artifacts_block.get(sub), dict):
+                checks.append(make_check(f"metrics artifacts.{sub}", "fail",
+                    "missing or not a dict"))
+        # coherence: selected enriched output is always materialized, even when
+        # it is a documented fallback to document.md/native Markdown.
+        enriched_sub = artifacts_block.get("enriched") or {}
+        enriched_present = enriched_sub.get("present")
+        out_block_pre = metrics.get("output", {})
+        enriched_output_path = out_block_pre.get("enriched_markdown")
+        if enriched_present is True and enriched_output_path is None:
+            checks.append(make_check("metrics artifacts.enriched coherence", "fail",
+                "artifacts.enriched.present=true but output.enriched_markdown=null"))
+        elif enriched_present is False and enriched_output_path is not None:
+            checks.append(make_check("metrics artifacts.enriched coherence", "fail",
+                "artifacts.enriched.present=false but output.enriched_markdown is set"))
+        if artifact_policy.includes("document.enriched.md") and enriched_present is not True:
+            checks.append(make_check(
+                "metrics artifacts.enriched present",
+                "fail",
+                "selected document.enriched.md must always be present",
+            ))
+
+    content_validation = metrics.get("content_validation")
+    if not isinstance(content_validation, dict):
+        checks.append(make_check(
+            "metrics content_validation block", "fail", "missing or not a dict"
+        ))
+    else:
+        for artifact in artifact_policy.as_list():
+            if artifact not in _ARTIFACT_BYTES_KEY:
+                continue
+            entry = content_validation.get(artifact)
+            if not isinstance(entry, dict):
+                checks.append(make_check(
+                    f"metrics content_validation.{artifact}", "fail", "missing or not a dict"
+                ))
+                continue
+            for field in (
+                "exists", "utf8_valid", "bytes", "has_alphanumeric",
+                "content_expected", "expectation_reason", "valid",
+            ):
+                if field not in entry:
+                    checks.append(make_check(
+                        f"metrics content_validation.{artifact}.{field}", "fail", "missing"
+                    ))
+            if entry.get("valid") is False:
+                checks.append(make_check(
+                    f"metrics content_validation.{artifact}",
+                    "fail",
+                    "artifact content does not satisfy its declared expectation",
+                ))
+
+    quality_block = metrics.get("quality_eligibility")
+    if not isinstance(quality_block, dict):
+        checks.append(make_check("metrics quality_eligibility block", "fail",
+            "missing or not a dict (required in schema v3)"))
+    else:
+        for field in ("source_text", "page_mapping_complete", "formal_quality_eligible"):
+            if field not in quality_block:
+                checks.append(make_check(f"metrics quality_eligibility.{field}", "fail",
+                    "missing"))
 
     bm = metrics.get("benchmark", {})
     if bm.get("schema_version") != METRICS_SCHEMA_VERSION:
@@ -322,6 +704,12 @@ def _load_and_check_metrics(
                 checks.append(make_check(f"metrics output.{out_key}", "warn",
                     "field set for artifact not in selection"))
         else:
+            if artifact == "document.jsonl":
+                jsonl_present = (
+                    metrics.get("artifacts", {}).get("document_jsonl", {}).get("present", True)
+                )
+                if not jsonl_present:
+                    continue
             val = out_block.get(out_key)
             if not isinstance(val, str) or not val:
                 checks.append(make_check(f"metrics output.{out_key}", "fail",

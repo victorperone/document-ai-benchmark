@@ -7,7 +7,6 @@ from time import perf_counter
 import json
 import shutil
 import os
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from importlib import metadata
@@ -17,6 +16,7 @@ from collections import Counter
 from typing import Any
 
 from src.benchmark.artifact_policy import ArtifactPolicy
+from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
 from src.benchmark.artifacts import finalize_artifacts
 from src.benchmark.config import (
     get_normalization_config,
@@ -28,6 +28,9 @@ from src.benchmark.metrics_writer import write_json
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.resource_monitor import ResourceMonitor
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.native_bundle import copy_native_bundle, prefix_local_markdown_links
+from src.benchmark.process_tree import run_process_tree
 
 
 PARSER_NAME = "mineru"
@@ -452,12 +455,26 @@ def main() -> None:
     try:
         extraction_started = perf_counter()
 
+        table_merge_enabled = bool(
+            profile.get("table_merge", True)
+        )
+
+        persist_native = args.artifact_policy.includes("native")
+
         native_result = run_mineru_native(
             input_path=input_path,
             method=method,
             backend=backend,
+            formula_enabled=formula_enabled,
+            table_enabled=table_enabled,
+            table_merge_enabled=table_merge_enabled,
             threads=args.threads,
             verbose=args.verbose,
+            native_bundle_destination=(
+                paths.native_dir if persist_native else None
+            ),
+            parser_name=PARSER_NAME,
+            profile_name=args.profile,
         )
 
         extraction_seconds = (
@@ -485,19 +502,28 @@ def main() -> None:
             page_count,
         )
 
+        artifact_input = ParserArtifactInput(
+            native_markdown=native_result["native_markdown"],
+            source_page_markdown=page_texts,
+            enriched_page_markdown=None,
+            page_mapping_status="complete",
+            parser_page_elements=parser_page_elements,
+            parser_native_pages=parser_native_pages,
+            derived_content_by_page=[[] for _ in page_texts],
+            enriched_document_markdown=native_result["native_markdown"],
+            raw_origin_kind=native_result["raw_origin_kind"],
+            raw_origin_details=native_result["raw_origin_details"],
+            content_expected=inventory_requires_content(inventory)[0],
+            content_expectation_reason=inventory_requires_content(inventory)[1],
+        )
+
         artifact_result = finalize_artifacts(
             paths=paths,
             document_id=input_path.stem,
             source_file=input_path.name,
             parser_name=PARSER_NAME,
             profile_name=args.profile,
-            page_texts=page_texts,
-            parser_page_elements=(
-                parser_page_elements
-            ),
-            parser_native_pages=(
-                parser_native_pages
-            ),
+            artifact_input=artifact_input,
             tokenizer_name=tokenizer_name,
             normalization_config=(
                 normalization_config
@@ -734,12 +760,13 @@ def main() -> None:
     ] = table_enabled
 
     resolved_config[
+        "table_merge"
+    ] = table_merge_enabled
+
+    resolved_config[
         "threads"
     ] = args.threads
 
-    # formula and table are always active in pipeline backend (no CLI flags
-    # to disable them in MinerU 3.4.4); capability_exceptions = [] confirms
-    # both are effectively enabled when their profile keys are True.
     resolved_config[
         "capability_exceptions"
     ] = []
@@ -788,7 +815,7 @@ def main() -> None:
 
     metrics = {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": (
                 datetime.now(
                     timezone.utc
@@ -1014,6 +1041,11 @@ def main() -> None:
             ]
         ),
 
+        "artifacts": artifact_result["artifacts"],
+
+        "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
+
         "output": (
             output_metrics
         ),
@@ -1023,6 +1055,10 @@ def main() -> None:
             "method": method,
             "formula_enabled": formula_enabled,
             "table_enabled": table_enabled,
+            "table_merge_enabled": table_merge_enabled,
+            "native_bundle_valid": (
+                native_result.get("native_bundle_manifest") is not None
+            ),
             "native_content_items": (
                 len(
                     content_list
@@ -1037,7 +1073,7 @@ def main() -> None:
                 )
             ),
             "intermediate_assets_persisted": (
-                False
+                native_result.get("native_bundle_manifest") is not None
             ),
         },
     }
@@ -1146,6 +1182,16 @@ def render_mineru_item(
         return str(
             item.get("text", "")
         ).strip()
+
+    if item_type == "image":
+        blocks: list[str] = []
+        blocks.extend(
+            _text_list(item.get("img_caption"))
+        )
+        blocks.extend(
+            _text_list(item.get("img_footnote"))
+        )
+        return "\n\n".join(blocks)
 
     if item_type == "code":
         blocks: list[str] = []
@@ -1366,13 +1412,88 @@ def get_mineru_page_count(
     )
 
 
+def _copy_mineru_bundle(
+    *,
+    native_root: Path,
+    document_id: str,
+    markdown_path: Path,
+    content_list_path: Path,
+    middle_path: Path,
+    destination: Path,
+    parser_name: str,
+    profile_name: str,
+) -> dict[str, Any]:
+    """Create a fresh self-contained MinerU bundle with safe relocated links."""
+    result = copy_native_bundle(
+        source_root=native_root,
+        source_markdown_path=markdown_path,
+        destination=destination,
+        parser=parser_name,
+        profile=profile_name,
+        extra_files=[content_list_path, middle_path],
+    )
+    return result.manifest
+
+
+import re as _re
+
+_MD_IMAGE_RE = _re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
+
+
+def _validate_mineru_markdown_links(
+    markdown_path: Path,
+    bundle_root: Path,
+    document_id: str,
+) -> None:
+    """Verify that all relative image links in the MinerU markdown exist in the bundle.
+
+    Raises RuntimeError if any declared local asset is missing after bundle copy.
+    Ignores http/https/data URIs.
+    """
+    try:
+        content = markdown_path.read_text(encoding="utf-8")
+    except Exception:
+        return
+
+    bundle_root_resolved = bundle_root.resolve()
+    missing: list[str] = []
+
+    for match in _MD_IMAGE_RE.finditer(content):
+        href = match.group(1).strip()
+        if href.startswith(("http://", "https://", "data:", "#")):
+            continue
+        # Resolve relative to bundle root (MinerU links are relative to the .md file)
+        candidate = (bundle_root / href).resolve()
+        try:
+            candidate.relative_to(bundle_root_resolved)
+        except ValueError:
+            missing.append(href)
+            continue
+        if not candidate.is_file():
+            missing.append(href)
+
+    if missing:
+        raise RuntimeError(
+            f"MinerU native bundle is incomplete — {len(missing)} image link(s) "
+            f"declared in {document_id}.md are missing from native/: "
+            + ", ".join(missing[:5])
+        )
+
+
 def run_mineru_native(
     *,
     input_path: Path,
     method: str,
     backend: str = "pipeline",
+    formula_enabled: bool = True,
+    table_enabled: bool = True,
+    table_merge_enabled: bool = True,
     threads: int | None,
     verbose: bool,
+    native_bundle_destination: Path | None = None,
+    parser_name: str = "mineru",
+    profile_name: str = "",
+    timeout_seconds: int = 3600,
 ) -> dict[str, Any]:
     if method not in {
         "txt",
@@ -1384,6 +1505,16 @@ def run_mineru_native(
         )
 
     environment = os.environ.copy()
+
+    environment["MINERU_FORMULA_ENABLE"] = (
+        "true" if formula_enabled else "false"
+    )
+    environment["MINERU_TABLE_ENABLE"] = (
+        "true" if table_enabled else "false"
+    )
+    environment["MINERU_TABLE_MERGE_ENABLE"] = (
+        "true" if table_merge_enabled else "false"
+    )
 
     if threads is not None:
         thread_value = str(threads)
@@ -1417,20 +1548,26 @@ def run_mineru_native(
             backend,
             "-m",
             method,
+            "--formula",
+            str(formula_enabled).lower(),
+            "--table",
+            str(table_enabled).lower(),
         ]
 
-        process = subprocess.run(
+        process = run_process_tree(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
             env=environment,
-            text=True,
-            check=False,
+            timeout=timeout_seconds,
+            capture_output=True,
         )
 
-        log_text = (
-            process.stdout or ""
-        )
+        log_text = "\n".join(part for part in (process.stdout, process.stderr) if part)
+
+        if process.timed_out:
+            raise RuntimeError(
+                f"MinerU exceeded {timeout_seconds}s; its process tree was terminated.\n"
+                + "\n".join(log_text.splitlines()[-80:])
+            )
 
         if verbose and log_text:
             print(
@@ -1472,12 +1609,16 @@ def run_mineru_native(
             f"{document_id}_middle.json",
         )
 
-        native_markdown = (
-            markdown_path.read_text(
-                encoding="utf-8",
-                errors="replace",
+        try:
+            native_markdown = (
+                markdown_path.read_text(
+                    encoding="utf-8",
+                )
             )
-        )
+        except UnicodeDecodeError as _ude:
+            raise RuntimeError(
+                f"MinerU produced a non-UTF-8 markdown file: {_ude}"
+            ) from _ude
 
         content_list = json.loads(
             content_list_path.read_text(
@@ -1509,6 +1650,31 @@ def run_mineru_native(
                 "be a dictionary."
             )
 
+        native_bundle_manifest: dict[str, Any] | None = None
+        if native_bundle_destination is not None:
+            native_bundle_manifest = _copy_mineru_bundle(
+                native_root=native_root,
+                document_id=document_id,
+                markdown_path=markdown_path,
+                content_list_path=content_list_path,
+                middle_path=middle_path,
+                destination=native_bundle_destination,
+                parser_name=parser_name,
+                profile_name=profile_name,
+            )
+            relocated_markdown = (
+                native_bundle_destination / markdown_path.name
+            ).read_text(encoding="utf-8")
+            native_markdown = prefix_local_markdown_links(
+                relocated_markdown, "native"
+            )
+
+        origin_kind = (
+            "parser_native_links_relocated"
+            if native_markdown != markdown_path.read_text(encoding="utf-8")
+            else "parser_native_exact"
+        )
+
         return {
             "command": command,
             "returncode": (
@@ -1522,6 +1688,13 @@ def run_mineru_native(
             ),
             "middle": middle,
             "log_text": log_text,
+            "native_bundle_manifest": native_bundle_manifest,
+            "raw_origin_kind": origin_kind,
+            "raw_origin_details": (
+                f"{document_id}.md with only local asset links relocated into native/assets"
+                if origin_kind == "parser_native_links_relocated"
+                else f"{document_id}.md"
+            ),
         }
 
 if __name__ == "__main__":

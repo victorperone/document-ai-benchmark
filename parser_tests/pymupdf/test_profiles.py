@@ -15,6 +15,7 @@ _ALL_PROFILES = [
     "ocr_auto_rapidtess_200",
     "ocr_auto_rapidtess_300",
     "full_cpu_local",
+    "full_cpu_local_visual",
 ]
 
 
@@ -74,14 +75,14 @@ class TestFullCpuLocalProfile(unittest.TestCase):
     def test_layout_module_enabled(self):
         self.assertTrue(self._p()["layout_module"])
 
-    def test_write_images_true(self):
-        self.assertTrue(self._p()["write_images"])
+    def test_write_images_false(self):
+        self.assertFalse(self._p()["write_images"])
 
     def test_embed_images_false(self):
         self.assertFalse(self._p()["embed_images"])
 
-    def test_ocr_dpi_300(self):
-        self.assertEqual(self._p()["ocr_dpi"], 300)
+    def test_ocr_dpi_150(self):
+        self.assertEqual(self._p()["ocr_dpi"], 150)
 
     def test_parser_header_true(self):
         self.assertTrue(self._p()["parser_header"])

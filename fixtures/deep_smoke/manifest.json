@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "generator": "scripts/generate_deep_smoke_fixture.py",
+  "pages": 2,
+  "qr_payload": "DOC-AI-BENCHMARK-QR-2026",
+  "features": [
+    "title",
+    "portuguese_digital_text",
+    "markdown_table",
+    "formula",
+    "code",
+    "chart_diagram",
+    "text_image",
+    "qr",
+    "stamp",
+    "rotated_raster_region"
+  ],
+  "files": [
+    {
+      "path": "deep_smoke.pdf",
+      "size_bytes": 16854,
+      "sha256": "3b4f5c548a98192bcec9eac070a9cdfc3414950cdafd8cc3171c9dbfff33c410"
+    },
+    {
+      "path": "chart_text_stamp.png",
+      "size_bytes": 7259,
+      "sha256": "d8d36ae332d103893d7eaf962cba1332ac858d50e30f4d4e519af7dc5f4e1ed5"
+    },
+    {
+      "path": "rotated_text_region.png",
+      "size_bytes": 9179,
+      "sha256": "53a593bee16f0ab82fbba0420d359e414a93be70eb50039a55893e0927c7b52a"
+    },
+    {
+      "path": "qr_code.png",
+      "size_bytes": 1049,
+      "sha256": "840b7d2a4e027490ebadb4b4b89b88b903f6d20c5cd273c72e9d3419e9fb873b"
+    }
+  ]
+}

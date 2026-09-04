@@ -17,6 +17,7 @@ _DOCKER_MODEL_ROOTS: dict[str, Path] = {
     "paddleocr": Path("/home/appuser/.paddlex/official_models"),
     "mineru": Path("/models/mineru"),
     "pymupdf": Path("/models/pymupdf"),
+    "visual_enrichment": Path("/models/visual-enrichment"),
 }
 
 # Host model roots mirror the physical directories mounted by compose.yaml.
@@ -32,6 +33,13 @@ _HOST_MODEL_ROOTS: dict[str, Path] = {
     "pymupdf": _PROJECT_ROOT / "models" / "pymupdf",
     "unstructured": _PROJECT_ROOT / "models" / "unstructured",
     "xberg": _PROJECT_ROOT / "models" / "xberg",
+    "visual_enrichment": _PROJECT_ROOT / "models" / "visual-enrichment",
+}
+
+_PARSER_MODEL_COMPONENT: dict[str, str] = {
+    parser_name: parser_name
+    for parser_name in _HOST_MODEL_ROOTS
+    if parser_name != "visual_enrichment"
 }
 
 
@@ -57,18 +65,32 @@ def resolve_data_root(runtime: str) -> Path:
     raise ValueError(f"Invalid runtime: {runtime!r}")
 
 
-def resolve_model_root(runtime: str, parser_name: str) -> Path:
+def resolve_component_model_root(runtime: str, component_name: str) -> Path:
+    """Resolve an offline model root for a parser or auxiliary component."""
     if runtime == RUNTIME_DOCKER:
         try:
-            return _DOCKER_MODEL_ROOTS[parser_name]
+            return _DOCKER_MODEL_ROOTS[component_name]
         except KeyError as exc:
-            raise ValueError(f"Unknown parser: {parser_name!r}") from exc
+            raise ValueError(f"Unknown model component: {component_name!r}") from exc
     if runtime == RUNTIME_HOST:
         try:
-            return _HOST_MODEL_ROOTS[parser_name]
+            path = _HOST_MODEL_ROOTS[component_name].resolve()
         except KeyError as exc:
-            raise ValueError(f"Unknown parser: {parser_name!r}") from exc
+            raise ValueError(f"Unknown model component: {component_name!r}") from exc
+        models_root = (_PROJECT_ROOT / "models").resolve()
+        if path == models_root or models_root not in path.parents:
+            raise ValueError(f"Host model root escapes models/: {path}")
+        return path
     raise ValueError(f"Invalid runtime: {runtime!r}")
+
+
+def resolve_model_root(runtime: str, parser_name: str) -> Path:
+    """Backwards-compatible parser model root resolver."""
+    try:
+        component = _PARSER_MODEL_COMPONENT[parser_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown parser: {parser_name!r}") from exc
+    return resolve_component_model_root(runtime, component)
 
 
 def resolve_venv_python(parser_name: str) -> Path:

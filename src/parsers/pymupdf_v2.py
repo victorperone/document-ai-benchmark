@@ -6,7 +6,6 @@ import inspect
 import json
 import platform
 import shutil
-import subprocess
 import warnings
 from collections import Counter
 from datetime import datetime, timezone
@@ -25,6 +24,10 @@ from src.benchmark.artifact_policy import (
     ArtifactPolicy,
     ArtifactSelectionError,
 )
+from src.benchmark.artifact_contract import (
+    ParserArtifactInput,
+    join_page_texts,
+)
 from src.benchmark.artifacts import (
     finalize_artifacts,
 )
@@ -39,6 +42,7 @@ from src.benchmark.metrics_writer import (
 from src.benchmark.paths import (
     build_output_paths,
 )
+from src.benchmark.process_tree import run_process_tree
 from src.benchmark.preflight import (
     make_check,
     make_result,
@@ -53,19 +57,46 @@ from src.benchmark.runtime_io import (
 from src.benchmark.source_inventory import (
     analyze_pdf_source,
     calculate_sha256,
+    inventory_requires_content,
 )
 
 
 PARSER_NAME = "pymupdf"
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
+
+
+def _resolve_visual_worker_python(project_root: Path) -> Path:
+    """Resolve the Python executable for the visual-enrichment worker.
+
+    Priority:
+    1. DOCUMENT_AI_VISUAL_WORKER_PYTHON env var (explicit override)
+    2. .venvs/visual-enrichment/Scripts/python.exe (Windows)
+    3. .venvs/visual-enrichment/bin/python (POSIX)
+
+    Raises RuntimeError if visual_enrichment_enabled=true but no worker Python found.
+    """
+    import os
+    env_val = os.environ.get("DOCUMENT_AI_VISUAL_WORKER_PYTHON")
+    if env_val:
+        candidate = Path(env_val)
+        if candidate.is_file():
+            return candidate
+        raise RuntimeError(
+            f"DOCUMENT_AI_VISUAL_WORKER_PYTHON is set but file not found: {env_val}"
+        )
+    for rel in (
+        Path(".venvs") / "visual-enrichment" / "Scripts" / "python.exe",
+        Path(".venvs") / "visual-enrichment" / "bin" / "python",
+    ):
+        candidate = project_root / rel
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "visual-enrichment venv not found. "
+        "Run scripts/windows/setup_visual_enrichment.ps1 or set "
+        "DOCUMENT_AI_VISUAL_WORKER_PYTHON to the correct Python executable."
+    )
 
 
 def _find_tessdata_prefix() -> str | None:
@@ -214,15 +245,17 @@ class OcrTracker:
 
 def _tesseract_version() -> str | None:
     try:
-        result = subprocess.run(
+        result = run_process_tree(
             [
                 "tesseract",
                 "--version",
             ],
             capture_output=True,
-            text=True,
-            check=True,
+            timeout=5,
         )
+
+        if result.returncode != 0 or result.timed_out:
+            return None
 
         first_line = (
             result.stdout
@@ -589,6 +622,21 @@ _PYMUPDF_PROFILE_KEYS: frozenset[str] = frozenset(
         "write_images",
         "embed_images",
         "page_separators",
+        "diagnostic_only",
+        "visual_enrichment_enabled",
+        "visual_render_dpi",
+        "visual_ocr_language",
+        "visual_description_model",
+        "visual_det_model_dir",
+        "visual_rec_model_dir",
+        "visual_failure_fatal",
+        "visual_persist_images",
+    }
+)
+
+_PYMUPDF_OPTIONAL_PROFILE_KEYS: frozenset[str] = frozenset(
+    {
+        "diagnostic_only",
     }
 )
 
@@ -646,8 +694,17 @@ def preflight_profile(
     # Profile keys
     # --------------------------------------------------
 
-    missing_keys = sorted(_PYMUPDF_PROFILE_KEYS - set(profile))
-    unknown_keys = sorted(set(profile) - _PYMUPDF_PROFILE_KEYS)
+    missing_keys = sorted(
+    (
+        _PYMUPDF_PROFILE_KEYS
+        - _PYMUPDF_OPTIONAL_PROFILE_KEYS
+    )
+    - set(profile)
+    )
+    unknown_keys = sorted(
+        set(profile)
+        - _PYMUPDF_PROFILE_KEYS
+    )
     key_errors: list[str] = []
     if missing_keys:
         key_errors.append("missing: " + ", ".join(missing_keys))
@@ -717,6 +774,22 @@ def preflight_profile(
                     f"engine={ocr_engine} language={ocr_language} dpi={ocr_dpi}",
                 )
             )
+
+    # --------------------------------------------------
+    # Image persistence guard
+    # --------------------------------------------------
+
+    if profile.get("write_images") or profile.get("embed_images"):
+        checks.append(
+            make_check(
+                "image persistence",
+                "fail",
+                "write_images and embed_images must both be false — "
+                "image persistence is not permitted in formal benchmark profiles",
+            )
+        )
+    else:
+        checks.append(make_check("image persistence", "pass"))
 
     # --------------------------------------------------
     # Required packages
@@ -846,6 +919,101 @@ def preflight_profile(
                     "pass" if lang_ok else "fail",
                     f"{ocr_language_val}.traineddata",
                 )
+            )
+
+    # --------------------------------------------------
+    # Visual enrichment preflight (when enabled in profile)
+    # --------------------------------------------------
+
+    if profile.get("visual_enrichment_enabled"):
+        _project_root = Path(__file__).parent.parent.parent
+
+        # Worker Python executable
+        try:
+            worker_python = _resolve_visual_worker_python(_project_root)
+            checks.append(
+                make_check(
+                    "visual_worker_python",
+                    "pass",
+                    str(worker_python),
+                )
+            )
+        except RuntimeError as exc:
+            checks.append(
+                make_check("visual_worker_python", "fail", str(exc))
+            )
+            # Cannot validate further without a working Python
+            return make_result(PARSER_NAME, profile_name, checks)
+
+        # SmolVLM model path
+        _model_raw = str(profile.get("visual_description_model", ""))
+        if not _model_raw:
+            checks.append(
+                make_check(
+                    "visual_description_model",
+                    "fail",
+                    "visual_description_model is empty — required when visual_enrichment_enabled=true",
+                )
+            )
+        else:
+            _model_candidate = _project_root / _model_raw
+            _model_resolved = _model_candidate if _model_candidate.is_dir() else Path(_model_raw)
+            if _model_resolved.is_dir():
+                checks.append(
+                    make_check(
+                        "visual_description_model",
+                        "pass",
+                        str(_model_resolved),
+                    )
+                )
+            else:
+                checks.append(
+                    make_check(
+                        "visual_description_model",
+                        "fail",
+                        f"model directory not found: {_model_raw!r} "
+                        f"(checked {_model_resolved})",
+                    )
+                )
+
+        # PaddleOCR det/rec model dirs (optional — only validate if explicitly set)
+        for _dir_key in ("visual_det_model_dir", "visual_rec_model_dir"):
+            _dir_val = str(profile.get(_dir_key) or "")
+            if _dir_val:
+                _dir_candidate = _project_root / _dir_val
+                _dir_resolved = _dir_candidate if _dir_candidate.is_dir() else Path(_dir_val)
+                checks.append(
+                    make_check(
+                        _dir_key,
+                        "pass" if _dir_resolved.is_dir() else "fail",
+                        str(_dir_resolved) if _dir_resolved.is_dir()
+                        else f"directory not found: {_dir_val!r}",
+                    )
+                )
+
+        # Worker imports (subprocess probe — fast, no model loading)
+        try:
+            probe_result = run_process_tree(
+                [str(worker_python), "-c",
+                 "from paddleocr import PaddleOCR; "
+                 "from transformers import AutoProcessor; "
+                 "import torch; print('ok')"],
+                capture_output=True,
+                timeout=30,
+            )
+            if probe_result.returncode == 0 and "ok" in probe_result.stdout:
+                checks.append(make_check("visual_worker_imports", "pass"))
+            else:
+                checks.append(
+                    make_check(
+                        "visual_worker_imports",
+                        "fail",
+                        (probe_result.stderr or probe_result.stdout or "").strip()[:300],
+                    )
+                )
+        except Exception as exc:
+            checks.append(
+                make_check("visual_worker_imports", "fail", str(exc))
             )
 
     return make_result(PARSER_NAME, profile_name, checks)
@@ -1072,14 +1240,14 @@ def main() -> None:
                             profile.get(
                                 "ocr_language"
                             )
-                            or "eng"
+                            or "por"
                         ),
 
                         ocr_dpi=int(
                             profile.get(
                                 "ocr_dpi"
                             )
-                            or 300
+                            or 150
                         ),
 
                         header=bool(
@@ -1158,6 +1326,106 @@ def main() -> None:
         )
     )
 
+    _parser_page_elements = parser_elements["per_page"]
+
+    # --- Visual enrichment (optional, profile-controlled) ---
+    visual_enrichment_enabled = bool(
+        profile.get("visual_enrichment_enabled", False)
+    )
+    visual_metrics: dict[str, Any] = {"enabled": False}
+    enriched_page_markdown: list[str] | None = None
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in page_texts
+    ]
+
+    if visual_enrichment_enabled:
+        from src.parsers.pymupdf_visual_enrichment import enrich_pages
+        from src.enrichment.visual_worker_client import VisualWorkerClient
+
+        visual_language = str(
+            profile.get("visual_ocr_language", "por")
+        )
+        _visual_model_raw = str(profile.get("visual_description_model", ""))
+        _project_root = Path(__file__).parent.parent.parent
+        _model_candidate = _project_root / _visual_model_raw
+        visual_model = (
+            str(_model_candidate.resolve())
+            if _model_candidate.is_dir()
+            else _visual_model_raw
+        )
+        visual_failure_fatal = bool(
+            profile.get("visual_failure_fatal", False)
+        )
+        visual_render_dpi = int(
+            profile.get("visual_render_dpi") or 150
+        )
+        _det_raw = str(profile.get("visual_det_model_dir") or "")
+        _rec_raw = str(profile.get("visual_rec_model_dir") or "")
+        _root = Path(__file__).parent.parent.parent
+        visual_det_model_dir: str | None = None
+        visual_rec_model_dir: str | None = None
+        if _det_raw:
+            _det_cand = _root / _det_raw
+            visual_det_model_dir = str(_det_cand.resolve() if _det_cand.is_dir() else Path(_det_raw))
+        if _rec_raw:
+            _rec_cand = _root / _rec_raw
+            visual_rec_model_dir = str(_rec_cand.resolve() if _rec_cand.is_dir() else Path(_rec_raw))
+
+        worker_python = _resolve_visual_worker_python(
+            Path(__file__).parent.parent.parent
+        )
+
+        try:
+            with VisualWorkerClient(
+                language=visual_language,
+                smolvlm_model_path=visual_model,
+                python_executable=str(worker_python),
+                resource_monitor=monitor,
+                det_model_dir=visual_det_model_dir,
+                rec_model_dir=visual_rec_model_dir,
+            ) as worker:
+                # Reopen PDF for visual enrichment — main document is already closed
+                import pymupdf as _pymupdf
+                with _pymupdf.open(input_path) as visual_document:
+                    enriched_page_markdown, derived_content_by_page, visual_metrics = (
+                        enrich_pages(
+                            document=visual_document,
+                            native_pages=native_pages,
+                            page_texts=page_texts,
+                            worker_client=worker,
+                            language=visual_language,
+                            description_model=visual_model,
+                            render_dpi=visual_render_dpi,
+                            failure_fatal=visual_failure_fatal,
+                        )
+                    )
+        except Exception as _ve:
+            visual_metrics = {
+                "enabled": True,
+                "error": str(_ve),
+                "regions_detected": 0,
+                "regions_processed": 0,
+                "regions_failed": 0,
+                "images_persisted": 0,
+                "temporary_files_created": 0,
+            }
+            if visual_failure_fatal:
+                raise
+
+    artifact_input = ParserArtifactInput(
+        native_markdown=join_page_texts(page_texts),
+        source_page_markdown=page_texts,
+        enriched_page_markdown=enriched_page_markdown,
+        page_mapping_status="complete",
+        parser_page_elements=_parser_page_elements,
+        parser_native_pages=native_pages,
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="adapter_assembled_declared",
+        raw_origin_details="page_texts join",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
+    )
+
     artifact_result = (
         finalize_artifacts(
             paths=paths,
@@ -1171,15 +1439,7 @@ def main() -> None:
             profile_name=(
                 args.profile
             ),
-            page_texts=page_texts,
-            parser_page_elements=(
-                parser_elements[
-                    "per_page"
-                ]
-            ),
-            parser_native_pages=(
-                native_pages
-            ),
+            artifact_input=artifact_input,
             tokenizer_name=(
                 tokenizer_name
             ),
@@ -1301,7 +1561,7 @@ def main() -> None:
 
     metrics = {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
 
             "timestamp_utc": (
                 datetime.now(
@@ -1524,6 +1784,8 @@ def main() -> None:
                 ),
             },
 
+            "visual_enrichment": visual_metrics,
+
             "warnings_count": len(
                 captured_warning_messages
             ),
@@ -1582,6 +1844,11 @@ def main() -> None:
                 "normalization"
             ]
         ),
+
+        "artifacts": artifact_result["artifacts"],
+
+        "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
 
         "output": {
             **artifact_result[

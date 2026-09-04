@@ -7,10 +7,12 @@ from typing import Iterable
 ALL_ARTIFACTS = (
     "raw.md",
     "document.md",
+    "document.enriched.md",
     "document.jsonl",
     "metrics.json",
     "removed_content.jsonl",
     "run.log",
+    "native",
 )
 
 DEFAULT_ARTIFACTS = (

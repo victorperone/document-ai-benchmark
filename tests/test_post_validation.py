@@ -564,5 +564,134 @@ class TestResumeArtifactSuperset(unittest.TestCase):
         self.assertFalse(result["ok"])
 
 
+class TestInventoryAuthoritative(unittest.TestCase):
+    """§3.1: inventory is the authoritative source for content_expected."""
+
+    def _make_inventory_with_content(self, out: Path, doc_sha: str, pages: int, doc_name: str) -> None:
+        inv_dir = out / "_source_inventory"
+        inv_dir.mkdir(parents=True, exist_ok=True)
+        (inv_dir / "A.json").write_text(json.dumps({
+            "file": doc_name,
+            "sha256": doc_sha,
+            "pages": pages,
+            "measurement_complete": True,
+            "native_text": {"characters": 500},  # forces content_expected=True
+        }), encoding="utf-8")
+
+    def test_metrics_content_expected_false_but_inventory_requires_fails(self):
+        """inventory requires content, metrics says content_expected=False → fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, inv = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            # Override inventory to require content
+            self._make_inventory_with_content(out, _SHA, _PAGES, doc_path.name)
+            # Patch metrics to claim content_expected=False
+            mp = out / _PARSER / "A" / _PROFILE / "metrics.json"
+            data = json.loads(mp.read_text())
+            for artifact in ("raw.md", "document.md", "document.enriched.md"):
+                if artifact in data.get("content_validation", {}):
+                    data["content_validation"][artifact]["content_expected"] = False
+            mp.write_text(json.dumps(data))
+            result = _post(out, doc_path, inv)
+        self.assertFalse(result["ok"])
+        names = [c["name"] for c in result["checks"] if c["status"] == "fail"]
+        self.assertTrue(any("content_expected" in n for n in names))
+
+    def test_empty_markdown_when_inventory_requires_content_fails(self):
+        """Artifact is empty but inventory requires content → fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, inv = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            self._make_inventory_with_content(out, _SHA, _PAGES, doc_path.name)
+            # Write empty document.md
+            md_path = out / _PARSER / "A" / _PROFILE / "document.md"
+            md_path.write_text("", encoding="utf-8")
+            # Also patch metrics so content_expected=True
+            mp = out / _PARSER / "A" / _PROFILE / "metrics.json"
+            data = json.loads(mp.read_text())
+            data.setdefault("content_validation", {}).setdefault("document.md", {})["content_expected"] = True
+            mp.write_text(json.dumps(data))
+            ap = ArtifactPolicy.from_cli(["document.md", "metrics.json"])
+            result = _post(out, doc_path, inv, artifact_policy=ap)
+        self.assertFalse(result["ok"])
+
+    def test_proven_empty_inventory_allows_empty_markdown(self):
+        """Inventory proves PDF is empty (no content, measurement complete) → empty markdown OK."""
+        from src.benchmark.post_validation import _has_meaningful_text, _inventory_content_expectation
+        # Fixture inventory without native_text → content_expected=False
+        inv = {"file": "A.pdf", "sha256": "x", "pages": 3, "measurement_complete": True}
+        content_expected = _inventory_content_expectation(inv)
+        self.assertFalse(content_expected)
+        # Empty markdown is acceptable when content is not expected
+        self.assertFalse(_has_meaningful_text(""))
+
+
+class TestResumeInventoryRequired(unittest.TestCase):
+    """§3.2: validate_resume_candidate must validate source inventory."""
+
+    def test_missing_inventory_blocks_resume(self):
+        """No inventory file → resume must not be approved (ok=False)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, _ = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            # Remove inventory file
+            inv_path = out / "_source_inventory" / "A.json"
+            inv_path.unlink()
+            result = _resume(out, doc_path)
+        self.assertFalse(result["ok"])
+        names = [c["name"] for c in result["checks"] if c["status"] == "fail"]
+        self.assertTrue(any("inventory" in n for n in names))
+
+    def test_tampered_inventory_sha_blocks_resume(self):
+        """Inventory SHA-256 mismatch → resume blocked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, _ = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            inv_path = out / "_source_inventory" / "A.json"
+            data = json.loads(inv_path.read_text())
+            data["sha256"] = "b" * 64  # tampered
+            inv_path.write_text(json.dumps(data))
+            result = _resume(out, doc_path)
+        self.assertFalse(result["ok"])
+
+    def test_incomplete_measurement_blocks_resume(self):
+        """measurement_complete=False → output must not be reused."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, _ = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            inv_path = out / "_source_inventory" / "A.json"
+            data = json.loads(inv_path.read_text())
+            data["measurement_complete"] = False
+            inv_path.write_text(json.dumps(data))
+            result = _resume(out, doc_path)
+        self.assertFalse(result["ok"])
+
+    def test_valid_inventory_and_artifacts_allows_resume(self):
+        """Complete, coherent inventory + intact artifacts → resume approved."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, _ = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            result = _resume(out, doc_path)
+        self.assertTrue(result["ok"], msg=[c for c in result["checks"] if c["status"] == "fail"])
+
+    def test_content_expected_incoherence_blocks_resume(self):
+        """Inventory requires content but metrics says content_expected=False → blocked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            doc_path, _ = make_valid_job_output(out, doc_sha256=_SHA, pages=_PAGES)
+            # Override inventory to require content
+            inv_path = out / "_source_inventory" / "A.json"
+            data = json.loads(inv_path.read_text())
+            data["native_text"] = {"characters": 500}
+            inv_path.write_text(json.dumps(data))
+            # Patch metrics to claim content_expected=False for raw.md
+            mp = out / _PARSER / "A" / _PROFILE / "metrics.json"
+            mdata = json.loads(mp.read_text())
+            mdata.setdefault("content_validation", {}).setdefault("raw.md", {})["content_expected"] = False
+            mp.write_text(json.dumps(mdata))
+            result = _resume(out, doc_path)
+        self.assertFalse(result["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

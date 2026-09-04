@@ -23,7 +23,14 @@ param(
 
     [string]$TestPath = '',
 
-    [switch]$VerboseOutput
+    [switch]$VerboseOutput,
+
+    [switch]$SingleThread,
+
+    [switch]$FunctionalTests,
+
+    [ValidateRange(1, 86400)]
+    [int]$FunctionalTimeoutSeconds = 3600
 )
 
 Set-StrictMode -Version Latest
@@ -58,6 +65,13 @@ $env:TRANSFORMERS_OFFLINE  = '1'
 $env:DO_NOT_TRACK          = '1'
 $env:SCARF_NO_ANALYTICS    = '1'
 $env:HF_HUB_DISABLE_TELEMETRY = '1'
+if ($FunctionalTests) {
+    $env:BENCHMARK_WINDOWS_FUNCTIONAL = '1'
+    $env:BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS = [string]$FunctionalTimeoutSeconds
+} else {
+    Remove-Item Env:BENCHMARK_WINDOWS_FUNCTIONAL -ErrorAction SilentlyContinue
+    Remove-Item Env:BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS -ErrorAction SilentlyContinue
+}
 
 # Parser-specific model environment (mirrors runtime_specs.py model_env with {model_root} resolved)
 $ModelsRoot = Join-Path $RepoRoot "models"
@@ -78,7 +92,11 @@ switch ($Parser) {
         $env:HF_HUB_CACHE                     = Join-Path $ModelRoot 'huggingface\hub'
         $env:UNSTRUCTURED_DEFAULT_MODEL_NAME  = 'yolox'
         $env:UNSTRUCTURED_HI_RES_MODEL_NAME   = 'yolox'
-        $env:OMP_THREAD_LIMIT                 = '1'
+        if ($SingleThread) {
+            $env:OMP_THREAD_LIMIT = '1'
+        } else {
+            Remove-Item Env:OMP_THREAD_LIMIT -ErrorAction SilentlyContinue
+        }
     }
     'xberg' {
         $ModelRoot = Join-Path $ModelsRoot 'xberg'

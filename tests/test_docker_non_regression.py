@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "benchmark_profiles.json"
-DOCKER_COMPOSE_PATH = Path(__file__).parent.parent / "docker-compose.yml"
+DOCKER_COMPOSE_PATH = Path(__file__).parent.parent / "compose.yaml"
 
 DOCKER_PARSERS = {"pymupdf", "docling", "paddleocr", "liteparse", "mineru"}
 HOST_ONLY_PARSERS = {"unstructured", "xberg"}
@@ -60,21 +60,21 @@ class TestDockerComposeHasNoHostOnlyParsers(unittest.TestCase):
 
     def setUp(self):
         if not self.available:
-            self.skipTest("docker-compose.yml not found")
+            self.fail("compose.yaml not found")
 
     def test_unstructured_service_absent(self):
         # Should not have a docker service for unstructured (host-only)
         self.assertNotIn("unstructured:", self.text,
-                         "docker-compose.yml has an unstructured service (should be host-only)")
+                         "compose.yaml has an unstructured service (should be host-only)")
 
     def test_xberg_service_absent(self):
         self.assertNotIn("xberg:", self.text,
-                         "docker-compose.yml has an xberg service (should be host-only)")
+                         "compose.yaml has an xberg service (should be host-only)")
 
     def test_docker_parser_services_still_present(self):
         # At minimum, some Docker parser service should exist
         found = any(parser in self.text for parser in DOCKER_PARSERS)
-        self.assertTrue(found, "No Docker parser services found in docker-compose.yml")
+        self.assertTrue(found, "No Docker parser services found in compose.yaml")
 
 
 class TestRuntimeSpecDockerParsersUnchanged(unittest.TestCase):

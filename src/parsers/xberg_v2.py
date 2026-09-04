@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import dataclasses
+import hashlib
 import importlib.metadata
+import json
 import platform
+import re
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from enum import Enum
 
 from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError
 from src.benchmark.config import (
@@ -21,6 +26,9 @@ from src.benchmark.config import (
 )
 from src.benchmark.preflight import make_check, make_result
 from src.benchmark.runtime_io import add_runtime_arguments
+from src.benchmark.content_validation import inventory_requires_content
+from src.benchmark.native_bundle import clean_native_bundle, write_native_manifest
+from src.benchmark.process_tree import run_process_tree
 
 PARSER_NAME = "xberg"
 PARSER_DISPLAY_NAME = "Xberg"
@@ -57,6 +65,13 @@ _PROFILE_KEYS = frozenset({
     "strip_repeating_text", "include_watermarks",
     # Layout
     "layout_enabled",
+    "layout_strategy", "layout_apply_heuristics",
+    "layout_acceleration_provider", "layout_confidence_threshold",
+    "layout_enable_chart_understanding",
+    # Table / markdown diagnostics
+    "allow_single_column_tables",
+    # QR extraction
+    "qr_codes",
     # Downstream (disabled in primary profiles)
     "chunking_enabled", "token_reduction_mode",
     # Isolation
@@ -81,9 +96,9 @@ def _package_version(name: str) -> str | None:
 
 def _get_tesseract_version() -> str | None:
     try:
-        r = subprocess.run(
+        r = run_process_tree(
             ["tesseract", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, timeout=5,
         )
         lines = (r.stdout or r.stderr).splitlines()
         return lines[0].strip() if lines else None
@@ -91,14 +106,7 @@ def _get_tesseract_version() -> str | None:
         return None
 
 
-_TESSDATA_CANDIDATES = (
-    r"C:\Program Files\Tesseract-OCR\tessdata",
-    r"C:\Program Files (x86)\Tesseract-OCR\tessdata",
-    "/usr/share/tesseract-ocr/5/tessdata",
-    "/usr/share/tesseract-ocr/4.00/tessdata",
-    "/usr/share/tessdata",
-    "/usr/local/share/tessdata",
-)
+from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 
 def _find_tessdata_prefix() -> str | None:
@@ -231,7 +239,7 @@ def _build_xberg_config(
             extract_annotations=bool(profile.get("extract_annotations", False)),
             top_margin_fraction=0.0 if include_headers else None,
             bottom_margin_fraction=0.0 if include_footers else None,
-            allow_single_column_tables=False,
+            allow_single_column_tables=bool(profile.get("allow_single_column_tables", False)),
             ocr_inline_images=bool(profile.get("ocr_inline_images", False)),
             extract_form_fields=bool(profile.get("extract_form_fields", True)),
             reading_order=bool(profile.get("reading_order", False)),
@@ -302,12 +310,34 @@ def _build_xberg_config(
             f"Xberg 1.0.14 ContentFilterConfig contract mismatch: {exc}"
         ) from exc
 
-    # --- Layout guard --------------------------------------------------------
-    if bool(profile.get("layout_enabled", False)):
-        raise XbergConfigurationError(
-            "Xberg layout_enabled=True is not yet offline-certified in this branch. "
-            "Prepare and manifest the Xberg layout/table models before enabling this profile."
-        )
+    # --- LayoutDetectionConfig -----------------------------------------------
+    layout_cfg = None
+    layout_enabled = bool(profile.get("layout_enabled", False))
+    if layout_enabled:
+        AccelerationConfig = getattr(xberg, "AccelerationConfig", None)
+        LayoutDetectionConfig = getattr(xberg, "LayoutDetectionConfig", None)
+        if AccelerationConfig is None or LayoutDetectionConfig is None:
+            raise XbergConfigurationError(
+                "xberg.AccelerationConfig or xberg.LayoutDetectionConfig not found "
+                "— layout requires Xberg 1.0.14 with layout support."
+            )
+        acceleration_provider = str(profile.get("layout_acceleration_provider", "cpu"))
+        try:
+            acceleration = AccelerationConfig(provider=acceleration_provider)
+            layout_cfg = LayoutDetectionConfig(
+                strategy=profile.get("layout_strategy") or None,
+                confidence_threshold=profile.get("layout_confidence_threshold") or None,
+                apply_heuristics=bool(profile.get("layout_apply_heuristics", True)),
+                table_model=None,
+                acceleration=acceleration,
+                enable_chart_understanding=bool(
+                    profile.get("layout_enable_chart_understanding", False)
+                ),
+            )
+        except TypeError as exc:
+            raise XbergConfigurationError(
+                f"Xberg 1.0.14 LayoutDetectionConfig contract mismatch: {exc}"
+            ) from exc
 
     # --- Root config dict (ExtractionConfig is a TypedDict in 1.0.14) --------
     root_config: dict[str, Any] = {
@@ -329,8 +359,8 @@ def _build_xberg_config(
         "result_format": str(profile.get("result_format", "unified")),
         "escape_markdown": bool(profile.get("escape_markdown", True)),
         "table_anchors": bool(profile.get("table_anchors", False)),
-        "layout": None,
-        "use_layout_for_markdown": False,
+        "layout": layout_cfg,
+        "use_layout_for_markdown": layout_enabled,
         "include_document_structure": bool(profile.get("include_document_structure", False)),
         "max_concurrent_extractions": 1,
         "structured_extraction": None,
@@ -339,7 +369,7 @@ def _build_xberg_config(
         "summarization": None,
         "translation": None,
         "captioning": None,
-        "qr_codes": False,
+        "qr_codes": bool(profile.get("qr_codes", False)),
     }
 
     if ocr_enabled:
@@ -470,7 +500,11 @@ def _page_tables(page_obj: Any) -> list[Any]:
 _JSON_PRIMITIVES = (bool, int, float, str, type(None))
 
 
-def _to_json_safe(v: Any) -> Any:
+def _to_json_safe(
+    v: Any,
+    _depth: int = 0,
+    _ancestors: set[int] | None = None,
+) -> Any:
     """Recursively convert a Xberg result value to a JSON-serializable form.
 
     Xberg dataclasses may use __slots__ (no __dict__) or C extensions,
@@ -482,11 +516,45 @@ def _to_json_safe(v: Any) -> Any:
         return v
     if isinstance(v, (bytes, bytearray)):
         return None
+    if _depth >= 8:
+        return f"<truncated:{type(v).__name__}>"
+    ancestors = _ancestors if _ancestors is not None else set()
+    identity = id(v)
+    if identity in ancestors:
+        return f"<circular:{type(v).__name__}>"
+    ancestors.add(identity)
+    try:
+        return _to_json_safe_complex(v, _depth, ancestors)
+    finally:
+        ancestors.discard(identity)
+
+
+def _to_json_safe_complex(v: Any, depth: int, ancestors: set[int]) -> Any:
+    """Serialize one non-primitive value with bounded recursion."""
+    if isinstance(v, Enum):
+        return _to_json_safe(v.value, depth + 1, ancestors)
+    if isinstance(v, Path):
+        return str(v)
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return _to_json_safe(dataclasses.asdict(v), depth + 1, ancestors)
     if isinstance(v, dict):
-        return {str(k): _to_json_safe(val) for k, val in v.items()}
+        return {
+            str(key): _to_json_safe(value, depth + 1, ancestors)
+            for key, value in v.items()
+        }
     if isinstance(v, (list, tuple)):
-        result = [_to_json_safe(item) for item in v]
+        result = [_to_json_safe(item, depth + 1, ancestors) for item in v]
         return [item for item in result if item is not None]
+    for method_name in ("model_dump", "to_dict", "dict"):
+        method = getattr(v, method_name, None)
+        if callable(method):
+            try:
+                dumped = method()
+                if dumped is v:
+                    continue
+                return _to_json_safe(dumped, depth + 1, ancestors)
+            except Exception:
+                continue
     return str(v)
 
 
@@ -506,7 +574,7 @@ def _table_to_native(table_obj: Any) -> dict[str, Any]:
 def _page_native(page_obj: Any) -> dict[str, Any]:
     """Extract additional native fields from a PageContent object for retention."""
     record: dict[str, Any] = {}
-    for attr in ("elements", "images", "form_fields", "annotations",
+    for attr in ("elements", "form_fields", "annotations",
                  "hierarchy", "layout_regions", "formulas", "warnings",
                  "ocr_metadata", "reading_order", "document_structure",
                  "language", "quality"):
@@ -515,6 +583,176 @@ def _page_native(page_obj: Any) -> dict[str, Any]:
         if safe is not None:
             record[attr] = safe
     return record
+
+
+def _xberg_image_bytes(image: Any) -> bytes:
+    data = getattr(image, "data", None)
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    if isinstance(data, (list, tuple)) and all(isinstance(item, int) for item in data):
+        return bytes(data)
+    encoded = getattr(image, "data_base64", None)
+    if isinstance(encoded, str) and encoded:
+        return base64.b64decode(encoded, validate=True)
+    return b""
+
+
+def persist_xberg_native_bundle(
+    document: Any,
+    *,
+    destination: Path,
+    profile_name: str,
+) -> dict[str, Any]:
+    """Persist official Xberg image bytes and an index without altering content."""
+    clean_native_bundle(destination)
+    (destination / "document.md").write_text(
+        str(getattr(document, "content", "") or ""), encoding="utf-8"
+    )
+    candidates = list(getattr(document, "images", None) or [])
+    for page in _get_pages(document):
+        candidates.extend(list(getattr(page, "images", None) or []))
+    seen: set[str] = set()
+    index: list[dict[str, Any]] = []
+    for sequence, image in enumerate(candidates):
+        content = _xberg_image_bytes(image)
+        if not content:
+            continue
+        digest = hashlib.sha256(content).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        extension = re.sub(
+            r"[^a-z0-9]", "", str(getattr(image, "format", "bin") or "bin").casefold()
+        ) or "bin"
+        if extension == "jpeg":
+            extension = "jpg"
+        page_number = getattr(image, "page_number", None)
+        image_index = getattr(image, "image_index", sequence)
+        relative = Path("assets") / f"p{page_number or 0}-i{image_index}-{digest[:12]}.{extension}"
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        index.append({
+            "path": relative.as_posix(),
+            "sha256": digest,
+            "size_bytes": len(content),
+            "page_number": page_number,
+            "image_index": image_index,
+            "format": str(getattr(image, "format", "") or ""),
+            "width": getattr(image, "width", None),
+            "height": getattr(image, "height", None),
+            "caption": getattr(image, "caption", None),
+        })
+    (destination / "assets.json").write_text(
+        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return write_native_manifest(
+        destination, parser=PARSER_NAME, profile=profile_name, bundle_status="available"
+    )
+
+
+def _collect_qr_results(document: Any, page_count: int) -> list[dict[str, Any]]:
+    """Collect QR code results from an Xberg ExtractedDocument.
+
+    Returns a flat list of {page_number, payload, bbox, format} records.
+    Payloads are kept as plain text; URL values are NOT fetched.
+    """
+    records: list[dict[str, Any]] = []
+
+    for attr in ("qr_codes", "qr_results", "barcodes"):
+        items = getattr(document, attr, None)
+        if isinstance(items, (list, tuple)):
+            for item in items:
+                page_num = int(getattr(item, "page_number", 0) or 0)
+                payload = getattr(item, "payload", None) or getattr(item, "data", None) or ""
+                bbox = _to_json_safe(getattr(item, "bbox", None))
+                fmt = str(getattr(item, "format", "QR_CODE") or "QR_CODE")
+                if 1 <= page_num <= page_count and isinstance(payload, str) and payload.strip():
+                    records.append({
+                        "page_number": page_num,
+                        "payload": payload.strip(),
+                        "bbox": bbox,
+                        "format": fmt,
+                    })
+
+    # Also check per-page
+    for i, pg in enumerate(_get_pages(document), start=1):
+        for attr in ("qr_codes", "qr_results", "barcodes"):
+            items = getattr(pg, attr, None)
+            if isinstance(items, (list, tuple)):
+                for item in items:
+                    page_num = int(getattr(item, "page_number", i) or i)
+                    payload = getattr(item, "payload", None) or getattr(item, "data", None) or ""
+                    bbox = _to_json_safe(getattr(item, "bbox", None))
+                    fmt = str(getattr(item, "format", "QR_CODE") or "QR_CODE")
+                    if 1 <= page_num <= page_count and isinstance(payload, str) and payload.strip():
+                        candidate = {
+                            "page_number": page_num,
+                            "payload": payload.strip(),
+                            "bbox": bbox,
+                            "format": fmt,
+                        }
+                        if candidate not in records:
+                            records.append(candidate)
+
+    return records
+
+
+_SAFE_QR_PAYLOAD_MAX = 2000
+
+
+def _qr_payload_is_safe(payload: str) -> bool:
+    """Return True if the QR payload is safe to embed in enriched markdown.
+
+    Rejects payloads longer than 2000 chars or containing control characters.
+    The payload is never fetched or executed.
+    """
+    if len(payload) > _SAFE_QR_PAYLOAD_MAX:
+        return False
+    return all(c >= " " or c in ("\t",) for c in payload)
+
+
+def _build_qr_derived_blocks(
+    qr_results: list[dict[str, Any]],
+    page_count: int,
+) -> list[list[dict[str, Any]]]:
+    """Return derived_content_by_page list with QR-code items."""
+    by_page: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+    for rec in qr_results:
+        pn = rec["page_number"]
+        if 1 <= pn <= page_count and _qr_payload_is_safe(rec["payload"]):
+            by_page[pn - 1].append({
+                "type": "qr_code",
+                "page_number": pn,
+                "payload": rec["payload"],
+                "format": rec["format"],
+                "bbox": rec.get("bbox"),
+            })
+    return by_page
+
+
+def _render_qr_enriched_page(
+    page_text: str,
+    qr_items: list[dict[str, Any]],
+) -> str:
+    """Append derived:start QR-code blocks to a page's source text."""
+    if not qr_items:
+        return page_text
+    blocks: list[str] = [page_text.rstrip()]
+    for item in qr_items:
+        header = (
+            f"<!-- derived:start\n"
+            f"type=qr_code\n"
+            f"page={item['page_number']}\n"
+            f"format={item['format']}\n"
+            f"-->\n"
+            f"> **QR code:** {item['payload']}\n"
+            f"<!-- derived:end -->"
+        )
+        blocks.append(header)
+    return "\n\n".join(blocks) + "\n"
 
 
 def _result_to_page_texts(document: Any, expected_pages: int) -> dict[int, str]:
@@ -578,6 +816,10 @@ def _result_to_artifacts(
         page = page_map.get(page_num)
 
         if page is None:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Xberg omitted source page %d (likely blank); producing empty page.", page_num
+            )
             page_texts.append("")
             parser_page_elements.append({
                 "page_number": page_num,
@@ -695,6 +937,8 @@ def _build_metrics(
     artifact_selected_list: list[str],
     run_log_path: Path | None,
     metrics_json_path: Path | None,
+    qr_results: list[dict[str, Any]] | None = None,
+    native_bundle_manifest: dict[str, Any] | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
@@ -717,7 +961,7 @@ def _build_metrics(
 
     return {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "reference_tokenizer": tokenizer_name,
         },
@@ -782,6 +1026,17 @@ def _build_metrics(
             ],
             "errors_count": errors_count,
             "retry_count": 0,
+            "xberg_layout": {
+                "enabled": bool(profile.get("layout_enabled", False)),
+                "provider": str(profile.get("layout_acceleration_provider", "cpu")),
+                "use_layout_for_markdown": bool(profile.get("layout_enabled", False)),
+            },
+            "qr": {
+                "enabled": bool(profile.get("qr_codes", False)),
+                "detected": len(qr_results) if qr_results is not None else 0,
+                "decoded": len(qr_results) if qr_results is not None else 0,
+                "failed": 0,
+            },
         },
         "resources": resources,
         "content_elements": {
@@ -791,6 +1046,16 @@ def _build_metrics(
         "heuristics": artifact_result["heuristics"],
         "tokens": artifact_result["tokens"],
         "normalization": artifact_result["normalization"],
+        "artifacts": artifact_result["artifacts"],
+        "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
+        "xberg_native": {
+            "bundle_available": native_bundle_manifest is not None,
+            "bundle_files": (
+                len(native_bundle_manifest.get("files", []))
+                if native_bundle_manifest is not None else 0
+            ),
+        },
         "output": {
             **artifact_result["output"],
             "run_log": str(run_log_path) if run_log_path else None,
@@ -900,12 +1165,15 @@ def preflight_profile(
         else:
             checks.append(make_check("xberg.extract async", "pass"))
 
-        for cls_name in (
+        required_classes = [
             "ExtractionConfig", "ExtractInput",
             "OcrConfig", "TesseractConfig",
             "PdfConfig", "PageConfig",
             "ImageExtractionConfig", "ContentFilterConfig",
-        ):
+        ]
+        if bool(profile.get("layout_enabled", False)):
+            required_classes += ["AccelerationConfig", "LayoutDetectionConfig"]
+        for cls_name in required_classes:
             obj = getattr(xberg, cls_name, None)
             checks.append(make_check(
                 cls_name,
@@ -956,6 +1224,7 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
     from src.benchmark.artifacts import finalize_artifacts
     from src.benchmark.metrics_writer import write_json
     from src.benchmark.paths import build_output_paths
@@ -980,7 +1249,9 @@ def main() -> None:
     inventory = _load_cached_inventory(input_path, args.output_root)
     page_count = int(inventory["pages"])
 
-    model_root = args.model_root if args.model_root is not None else Path("models/xberg")
+    model_root = (
+        args.model_root if args.model_root is not None else Path("models/xberg")
+    ).resolve()
     ocr_enabled = bool(profile.get("ocr_enabled", False))
 
     print("=" * 72)
@@ -1005,6 +1276,7 @@ def main() -> None:
     monitor = ResourceMonitor()
     pipeline_started = perf_counter()
     monitor.start()
+    qr_results: list[dict[str, Any]] = []
 
     try:
         with parser_output_context(
@@ -1028,11 +1300,45 @@ def main() -> None:
             )
             element_counts = _count_elements_from_result(document, page_texts)
 
+            qr_enabled = bool(profile.get("qr_codes", False))
+            if qr_enabled:
+                qr_results = _collect_qr_results(document, page_count)
+
     except Exception:
         monitor.stop()
         raise
 
     pipeline_seconds = perf_counter() - pipeline_started
+
+    if qr_results:
+        derived_content_by_page = _build_qr_derived_blocks(qr_results, page_count)
+        enriched_page_markdown = [
+            _render_qr_enriched_page(page_texts[i], derived_content_by_page[i])
+            for i in range(page_count)
+        ]
+    else:
+        derived_content_by_page = [[] for _ in page_texts]
+        enriched_page_markdown = None
+
+    native_bundle_manifest: dict[str, Any] | None = None
+    if artifact_policy.includes("native"):
+        native_bundle_manifest = persist_xberg_native_bundle(
+            document, destination=paths.native_dir, profile_name=args.profile
+        )
+
+    artifact_input = ParserArtifactInput(
+        native_markdown=str(document.content or ""),
+        source_page_markdown=page_texts,
+        enriched_page_markdown=enriched_page_markdown,
+        page_mapping_status="complete",
+        parser_page_elements=parser_page_elements,
+        parser_native_pages=parser_native_pages,
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="parser_native_exact",
+        raw_origin_details="ExtractedDocument.content",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
+    )
 
     artifact_result = finalize_artifacts(
         paths=paths,
@@ -1040,9 +1346,7 @@ def main() -> None:
         source_file=input_path.name,
         parser_name=PARSER_NAME,
         profile_name=args.profile,
-        page_texts=page_texts,
-        parser_page_elements=parser_page_elements,
-        parser_native_pages=parser_native_pages,
+        artifact_input=artifact_input,
         tokenizer_name=tokenizer_name,
         normalization_config=normalization_config,
         artifact_policy=artifact_policy,
@@ -1065,6 +1369,8 @@ def main() -> None:
         resources=resources,
         tokenizer_name=tokenizer_name,
         artifact_selected_list=artifact_policy.as_list(),
+        qr_results=qr_results,
+        native_bundle_manifest=native_bundle_manifest,
         verbose=args.verbose,
         run_log_path=paths.run_log if artifact_policy.includes("run.log") else None,
         metrics_json_path=paths.metrics_json if artifact_policy.includes("metrics.json") else None,

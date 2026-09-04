@@ -1,0 +1,34 @@
+{
+  "version": "2.13.0",
+  "required_constructor_kwargs": [
+    "ocr_enabled",
+    "ocr_language",
+    "max_pages",
+    "target_pages",
+    "output_format",
+    "image_mode",
+    "extract_images",
+    "image_output_dir",
+    "extract_links",
+    "keep_headers_footers",
+    "extract_document_metadata",
+    "num_workers",
+    "quiet",
+    "dpi",
+    "continue_on_page_error"
+  ],
+  "required_result_attrs": [
+    "text",
+    "total_pages"
+  ],
+  "known_unsupported_kwargs": [
+    "extract_blocks",
+    "emit_word_boxes",
+    "include_complexity",
+    "skip_diagonal_text",
+    "render_form_fields",
+    "detect_screenshot_rects",
+    "extract_xfa_packets",
+    "extract_content_bounds"
+  ]
+}

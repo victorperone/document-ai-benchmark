@@ -15,10 +15,11 @@ import asyncio
 import inspect
 import platform
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from src.benchmark.process_tree import run_process_tree
 
 PASS_MARK = "[PASS]"
 FAIL_MARK = "[FAIL]"
@@ -218,7 +219,9 @@ tess = shutil.which("tesseract")
 if tess:
     _ok("tesseract executable", tess)
     try:
-        r = subprocess.run(["tesseract", "--version"], capture_output=True, text=True, timeout=10)
+        r = run_process_tree(
+            ["tesseract", "--version"], capture_output=True, timeout=10
+        )
         first = (r.stdout or r.stderr).splitlines()[0]
         _ok("tesseract version", first)
     except Exception as exc:

@@ -100,6 +100,33 @@ class LiteParseMarkdownFormattingTests(unittest.TestCase):
         self.assertNotIn("## Page", out)
         self.assertNotIn("# Page", out)
 
+    def test_duplicate_image_is_not_injected_again(self) -> None:
+        image = _make_image_obj("/tmp/repeated.png")
+        out = _build(
+            "Native content.",
+            [image],
+            {
+                "/tmp/repeated.png": {
+                    "duplicate": True,
+                    "kind": "image_text",
+                    "ocr_text": "IMAGEM OCR: Orcamento local 2026",
+                }
+            },
+        )
+        self.assertNotIn("IMAGEM OCR", out)
+
+    def test_long_ocr_already_in_global_text_is_duplicate(self) -> None:
+        reference = "Prefixo\nIMAGEM OCR: Orcamento local 2026\nSufixo"
+        self.assertTrue(
+            liteparse_v2._text_already_present(
+                reference,
+                "  imagem OCR: Orcamento local 2026  ",
+            )
+        )
+
+    def test_short_ocr_is_not_suppressed_by_substring_match(self) -> None:
+        self.assertFalse(liteparse_v2._text_already_present("ABC", "ABC"))
+
 
 class LiteParseMetricsContractTests(unittest.TestCase):
     """Tests for metrics schema requirements."""

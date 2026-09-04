@@ -37,6 +37,8 @@ from src.benchmark.artifact_policy import (
     ArtifactPolicy,
     ArtifactSelectionError,
 )
+from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
+from src.benchmark.content_validation import inventory_requires_content
 from src.benchmark.artifacts import finalize_artifacts
 from src.benchmark.config import (
     BenchmarkConfigurationError,
@@ -198,87 +200,14 @@ def _validate_granite_chart_v4_artifacts(
             + ", ".join(missing_files),
         )
 
-    index_path = (
-        model_dir
-        / "model.safetensors.index.json"
+    ok, reason = _validate_sharded_safetensors(
+        model_dir,
+        model_dir / "model.safetensors.index.json",
     )
+    if not ok:
+        return False, f"Granite chart v4 shard validation failed: {reason}"
 
-    try:
-        index_data = json.loads(
-            index_path.read_text(
-                encoding="utf-8"
-            )
-        )
-    except (
-        OSError,
-        json.JSONDecodeError,
-    ) as exc:
-        return (
-            False,
-            (
-                "invalid model.safetensors.index.json: "
-                f"{type(exc).__name__}: {exc}"
-            ),
-        )
-
-    weight_map = index_data.get("weight_map")
-
-    if not isinstance(weight_map, dict) or not weight_map:
-        return (
-            False,
-            (
-                "model.safetensors.index.json "
-                "does not contain a valid weight_map"
-            ),
-        )
-
-    shards = sorted(
-        {
-            str(value)
-            for value in weight_map.values()
-            if value
-        }
-    )
-
-    if not shards:
-        return (
-            False,
-            "no model shards declared by weight_map",
-        )
-
-    missing_shards = [
-        shard
-        for shard in shards
-        if not (model_dir / shard).is_file()
-    ]
-
-    if missing_shards:
-        return (
-            False,
-            "missing shard(s): "
-            + ", ".join(missing_shards),
-        )
-
-    empty_shards = [
-        shard
-        for shard in shards
-        if (model_dir / shard).stat().st_size <= 0
-    ]
-
-    if empty_shards:
-        return (
-            False,
-            "empty shard(s): "
-            + ", ".join(empty_shards),
-        )
-
-    return (
-        True,
-        (
-            f"{len(shards)} shard(s) verified "
-            f"at {model_dir}"
-        ),
-    )
+    return True, reason
 
 def _validate_sharded_safetensors(
     model_dir: Path,
@@ -511,6 +440,9 @@ def _validate_tableformer_artifacts(
 
 def _validate_rapidocr_artifacts(
     artifacts_path: Path,
+    *,
+    backend: str = "torch",
+    lang: str = "pt",
 ) -> tuple[bool, str]:
     try:
         from docling.models.stages.ocr.rapid_ocr_model import (  # type: ignore
@@ -521,9 +453,6 @@ def _validate_rapidocr_artifacts(
         )
     except ImportError as exc:
         return False, f"cannot import RapidOCR internals: {exc}"
-
-    backend = "torch"
-    lang = "pt"
 
     try:
         model_folder = RapidOcrModel._model_repo_folder
@@ -548,7 +477,7 @@ def _validate_rapidocr_artifacts(
             need_rec=True,
         )
     except Exception as exc:
-        return False, f"failed to resolve RapidOCR torch:pt artifacts: {exc}"
+        return False, f"failed to resolve RapidOCR {backend}:{lang} artifacts: {exc}"
 
     required_roles = {"det", "cls", "rec"}
     missing_roles = required_roles - set(artifacts)
@@ -979,15 +908,180 @@ def _summary_from_counts(
     }
 
 
+def _build_picture_description_blocks(
+    document: Any,
+    page_count: int,
+    page_texts: list[str],
+    *,
+    effective_prompt: str,
+) -> tuple[list[str] | None, list[list[dict[str, Any]]]]:
+    """Build enriched_page_markdown and derived_content_by_page from picture descriptions.
+
+    Returns (enriched_page_markdown, derived_content_by_page).
+    enriched_page_markdown is None when no descriptions exist.
+    """
+    derived_content_by_page: list[list[dict[str, Any]]] = [
+        [] for _ in range(page_count)
+    ]
+
+    if not effective_prompt:
+        raise RuntimeError(
+            "_build_picture_description_blocks requires effective_prompt; "
+            "a description without a prompt would produce incomplete provenance."
+        )
+    prompt_sha256 = hashlib.sha256(effective_prompt.encode("utf-8")).hexdigest()
+
+    picture_index_by_page: list[int] = [0] * page_count
+    has_derived = False
+
+    for item, _level in document.iterate_items():
+        if type(item).__name__ != "PictureItem":
+            continue
+
+        meta = getattr(item, "meta", None)
+
+        provenance = getattr(item, "prov", None) or []
+        page_numbers = sorted({
+            int(prov.page_no)
+            for prov in provenance
+            if getattr(prov, "page_no", None) is not None
+            and 1 <= int(prov.page_no) <= page_count
+        })
+
+        if not page_numbers:
+            continue
+
+        self_ref = _cref_value(getattr(item, "self_ref", None))
+        page_number = page_numbers[0]
+        idx = picture_index_by_page[page_number - 1]
+        picture_index_by_page[page_number - 1] += 1
+        region_id = f"p{page_number}-picture-{idx}"
+
+        # Resolve bbox from the first provenance entry on the canonical page.
+        bbox_dict: dict[str, Any] | None = None
+        for prov_entry in provenance:
+            if getattr(prov_entry, "page_no", None) == page_number:
+                bbox_dict = _bbox_to_dict(getattr(prov_entry, "bbox", None))
+                break
+
+        # --- Description ---
+        description = getattr(meta, "description", None) if meta is not None else None
+        if description is not None:
+            desc_text = None
+            if hasattr(description, "text"):
+                desc_text = getattr(description, "text", None)
+            elif hasattr(description, "model_dump"):
+                dumped = description.model_dump(mode="json", exclude_none=True)
+                desc_text = dumped.get("text") or dumped.get("content")
+
+            if desc_text:
+                engine_name = "smolvlm"
+                model_name = ""
+                if hasattr(description, "provenance"):
+                    prov_obj = description.provenance
+                    if prov_obj is not None:
+                        engine_name = str(
+                            getattr(prov_obj, "source", None) or engine_name
+                        )
+                        model_name = str(
+                            getattr(prov_obj, "model_name", None) or model_name
+                        )
+
+                derived_content_by_page[page_number - 1].append({
+                    "type": "picture_description",
+                    "source": "docling",
+                    "region_id": region_id,
+                    "page_number": page_number,
+                    "self_ref": self_ref,
+                    "bbox": bbox_dict,
+                    "engine": engine_name,
+                    "model": model_name,
+                    "prompt_sha256": prompt_sha256,
+                    "storage_policy": "inline",
+                    "text": desc_text.strip(),
+                })
+
+                derived_block = (
+                    f"<!-- derived:start\n"
+                    f"type=picture_description\n"
+                    f"page={page_number}\n"
+                    f"region_id={region_id}\n"
+                    f"engine={engine_name}\n"
+                    f"model={model_name}\n"
+                    f"-->\n"
+                    f"> **Descrição visual:** {desc_text.strip()}\n"
+                    f"<!-- derived:end -->"
+                )
+                base = page_texts[page_number - 1]
+                page_texts[page_number - 1] = (
+                    base + ("\n\n" if base else "") + derived_block
+                )
+                has_derived = True
+
+        # --- Classification ---
+        classification = getattr(meta, "classification", None) if meta is not None else None
+        if classification is not None and hasattr(classification, "model_dump"):
+            payload = classification.model_dump(mode="json", exclude_none=True)
+            # Build human-readable label from classification payload
+            label_parts = []
+            for key in ("predicted_class", "class_name", "label", "category"):
+                val = payload.get(key)
+                if val and isinstance(val, str):
+                    label_parts.append(val)
+                    break
+            conf = payload.get("confidence") or payload.get("score")
+            if conf is not None:
+                try:
+                    label_parts.append(f"{float(conf):.2f}")
+                except (TypeError, ValueError):
+                    pass
+            label_text = " — ".join(label_parts) if label_parts else str(payload)
+
+            derived_content_by_page[page_number - 1].append({
+                "type": "picture_classification",
+                "source": "docling",
+                "region_id": region_id,
+                "page_number": page_number,
+                "self_ref": self_ref,
+                "storage_policy": "inline",
+                "text": label_text,
+                "metadata": payload,
+            })
+
+            classification_block = (
+                f"<!-- derived:start\n"
+                f"type=picture_classification\n"
+                f"page={page_number}\n"
+                f"region_id={region_id}\n"
+                f"-->\n"
+                f"> **Classificação visual:** {label_text}\n"
+                f"<!-- derived:end -->"
+            )
+            base = page_texts[page_number - 1]
+            page_texts[page_number - 1] = (
+                base + ("\n\n" if base else "") + classification_block
+            )
+            has_derived = True
+
+    if not has_derived:
+        return None, derived_content_by_page
+
+    return list(page_texts), derived_content_by_page
+
+
 def build_docling_page_contract(
     document: Any,
     page_count: int,
+    *,
+    effective_prompt: str = "",
 ) -> tuple[
     list[str],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, Any],
     set[int],
+    list[str] | None,
+    list[list[dict[str, Any]]],
 ]:
     page_texts: list[str] = []
     native_pages: list[dict[str, Any]] = [
@@ -1022,13 +1116,6 @@ def build_docling_page_contract(
                 observed_pages.add(page_number)
 
     for page_number in range(1, page_count + 1):
-        if (
-            observed_pages
-            and page_number not in observed_pages
-        ):
-            page_texts.append("")
-            continue
-
         try:
             page_text = document.export_to_markdown(
                 page_no=page_number,
@@ -1036,8 +1123,10 @@ def build_docling_page_contract(
                 # block them from the compared markdown (adendo §2, §9).
                 blocked_meta_names={"description"},
             )
-        except Exception:
-            page_text = ""
+        except Exception as exc:
+            raise RuntimeError(
+                f"Docling failed to export source page {page_number}: {exc}"
+            ) from exc
         else:
             observed_pages.add(page_number)
 
@@ -1120,28 +1209,30 @@ def build_docling_page_contract(
         global_counts
     )
 
+    enriched_page_texts = list(page_texts)
+    if effective_prompt:
+        (
+            enriched_page_markdown,
+            derived_content_by_page,
+        ) = _build_picture_description_blocks(
+            document,
+            page_count,
+            enriched_page_texts,
+            effective_prompt=effective_prompt,
+        )
+    else:
+        enriched_page_markdown = list(page_texts)
+        derived_content_by_page = []
+
     return (
         page_texts,
         parser_page_elements,
         native_pages,
         parser_summary,
         observed_pages,
+        enriched_page_markdown,
+        derived_content_by_page,
     )
-
-
-def calculate_sha256(
-    path: Path,
-) -> str:
-    digest = hashlib.sha256()
-
-    with path.open("rb") as file:
-        for block in iter(
-            lambda: file.read(1024 * 1024),
-            b"",
-        ):
-            digest.update(block)
-
-    return digest.hexdigest()
 
 
 def load_cached_inventory(
@@ -1175,7 +1266,7 @@ def load_cached_inventory(
         )
     )
 
-    current_sha = calculate_sha256(
+    current_sha = sha256_file(
         input_path
     )
     inventory_sha = inventory.get(
@@ -1480,7 +1571,9 @@ def _build_pipeline_options(
             rapidocr_ok,
             rapidocr_detail,
         ) = _validate_rapidocr_artifacts(
-            model_artifacts_path
+            model_artifacts_path,
+            backend=str(profile.get("ocr_backend", "torch")),
+            lang=str(profile.get("ocr_language", "pt")),
         )
         if not rapidocr_ok:
             raise BenchmarkConfigurationError(
@@ -1655,6 +1748,71 @@ def _build_pipeline_options(
             False,
         )
     )
+
+    # Heading hierarchy — introduced in docling ≥2.15; guarded import so the
+    # adapter compiles without docling installed (WSL dev environment).
+    if bool(profile.get("heading_hierarchy", False)):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                HeadingHierarchyOptions,
+            )
+            heading_opts = HeadingHierarchyOptions(
+                enabled=True,
+                use_bookmarks=bool(
+                    profile.get("heading_use_bookmarks", True)
+                ),
+                use_numbering=bool(
+                    profile.get("heading_use_numbering", True)
+                ),
+                use_style=bool(
+                    profile.get("heading_use_style", True)
+                ),
+                use_font_style=bool(
+                    profile.get("heading_use_font_style", True)
+                ),
+                style_size_tolerance=float(
+                    profile.get("heading_style_size_tolerance", 0.05)
+                ),
+                max_level=int(
+                    profile.get("heading_max_level", 6)
+                ),
+                bookmark_match_threshold=float(
+                    profile.get("heading_bookmark_match_threshold", 0.8)
+                ),
+            )
+            options.heading_hierarchy_options = heading_opts
+            # use_style requires parsed page images for font-size analysis
+            if bool(profile.get("heading_use_style", True)):
+                options.generate_parsed_pages = True
+        except ImportError as exc:
+            raise BenchmarkConfigurationError(
+                "heading_hierarchy was requested but this Docling build does not "
+                "provide HeadingHierarchyOptions"
+            ) from exc
+
+    # TableFormer V2 — experimental; only activated when table_engine is
+    # explicitly set to "tableformer_v2" in the profile.
+    table_engine = str(
+        profile.get("table_engine", "tableformer_v1")
+    )
+    if (
+        options.do_table_structure
+        and table_engine == "tableformer_v2"
+    ):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                TableStructureV2Options,
+            )
+            options.table_structure_options = TableStructureV2Options(
+                do_cell_matching=bool(
+                    profile.get("table_cell_matching", True)
+                )
+            )
+        except ImportError as exc:
+            raise BenchmarkConfigurationError(
+                "tableformer_v2 was requested but this Docling build does not "
+                "provide TableStructureV2Options"
+            ) from exc
 
     _configure_picture_description(
         options,
@@ -1916,7 +2074,11 @@ def preflight_profile(
         (
             rapidocr_ok,
             rapidocr_detail,
-        ) = _validate_rapidocr_artifacts(artifacts_path)
+        ) = _validate_rapidocr_artifacts(
+            artifacts_path,
+            backend=str(profile.get("ocr_backend", "torch")),
+            lang=str(profile.get("ocr_language", "pt")),
+        )
         checks.append(
             make_check(
                 "ocr model RapidOCR",
@@ -1956,6 +2118,61 @@ def preflight_profile(
                 "pass" if tableformer_ok else "fail",
                 tableformer_detail,
             )
+        )
+
+    # --------------------------------------------------
+    # Heading hierarchy
+    # --------------------------------------------------
+
+    if bool(profile.get("heading_hierarchy", False)):
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                HeadingHierarchyOptions,
+            )
+            checks.append(
+                make_check(
+                    "heading hierarchy support",
+                    "pass",
+                    "HeadingHierarchyOptions available",
+                )
+            )
+        except ImportError:
+            checks.append(
+                make_check(
+                    "heading hierarchy support",
+                    "fail",
+                    "HeadingHierarchyOptions not available in this docling version",
+                )
+            )
+
+    # --------------------------------------------------
+    # Table engine
+    # --------------------------------------------------
+
+    table_engine_str = str(profile.get("table_engine", "tableformer_v1"))
+    if table_engine_str == "tableformer_v2":
+        try:
+            from docling.datamodel.pipeline_options import (  # type: ignore
+                TableStructureV2Options,
+            )
+            checks.append(
+                make_check(
+                    "table engine v2 support",
+                    "pass",
+                    "TableStructureV2Options available",
+                )
+            )
+        except ImportError:
+            checks.append(
+                make_check(
+                    "table engine v2 support",
+                    "fail",
+                    "TableStructureV2Options not available in this docling version",
+                )
+            )
+    else:
+        checks.append(
+            make_check("table engine", "pass", table_engine_str)
         )
 
     # --------------------------------------------------
@@ -2362,15 +2579,44 @@ def main() -> None:
 
     document = conversion_result.document
 
+    try:
+        global_markdown = document.export_to_markdown(
+            blocked_meta_names={"description"},
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Docling global Markdown export failed: {exc}") from exc
+
+    _effective_prompt = (
+        str(profile.get("picture_description_prompt", "")).strip()
+        if profile.get("picture_description")
+        else ""
+    )
     (
         page_texts,
         parser_page_elements,
         parser_native_pages,
         parser_summary,
         observed_pages,
+        enriched_page_markdown,
+        derived_content_by_page,
     ) = build_docling_page_contract(
         document,
         page_count,
+        effective_prompt=_effective_prompt,
+    )
+
+    artifact_input = ParserArtifactInput(
+        native_markdown=str(global_markdown or ""),
+        source_page_markdown=page_texts,
+        enriched_page_markdown=enriched_page_markdown,
+        page_mapping_status="complete",
+        parser_page_elements=parser_page_elements,
+        parser_native_pages=parser_native_pages,
+        derived_content_by_page=derived_content_by_page,
+        raw_origin_kind="parser_native_exact",
+        raw_origin_details="document.export_to_markdown(blocked_meta_names={'description'})",
+        content_expected=inventory_requires_content(inventory)[0],
+        content_expectation_reason=inventory_requires_content(inventory)[1],
     )
 
     artifact_result = finalize_artifacts(
@@ -2379,13 +2625,7 @@ def main() -> None:
         source_file=input_path.name,
         parser_name=PARSER_NAME,
         profile_name=args.profile,
-        page_texts=page_texts,
-        parser_page_elements=(
-            parser_page_elements
-        ),
-        parser_native_pages=(
-            parser_native_pages
-        ),
+        artifact_input=artifact_input,
         tokenizer_name=tokenizer_name,
         normalization_config=(
             normalization_config
@@ -2539,7 +2779,7 @@ def main() -> None:
 
     metrics = {
         "benchmark": {
-            "schema_version": 2,
+            "schema_version": 3,
             "timestamp_utc": (
                 datetime.now(
                     timezone.utc
@@ -2696,7 +2936,7 @@ def main() -> None:
                 "requested_page_numbers": None,
                 "failed_page_numbers": None,
                 "tracking_note": (
-                    "Docling 2.119.0 does not expose "
+                    f"Docling {parser_version or 'unknown'} does not expose "
                     "a stable per-page OCR callback "
                     "equivalent to the PyMuPDF adapter. "
                     "OCR page counts are therefore not "
@@ -2748,6 +2988,9 @@ def main() -> None:
                 "normalization"
             ]
         ),
+        "artifacts": artifact_result["artifacts"],
+        "quality_eligibility": artifact_result["quality_eligibility"],
+        "content_validation": artifact_result["content_validation"],
         "output": {
             **artifact_result["output"],
             "run_log": (

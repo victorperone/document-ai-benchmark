@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "benchmark": {
     "reference_tokenizer": "o200k_base",
     "input_directory": "data/raw/batch",
@@ -33,7 +33,15 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess": {
           "ocr_enabled": true,
@@ -47,21 +55,37 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_force_rapidtess": {
           "ocr_enabled": true,
           "ocr_mode": "forced",
           "ocr_engine": "rapidtess",
           "ocr_language": "por",
-          "ocr_dpi": 300,
+          "ocr_dpi": 150,
           "layout_module": true,
           "parser_header": true,
           "parser_footer": true,
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_150": {
           "ocr_enabled": true,
@@ -75,7 +99,15 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_200": {
           "ocr_enabled": true,
@@ -89,7 +121,16 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "diagnostic_only": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "ocr_auto_rapidtess_300": {
           "ocr_enabled": true,
@@ -103,21 +144,60 @@
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": false
+          "page_separators": false,
+          "diagnostic_only": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
         },
         "full_cpu_local": {
           "ocr_enabled": true,
           "ocr_mode": "auto",
           "ocr_engine": "rapidtess",
           "ocr_language": "por",
-          "ocr_dpi": 300,
+          "ocr_dpi": 150,
           "layout_module": true,
           "parser_header": true,
           "parser_footer": true,
           "force_text": true,
           "write_images": false,
           "embed_images": false,
-          "page_separators": true
+          "page_separators": true,
+          "visual_enrichment_enabled": false,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "por",
+          "visual_description_model": "",
+          "visual_det_model_dir": null,
+          "visual_rec_model_dir": null,
+          "visual_failure_fatal": false,
+          "visual_persist_images": false
+        },
+        "full_cpu_local_visual": {
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "rapidtess",
+          "ocr_language": "por",
+          "ocr_dpi": 150,
+          "layout_module": true,
+          "parser_header": true,
+          "parser_footer": true,
+          "force_text": true,
+          "write_images": false,
+          "embed_images": false,
+          "page_separators": true,
+          "visual_enrichment_enabled": true,
+          "visual_render_dpi": 150,
+          "visual_ocr_language": "pt",
+          "visual_description_model": "models/visual-enrichment/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
+          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_det",
+          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_rec",
+          "visual_failure_fatal": true,
+          "visual_persist_images": false
         }
       }
     },
@@ -143,7 +223,16 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
         },
         "ocr_auto": {
           "ocr_enabled": true,
@@ -165,7 +254,16 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
         },
         "ocr_auto_visual": {
           "ocr_enabled": true,
@@ -190,7 +288,16 @@
           "code_enrichment": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
         },
         "ocr_auto_formula": {
           "ocr_enabled": true,
@@ -212,7 +319,16 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
         },
         "ocr_auto_picture_classification": {
           "ocr_enabled": true,
@@ -234,7 +350,16 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
         },
         "full_cpu_local": {
           "ocr_enabled": true,
@@ -259,7 +384,47 @@
           "remote_services_enabled": false,
           "accelerator_device": "cpu",
           "threads": 2,
-          "model_artifacts_path": null
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v1"
+        },
+        "ocr_auto_table_v2": {
+          "ocr_enabled": true,
+          "ocr_mode": "pdf_aware_layout_regions",
+          "ocr_engine": "rapidocr",
+          "ocr_backend": "torch",
+          "ocr_language": "pt",
+          "ocr_scale": 3.0,
+          "table_structure": true,
+          "table_mode": "accurate",
+          "table_cell_matching": true,
+          "picture_description": false,
+          "picture_classification": false,
+          "chart_extraction": false,
+          "formula_enrichment": false,
+          "code_enrichment": false,
+          "generate_picture_images": false,
+          "images_scale": 1.0,
+          "remote_services_enabled": false,
+          "accelerator_device": "cpu",
+          "threads": 2,
+          "model_artifacts_path": null,
+          "heading_hierarchy": true,
+          "heading_use_bookmarks": true,
+          "heading_use_numbering": true,
+          "heading_use_style": true,
+          "heading_use_font_style": true,
+          "heading_style_size_tolerance": 0.05,
+          "heading_max_level": 6,
+          "heading_bookmark_match_threshold": 0.8,
+          "table_engine": "tableformer_v2"
         }
       }
     },
@@ -282,7 +447,11 @@
           "ocr_enabled": true,
           "formula": true,
           "table": true,
-          "backend": "pipeline"
+          "table_merge": true,
+          "backend": "pipeline",
+          "persist_native_assets": true,
+          "persist_content_list": true,
+          "persist_middle_json": true
         }
       }
     },
@@ -297,7 +466,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "default": {
           "ocr_enabled": true,
@@ -308,7 +482,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "mvp_structured": {
           "ocr_enabled": true,
@@ -319,7 +498,12 @@
           "textline_orientation": true,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle_static",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "full": {
           "ocr_enabled": true,
@@ -330,7 +514,12 @@
           "textline_orientation": true,
           "document_unwarping": true,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "ocr_structured_visual": {
           "ocr_enabled": true,
@@ -341,7 +530,12 @@
           "textline_orientation": false,
           "document_unwarping": false,
           "region_detection": true,
-          "seal_recognition": false
+          "seal_recognition": false,
+          "device": "cpu",
+          "inference_engine": "paddle",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
         },
         "full_cpu_local": {
           "ocr_enabled": true,
@@ -354,7 +548,33 @@
           "region_detection": true,
           "seal_recognition": true,
           "format_block_content": true,
-          "markdown_ignore_labels": []
+          "markdown_ignore_labels": [],
+          "device": "cpu",
+          "inference_engine": "paddle",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null
+        },
+        "ppstructure_v6_experimental": {
+          "ocr_enabled": true,
+          "table_recognition": true,
+          "formula_recognition": true,
+          "chart_recognition": true,
+          "document_orientation_classification": true,
+          "textline_orientation": true,
+          "document_unwarping": true,
+          "region_detection": true,
+          "seal_recognition": true,
+          "format_block_content": true,
+          "markdown_ignore_labels": [],
+          "device": "cpu",
+          "inference_engine": "paddle",
+          "enable_mkldnn": true,
+          "mkldnn_cache_capacity": 10,
+          "cpu_threads": null,
+          "experimental": true,
+          "text_detection_model_dir_override": null,
+          "text_recognition_model_dir_override": null
         }
       }
     },
@@ -403,7 +623,11 @@
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",
           "ocr_server_url": null,
-          "tessdata_required": ["por", "eng", "osd"],
+          "tessdata_required": [
+            "por",
+            "eng",
+            "osd"
+          ],
           "dpi": 300,
           "orientation_detection": true,
           "image_ocr": true,
@@ -432,7 +656,11 @@
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",
           "ocr_server_url": null,
-          "tessdata_required": ["por", "eng", "osd"],
+          "tessdata_required": [
+            "por",
+            "eng",
+            "osd"
+          ],
           "dpi": 300,
           "orientation_detection": true,
           "image_ocr": true,
@@ -464,7 +692,11 @@
           "ocr_engine": "tesseract",
           "ocr_language": "por+eng",
           "ocr_server_url": null,
-          "tessdata_required": ["por", "eng", "osd"],
+          "tessdata_required": [
+            "por",
+            "eng",
+            "osd"
+          ],
           "dpi": 300,
           "orientation_detection": true,
           "image_ocr": true,
@@ -483,7 +715,10 @@
           "ocr_enabled": false,
           "ocr_mode": "disabled",
           "ocr_engine": null,
-          "languages": ["por", "eng"],
+          "languages": [
+            "por",
+            "eng"
+          ],
           "detect_language_per_element": false,
           "infer_table_structure": false,
           "include_page_breaks": true,
@@ -498,14 +733,19 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": null,
+          "table_ocr_agent": null
         },
         "auto_ocr": {
           "strategy": "auto",
           "ocr_enabled": true,
           "ocr_mode": "auto",
           "ocr_engine": "tesseract",
-          "languages": ["por", "eng"],
+          "languages": [
+            "por",
+            "eng"
+          ],
           "detect_language_per_element": false,
           "infer_table_structure": false,
           "include_page_breaks": true,
@@ -520,14 +760,19 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "hi_res_tables": {
           "strategy": "hi_res",
           "ocr_enabled": true,
           "ocr_mode": "layout_regions",
           "ocr_engine": "tesseract",
-          "languages": ["por", "eng"],
+          "languages": [
+            "por",
+            "eng"
+          ],
           "detect_language_per_element": false,
           "infer_table_structure": true,
           "include_page_breaks": true,
@@ -542,14 +787,19 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "ocr_only_diagnostic": {
           "strategy": "ocr_only",
           "ocr_enabled": true,
           "ocr_mode": "full_page",
           "ocr_engine": "tesseract",
-          "languages": ["por", "eng"],
+          "languages": [
+            "por",
+            "eng"
+          ],
           "detect_language_per_element": false,
           "infer_table_structure": false,
           "include_page_breaks": true,
@@ -564,19 +814,33 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         },
         "full_cpu_local": {
           "strategy": "hi_res",
           "ocr_enabled": true,
           "ocr_mode": "layout_regions",
           "ocr_engine": "tesseract",
-          "languages": ["por", "eng"],
+          "languages": [
+            "por",
+            "eng"
+          ],
           "detect_language_per_element": true,
+          "visual_enrichment_enabled": true,
+          "visual_ocr_language": "pt",
+          "visual_description_model": "models/visual-enrichment/smolvlm/HuggingFaceTB--SmolVLM-256M-Instruct",
+          "visual_det_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_det",
+          "visual_rec_model_dir": "models/visual-enrichment/paddleocr/PP-OCRv6_medium_rec",
+          "visual_failure_fatal": true,
           "infer_table_structure": true,
           "include_page_breaks": true,
           "hi_res_model_name": "yolox",
-          "extract_image_block_types": ["Image", "Table"],
+          "extract_image_block_types": [
+            "Image",
+            "Table"
+          ],
           "extract_image_block_to_payload": false,
           "extract_forms": false,
           "form_extraction_skip_tables": true,
@@ -586,7 +850,63 @@
           "pdfminer_line_overlap": null,
           "pdfminer_word_margin": 0.185,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
+        },
+        "auto_general": {
+          "strategy": "auto",
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "tesseract",
+          "languages": [
+            "por",
+            "eng"
+          ],
+          "detect_language_per_element": false,
+          "infer_table_structure": false,
+          "include_page_breaks": true,
+          "hi_res_model_name": "yolox",
+          "extract_image_block_types": [],
+          "extract_image_block_to_payload": false,
+          "extract_forms": false,
+          "form_extraction_skip_tables": true,
+          "password": null,
+          "pdfminer_line_margin": null,
+          "pdfminer_char_margin": null,
+          "pdfminer_line_overlap": null,
+          "pdfminer_word_margin": 0.185,
+          "remote_services_enabled": false,
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
+        },
+        "auto_quality": {
+          "strategy": "auto",
+          "ocr_enabled": true,
+          "ocr_mode": "auto",
+          "ocr_engine": "tesseract",
+          "languages": [
+            "por",
+            "eng"
+          ],
+          "detect_language_per_element": false,
+          "infer_table_structure": true,
+          "include_page_breaks": true,
+          "hi_res_model_name": "yolox",
+          "extract_image_block_types": [],
+          "extract_image_block_to_payload": false,
+          "extract_forms": false,
+          "form_extraction_skip_tables": true,
+          "password": null,
+          "pdfminer_line_margin": null,
+          "pdfminer_char_margin": null,
+          "pdfminer_line_overlap": null,
+          "pdfminer_word_margin": 0.185,
+          "remote_services_enabled": false,
+          "network_allowed_during_run": false,
+          "ocr_agent": "tesseract",
+          "table_ocr_agent": "tesseract"
         }
       }
     },
@@ -626,7 +946,14 @@
           "token_reduction_mode": "off",
           "layout_enabled": false,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": false,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
         },
         "ocr_auto_tesseract": {
           "output_format": "markdown",
@@ -638,7 +965,10 @@
           "enable_quality_processing": false,
           "ocr_enabled": true,
           "ocr_backend": "tesseract",
-          "ocr_languages": ["por", "eng"],
+          "ocr_languages": [
+            "por",
+            "eng"
+          ],
           "ocr_strategy": "auto",
           "force_ocr": false,
           "auto_rotate": true,
@@ -667,7 +997,14 @@
           "token_reduction_mode": "off",
           "layout_enabled": false,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": false,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
         },
         "ocr_force_tesseract": {
           "output_format": "markdown",
@@ -679,7 +1016,10 @@
           "enable_quality_processing": false,
           "ocr_enabled": true,
           "ocr_backend": "tesseract",
-          "ocr_languages": ["por", "eng"],
+          "ocr_languages": [
+            "por",
+            "eng"
+          ],
           "ocr_strategy": "auto",
           "force_ocr": true,
           "auto_rotate": true,
@@ -708,7 +1048,14 @@
           "token_reduction_mode": "off",
           "layout_enabled": false,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": false,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
         },
         "ocr_auto_tesseract_repair": {
           "output_format": "markdown",
@@ -720,7 +1067,10 @@
           "enable_quality_processing": false,
           "ocr_enabled": true,
           "ocr_backend": "tesseract",
-          "ocr_languages": ["por", "eng"],
+          "ocr_languages": [
+            "por",
+            "eng"
+          ],
           "ocr_strategy": "auto",
           "force_ocr": false,
           "auto_rotate": true,
@@ -749,7 +1099,14 @@
           "token_reduction_mode": "off",
           "layout_enabled": false,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": false,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
         },
         "full_cpu_local": {
           "output_format": "markdown",
@@ -761,7 +1118,10 @@
           "enable_quality_processing": true,
           "ocr_enabled": true,
           "ocr_backend": "tesseract",
-          "ocr_languages": ["por", "eng"],
+          "ocr_languages": [
+            "por",
+            "eng"
+          ],
           "ocr_strategy": "auto",
           "force_ocr": false,
           "auto_rotate": true,
@@ -794,7 +1154,69 @@
           "token_reduction_mode": "off",
           "layout_enabled": false,
           "remote_services_enabled": false,
-          "network_allowed_during_run": false
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": false,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
+        },
+        "full_cpu_layout": {
+          "output_format": "markdown",
+          "result_format": "unified",
+          "escape_markdown": true,
+          "table_anchors": false,
+          "include_document_structure": true,
+          "use_cache": false,
+          "enable_quality_processing": true,
+          "ocr_enabled": true,
+          "ocr_backend": "tesseract",
+          "ocr_languages": [
+            "por",
+            "eng"
+          ],
+          "ocr_strategy": "auto",
+          "force_ocr": false,
+          "auto_rotate": true,
+          "tesseract_psm": 3,
+          "tesseract_oem": 3,
+          "min_confidence": 50.0,
+          "enable_table_detection": true,
+          "tesseract_use_cache": false,
+          "target_dpi": 300,
+          "deskew": false,
+          "denoise": false,
+          "contrast_enhance": false,
+          "extract_pages": true,
+          "insert_page_markers": false,
+          "extract_tables": true,
+          "extract_images": true,
+          "run_ocr_on_images": true,
+          "append_ocr_text": true,
+          "include_data_base64": false,
+          "extract_metadata": true,
+          "extract_annotations": true,
+          "extract_form_fields": true,
+          "reading_order": true,
+          "ocr_inline_images": true,
+          "include_headers": true,
+          "include_footers": true,
+          "strip_repeating_text": false,
+          "include_watermarks": true,
+          "chunking_enabled": false,
+          "token_reduction_mode": "off",
+          "layout_enabled": true,
+          "remote_services_enabled": false,
+          "network_allowed_during_run": false,
+          "allow_single_column_tables": false,
+          "qr_codes": true,
+          "layout_strategy": null,
+          "layout_apply_heuristics": true,
+          "layout_acceleration_provider": "cpu",
+          "layout_confidence_threshold": null,
+          "layout_enable_chart_understanding": false
         }
       }
     }
@@ -1037,52 +1459,306 @@
       ]
     ],
     "unstructured_smoke_host": [
-      ["unstructured", "fast_native"]
+      [
+        "unstructured",
+        "fast_native"
+      ]
     ],
     "unstructured_ocr_host": [
-      ["unstructured", "auto_ocr"],
-      ["unstructured", "hi_res_tables"]
+      [
+        "unstructured",
+        "auto_ocr"
+      ],
+      [
+        "unstructured",
+        "hi_res_tables"
+      ]
     ],
     "xberg_smoke_host": [
-      ["xberg", "native_markdown"]
+      [
+        "xberg",
+        "native_markdown"
+      ]
     ],
     "xberg_ocr_host": [
-      ["xberg", "ocr_auto_tesseract"],
-      ["xberg", "ocr_auto_tesseract_repair"]
+      [
+        "xberg",
+        "ocr_auto_tesseract"
+      ],
+      [
+        "xberg",
+        "ocr_auto_tesseract_repair"
+      ]
     ],
     "windows_smoke_all_host": [
-      ["pymupdf", "native"],
-      ["docling", "native"],
-      ["mineru", "txt"],
-      ["paddleocr", "lightweight"],
-      ["liteparse", "native"],
-      ["unstructured", "fast_native"],
-      ["xberg", "native_markdown"]
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "paddleocr",
+        "lightweight"
+      ],
+      [
+        "liteparse",
+        "native"
+      ],
+      [
+        "unstructured",
+        "fast_native"
+      ],
+      [
+        "xberg",
+        "native_markdown"
+      ]
     ],
     "windows_ocr_auto_all_host": [
-      ["pymupdf", "ocr_auto_rapidtess"],
-      ["docling", "ocr_auto"],
-      ["mineru", "auto"],
-      ["paddleocr", "mvp_structured"],
-      ["liteparse", "ocr_auto_tesseract"],
-      ["unstructured", "auto_ocr"],
-      ["xberg", "ocr_auto_tesseract"]
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "mvp_structured"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_tesseract"
+      ],
+      [
+        "unstructured",
+        "auto_ocr"
+      ],
+      [
+        "xberg",
+        "ocr_auto_tesseract"
+      ]
     ],
     "full_cpu_local": [
-      ["pymupdf", "full_cpu_local"],
-      ["docling", "full_cpu_local"],
-      ["mineru", "full_cpu_local"],
-      ["paddleocr", "full_cpu_local"],
-      ["liteparse", "full_cpu_local"]
+      [
+        "pymupdf",
+        "full_cpu_local"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ]
     ],
     "windows_full_cpu_local_all_host": [
-      ["pymupdf", "full_cpu_local"],
-      ["docling", "full_cpu_local"],
-      ["mineru", "full_cpu_local"],
-      ["paddleocr", "full_cpu_local"],
-      ["liteparse", "full_cpu_local"],
-      ["unstructured", "full_cpu_local"],
-      ["xberg", "full_cpu_local"]
+      [
+        "pymupdf",
+        "full_cpu_local"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_local"
+      ]
+    ],
+    "windows_all_features_host": [
+      [
+        "pymupdf",
+        "full_cpu_local_visual"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_layout"
+      ]
+    ],
+    "windows_source_preservation_v3": [
+      [
+        "pymupdf",
+        "native"
+      ],
+      [
+        "pymupdf",
+        "ocr_auto_rapidtess"
+      ],
+      [
+        "docling",
+        "native"
+      ],
+      [
+        "docling",
+        "ocr_auto"
+      ],
+      [
+        "mineru",
+        "txt"
+      ],
+      [
+        "mineru",
+        "auto"
+      ],
+      [
+        "paddleocr",
+        "mvp_structured"
+      ],
+      [
+        "liteparse",
+        "native"
+      ],
+      [
+        "liteparse",
+        "ocr_auto_tesseract"
+      ],
+      [
+        "unstructured",
+        "fast_native"
+      ],
+      [
+        "unstructured",
+        "auto_ocr"
+      ],
+      [
+        "xberg",
+        "native_markdown"
+      ],
+      [
+        "xberg",
+        "ocr_auto_tesseract"
+      ]
+    ],
+    "windows_max_quality_cpu_v3": [
+      [
+        "pymupdf",
+        "full_cpu_local"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_local"
+      ]
+    ],
+    "windows_version_candidates_v3": [
+      [
+        "xberg",
+        "full_cpu_layout"
+      ],
+      [
+        "paddleocr",
+        "ppstructure_v6_experimental"
+      ],
+      [
+        "docling",
+        "ocr_auto_table_v2"
+      ]
+    ],
+    "windows_enriched_visual_cpu_v3": [
+      [
+        "pymupdf",
+        "full_cpu_local_visual"
+      ],
+      [
+        "docling",
+        "full_cpu_local"
+      ],
+      [
+        "mineru",
+        "full_cpu_local"
+      ],
+      [
+        "paddleocr",
+        "full_cpu_local"
+      ],
+      [
+        "liteparse",
+        "full_cpu_local"
+      ],
+      [
+        "unstructured",
+        "full_cpu_local"
+      ],
+      [
+        "xberg",
+        "full_cpu_local"
+      ]
     ]
   }
 }

@@ -9,6 +9,7 @@ Use make_valid_job_output() to create complete post-execution fixtures.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -121,6 +122,7 @@ def write_metrics(
 _ARTIFACT_OUTPUT_KEY = {
     "raw.md": "raw_markdown",
     "document.md": "clean_markdown",
+    "document.enriched.md": "enriched_markdown",
     "document.jsonl": "document_jsonl",
     "metrics.json": "metrics_json",
     "removed_content.jsonl": "removed_content_jsonl",
@@ -129,6 +131,7 @@ _ARTIFACT_OUTPUT_KEY = {
 _ARTIFACT_BYTES_KEY = {
     "raw.md": "raw_markdown_bytes",
     "document.md": "clean_markdown_bytes",
+    "document.enriched.md": "enriched_markdown_bytes",
     "document.jsonl": "document_jsonl_bytes",
     "removed_content.jsonl": "removed_content_jsonl_bytes",
 }
@@ -143,6 +146,7 @@ def make_valid_job_output(
     pages: int = 3,
     artifact_policy: ArtifactPolicy | None = None,
     removed_records: int = 2,
+    enriched_available: bool = True,
 ) -> tuple[Path, Path]:
     """Write a complete valid job output structure under output_root.
 
@@ -160,7 +164,12 @@ def make_valid_job_output(
     inv_dir.mkdir(parents=True, exist_ok=True)
     inv_path = inv_dir / f"{doc_stem}.json"
     inv_path.write_text(
-        json.dumps({"file": doc_name, "sha256": doc_sha256, "pages": pages}),
+        json.dumps({
+            "file": doc_name,
+            "sha256": doc_sha256,
+            "pages": pages,
+            "measurement_complete": True,
+        }),
         encoding="utf-8",
     )
 
@@ -202,6 +211,29 @@ def make_valid_job_output(
         p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         written["removed_content.jsonl"] = p
 
+    if artifact_policy.includes("document.enriched.md"):
+        p = out_dir / "document.enriched.md"
+        p.write_text(
+            "# Enriched document\n" if enriched_available else "# Clean document\n",
+            encoding="utf-8",
+        )
+        written["document.enriched.md"] = p
+
+    if artifact_policy.includes("native"):
+        native_dir = out_dir / "native"
+        native_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "schema_version": 1,
+            "parser": parser,
+            "profile": profile,
+            "bundle_status": "unavailable",
+            "files": [],
+        }
+        (native_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+        written["native"] = native_dir
+
     artifact_sel = artifact_policy.as_list()
     out_block: dict = {"selected_artifacts": artifact_sel}
     for artifact in artifact_sel:
@@ -213,8 +245,27 @@ def make_valid_job_output(
             out_block[bytes_key] = written[artifact].stat().st_size
 
     if artifact_policy.includes("metrics.json"):
+        enriched_selected = artifact_policy.includes("document.enriched.md")
+        enriched_present = enriched_selected
+        content_validation: dict[str, dict] = {}
+        for artifact, path in written.items():
+            if artifact not in _ARTIFACT_BYTES_KEY:
+                continue
+            data = path.read_bytes()
+            content_validation[artifact] = {
+                "selected": True,
+                "exists": True,
+                "utf8_valid": True,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "has_alphanumeric": any(ch.isalnum() for ch in data.decode("utf-8")),
+                "content_expected": artifact != "removed_content.jsonl",
+                "expectation_reason": "synthetic test fixture",
+                "valid": True,
+                "error": None,
+            }
         metrics_data = {
-            "benchmark": {"schema_version": 2},
+            "benchmark": {"schema_version": 3},
             "run": {
                 "parser": parser,
                 "profile": profile,
@@ -238,6 +289,26 @@ def make_valid_job_output(
                 "removed_records": removed_records
                 if artifact_policy.includes("removed_content.jsonl")
                 else 0,
+            },
+            "artifacts": {
+                "raw": {"origin_kind": "adapter_assembled_declared", "origin_details": "", "bytes": None, "sha256": None},
+                "clean": {"bytes": None, "sha256": None},
+                "enriched": {
+                    "selected": enriched_selected,
+                    "available": enriched_selected,
+                    "present": enriched_present,
+                    "enrichment_applied": enriched_available,
+                    "contains_derived_content": False,
+                    "fallback_origin": (
+                        "enriched_page_markdown" if enriched_available else "document.md"
+                    ),
+                },
+            },
+            "content_validation": content_validation,
+            "quality_eligibility": {
+                "source_text": True,
+                "page_mapping_complete": True,
+                "formal_quality_eligible": True,
             },
         }
         mp = out_dir / "metrics.json"

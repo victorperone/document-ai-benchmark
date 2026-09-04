@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 import pymupdf
+
+from src.benchmark.process_tree import ProcessResult, run_process_tree
 
 
 DEFAULT_FIXTURES_DIR = Path(
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
 
 def run_osd(
     image_path: Path,
-) -> subprocess.CompletedProcess[str]:
+) -> ProcessResult:
     command = [
         "tesseract",
         str(image_path),
@@ -70,11 +71,10 @@ def run_osd(
         "osd",
     ]
 
-    return subprocess.run(
+    return run_process_tree(
         command,
         capture_output=True,
-        text=True,
-        check=False,
+        timeout=30,
     )
 
 

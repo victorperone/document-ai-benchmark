@@ -7,6 +7,8 @@ from typing import Any
 
 import pymupdf
 
+from src.benchmark.content_validation import inventory_requires_content
+
 
 MB = 1024 * 1024
 
@@ -66,6 +68,7 @@ def analyze_pdf_source(
 
     total_embedded_image_occurrences = 0
     unique_image_xrefs: set[int] = set()
+    image_measurement_complete = True
 
     total_drawing_groups = 0
     drawing_measurement_complete = True
@@ -140,6 +143,7 @@ def analyze_pdf_source(
                 )
             except Exception as exc:
                 images = []
+                image_measurement_complete = False
 
                 warnings.append(
                     {
@@ -279,6 +283,11 @@ def analyze_pdf_source(
 
         "pages": page_count,
 
+        "measurement_complete": (
+            image_measurement_complete
+            and drawing_measurement_complete
+        ),
+
         "native_text": {
             "characters": (
                 total_native_characters
@@ -317,6 +326,10 @@ def analyze_pdf_source(
 
             "pages_with_embedded_images": (
                 pages_with_embedded_images
+            ),
+
+            "measurement_complete": (
+                image_measurement_complete
             ),
         },
 

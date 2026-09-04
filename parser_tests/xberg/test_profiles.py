@@ -10,7 +10,7 @@ _LEGACY_PROFILES = [
     "native_markdown", "ocr_auto_tesseract",
     "ocr_force_tesseract", "ocr_auto_tesseract_repair",
 ]
-_EXPECTED_PROFILES = _LEGACY_PROFILES + ["full_cpu_local"]
+_EXPECTED_PROFILES = _LEGACY_PROFILES + ["full_cpu_local", "full_cpu_layout"]
 
 # Keys that all four legacy profiles must have
 _REQUIRED_KEYS = frozenset({
@@ -23,6 +23,10 @@ _REQUIRED_KEYS = frozenset({
     "reading_order", "include_headers", "include_footers", "strip_repeating_text",
     "include_watermarks", "chunking_enabled", "token_reduction_mode", "layout_enabled",
     "remote_services_enabled", "network_allowed_during_run",
+    # X1–X4 new keys
+    "allow_single_column_tables", "qr_codes",
+    "layout_strategy", "layout_apply_heuristics", "layout_acceleration_provider",
+    "layout_confidence_threshold", "layout_enable_chart_understanding",
 })
 
 
@@ -161,3 +165,70 @@ class TestFullCpuLocalProfile(unittest.TestCase):
         from src.parsers.xberg_v2 import _PROFILE_KEYS
         unknown = set(self._profile()) - _PROFILE_KEYS
         self.assertEqual(unknown, set(), f"Unknown keys in full_cpu_local: {unknown}")
+
+
+class TestFullCpuLayoutProfile(unittest.TestCase):
+    def _profile(self) -> dict:
+        return get_profile(PARSER_NAME, "full_cpu_layout")
+
+    def test_exists(self):
+        self.assertIsInstance(self._profile(), dict)
+
+    def test_layout_enabled(self):
+        self.assertTrue(self._profile()["layout_enabled"])
+
+    def test_qr_codes_enabled(self):
+        self.assertTrue(self._profile()["qr_codes"])
+
+    def test_layout_provider_cpu(self):
+        self.assertEqual(self._profile()["layout_acceleration_provider"], "cpu")
+
+    def test_no_chart_understanding_by_default(self):
+        self.assertFalse(self._profile()["layout_enable_chart_understanding"])
+
+    def test_allow_single_column_tables_false(self):
+        self.assertFalse(self._profile()["allow_single_column_tables"])
+
+    def test_no_remote_services(self):
+        self.assertFalse(self._profile()["remote_services_enabled"])
+
+    def test_no_network(self):
+        self.assertFalse(self._profile()["network_allowed_during_run"])
+
+    def test_all_keys_valid(self):
+        from src.parsers.xberg_v2 import _PROFILE_KEYS
+        unknown = set(self._profile()) - _PROFILE_KEYS
+        self.assertEqual(unknown, set(), f"Unknown keys in full_cpu_layout: {unknown}")
+
+
+class TestNewKeysInAllProfiles(unittest.TestCase):
+    def test_all_profiles_have_new_keys(self):
+        new_keys = (
+            "allow_single_column_tables", "qr_codes",
+            "layout_strategy", "layout_apply_heuristics",
+            "layout_acceleration_provider", "layout_confidence_threshold",
+            "layout_enable_chart_understanding",
+        )
+        for name in _EXPECTED_PROFILES:
+            p = get_profile(PARSER_NAME, name)
+            for key in new_keys:
+                with self.subTest(profile=name, key=key):
+                    self.assertIn(key, p)
+
+    def test_legacy_profiles_layout_disabled(self):
+        for name in _LEGACY_PROFILES:
+            with self.subTest(profile=name):
+                self.assertFalse(get_profile(PARSER_NAME, name)["layout_enabled"])
+
+    def test_legacy_profiles_qr_disabled(self):
+        for name in _LEGACY_PROFILES:
+            with self.subTest(profile=name):
+                self.assertFalse(get_profile(PARSER_NAME, name)["qr_codes"])
+
+    def test_full_cpu_local_layout_disabled(self):
+        self.assertFalse(get_profile(PARSER_NAME, "full_cpu_local")["layout_enabled"])
+
+    def test_all_profiles_no_single_column_tables_by_default(self):
+        for name in _LEGACY_PROFILES + ["full_cpu_local"]:
+            with self.subTest(profile=name):
+                self.assertFalse(get_profile(PARSER_NAME, name)["allow_single_column_tables"])

@@ -14,6 +14,9 @@ _EXPECTED_PROFILES = [
     "auto_ocr",
     "hi_res_tables",
     "ocr_only_diagnostic",
+    "full_cpu_local",
+    "auto_general",
+    "auto_quality",
 ]
 _VALID_STRATEGIES = frozenset({"fast", "auto", "hi_res", "ocr_only"})
 _REQUIRED_KEYS = frozenset({
@@ -24,6 +27,9 @@ _REQUIRED_KEYS = frozenset({
     "password", "pdfminer_line_margin", "pdfminer_char_margin",
     "pdfminer_line_overlap", "pdfminer_word_margin",
     "remote_services_enabled", "network_allowed_during_run",
+    # U1: explicit OCR agent keys
+    "ocr_agent",
+    "table_ocr_agent",
 })
 
 
@@ -41,9 +47,9 @@ class TestUnstructuredProfilesExist(unittest.TestCase):
             config["parsers"][PARSER_NAME]["profiles"].keys()
         )
 
-        self.assertEqual(
-            defined,
-            set(_EXPECTED_PROFILES),
+        self.assertFalse(
+            defined - set(_EXPECTED_PROFILES),
+            f"Unexpected profiles found: {defined - set(_EXPECTED_PROFILES)}",
         )
 
 

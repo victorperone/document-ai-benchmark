@@ -1387,10 +1387,13 @@ def main() -> None:
                 for i in range(page_count)
             ]
 
-            # U2: all elements without a page_number are redistributed to the last
-            # known page inside _elements_to_page_texts(), so there are no genuinely
-            # unassigned elements remaining at this point.
-            unassigned_elements = []
+            # Elements without a reliable page_number are rendered on the last
+            # known page to preserve document-level content, but their page mapping
+            # remains uncertain. Keep them flagged so Schema 3 does not advertise
+            # a fabricated complete page mapping.
+            unassigned_elements = list(
+                native_pages.get(0, [])
+            )
             unassigned_source_elements = []
             unassigned_markdown = "\n\n".join(
                 rendered for rendered in (

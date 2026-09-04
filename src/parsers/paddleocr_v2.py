@@ -1455,10 +1455,10 @@ def main() -> None:
                     raise TypeError(
                         f"PaddleOCR page_index must be int, got {page_idx!r}."
                     )
-                if page_idx < 0 or page_idx >= page_count:
+                if page_idx < 0 or page_idx > page_count:
                     raise RuntimeError(
-                        f"PaddleOCR page_index {page_idx} out of range "
-                        f"[0, {page_count - 1}]."
+                        f"PaddleOCR page_index {page_idx} out of provisional range "
+                        f"[0, {page_count}]."
                     )
                 if page_idx in seen_indexes:
                     raise RuntimeError(
@@ -1489,20 +1489,32 @@ def main() -> None:
 
         received_indexes = sorted(seen_indexes)
         expected_indexes = list(range(page_count))
-        if received_indexes != expected_indexes:
-            # Detect 1-based indexing: if all received indexes are offset by 1
-            # from the expected 0-based range, normalise silently.
-            offset_indexes = [i - 1 for i in received_indexes]
-            if offset_indexes == expected_indexes:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "PPStructureV3 returned 1-based page indexes; normalising to 0-based."
-                )
-            else:
-                raise RuntimeError(
-                    "Unexpected PaddleOCR page indexes. "
-                    f"Expected {expected_indexes}, "
-                    f"got {received_indexes}."
+        one_based_indexes = list(range(1, page_count + 1))
+
+        if received_indexes == expected_indexes:
+            page_index_offset = 0
+        elif received_indexes == one_based_indexes:
+            page_index_offset = 1
+
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "PPStructureV3 returned 1-based page indexes; "
+                "normalising to 0-based."
+            )
+        else:
+            raise RuntimeError(
+                "Unexpected PaddleOCR page indexes. "
+                f"Expected {expected_indexes} or "
+                f"{one_based_indexes}, "
+                f"got {received_indexes}."
+            )
+
+        if page_index_offset:
+            for native_page in parser_native_pages:
+                native_page["page_idx"] = (
+                    int(native_page["page_idx"])
+                    - page_index_offset
                 )
 
         # Official aggregation — called exactly once after full iteration.

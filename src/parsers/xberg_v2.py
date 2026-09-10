@@ -851,7 +851,8 @@ def _result_to_artifacts(
             **_page_native(page),
         })
 
-    return page_texts, parser_page_elements, parser_native_pages
+    missing_pages = page_count - len(page_map)
+    return page_texts, parser_page_elements, parser_native_pages, missing_pages
 
 
 def _count_elements_from_result(
@@ -1267,7 +1268,7 @@ def main() -> None:
     print("=" * 72)
 
     import os
-    os.environ.setdefault("HF_HOME", str(model_root / "huggingface"))
+    os.environ["HF_HOME"] = str(model_root / "huggingface")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["DO_NOT_TRACK"] = "1"
@@ -1295,7 +1296,7 @@ def main() -> None:
 
             document, extraction_summary = _unwrap_extraction_result(envelope)
 
-            page_texts, parser_page_elements, parser_native_pages = _result_to_artifacts(
+            page_texts, parser_page_elements, parser_native_pages, _missing_pages = _result_to_artifacts(
                 document, page_count
             )
             element_counts = _count_elements_from_result(document, page_texts)
@@ -1330,7 +1331,7 @@ def main() -> None:
         native_markdown=str(document.content or ""),
         source_page_markdown=page_texts,
         enriched_page_markdown=enriched_page_markdown,
-        page_mapping_status="complete",
+        page_mapping_status="complete" if _missing_pages == 0 else "unavailable",
         parser_page_elements=parser_page_elements,
         parser_native_pages=parser_native_pages,
         derived_content_by_page=derived_content_by_page,

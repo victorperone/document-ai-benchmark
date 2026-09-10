@@ -432,7 +432,7 @@ def _process_visual_crops(
                     f"visual crop {region_id} failed: "
                     f"{response.error_detail or response.status}"
                 )
-            if page_number and page_number <= len(by_page):
+            if page_number and 1 <= page_number <= len(by_page):
                 by_page[page_number - 1].append(record)
             else:
                 unassigned.append(record)

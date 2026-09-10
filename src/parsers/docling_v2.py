@@ -1221,8 +1221,8 @@ def build_docling_page_contract(
             effective_prompt=effective_prompt,
         )
     else:
-        enriched_page_markdown = list(page_texts)
-        derived_content_by_page = []
+        enriched_page_markdown = None
+        derived_content_by_page = [[] for _ in range(page_count)]
 
     return (
         page_texts,

@@ -200,7 +200,7 @@ def _detect_and_correct_orientation(
         if rotation == 0:
             return image_bytes, 0
 
-        rotated = img.rotate(rotation, expand=True)
+        rotated = img.rotate(-rotation, expand=True)
         buf = io.BytesIO()
         rotated.save(buf, format="PNG")
         return buf.getvalue(), rotation

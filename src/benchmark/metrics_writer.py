@@ -8,14 +8,22 @@ from uuid import uuid4
 
 
 def atomic_write_text(path: Path, text: str) -> None:
-    """Write text to path atomically: tmp file → fsync → os.replace."""
+    """Write text atomically: write → flush → fsync → close → replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+
     try:
-        tmp.write_text(text, encoding="utf-8", newline="\n")
-        with tmp.open("rb") as fh:
+        with tmp.open(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as fh:
+            fh.write(text)
+            fh.flush()
             os.fsync(fh.fileno())
+
         os.replace(tmp, path)
+
     except Exception:
         try:
             tmp.unlink(missing_ok=True)

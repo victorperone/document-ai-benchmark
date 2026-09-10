@@ -47,12 +47,22 @@ function Invoke-ReadinessGate {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError  = $true
         $psi.CreateNoWindow         = $true
-        foreach ($arg in $Arguments) { $psi.ArgumentList.Add($arg) }
 
-        $logWriter = [System.IO.StreamWriter]::new($LogPath, $false, [System.Text.Encoding]::UTF8)
-        $logWriter.AutoFlush = $true
+        # Build Arguments string compatible with Windows PowerShell 5.1 / .NET Framework.
+        # ProcessStartInfo.ArgumentList only exists in .NET Core (PowerShell 7+).
+        # Escape each argument: wrap in double quotes and escape internal double quotes.
+        $escapedArgs = $Arguments | ForEach-Object {
+            $a = $_ -replace '"', '\"'
+            if ($a -match '[ \t]') { '"' + $a + '"' } else { $a }
+        }
+        $psi.Arguments = $escapedArgs -join ' '
 
-        $stdoutLines = New-Object System.Collections.Generic.List[string]
+        # Declare with $script: scope so event-handler scriptblocks can reference them.
+        # In Windows PowerShell 5.1 scriptblock event handlers run in a child scope;
+        # $script: is the only reliable way to share state with the enclosing function.
+        $script:_gateLogWriter   = [System.IO.StreamWriter]::new($LogPath, $false, [System.Text.Encoding]::UTF8)
+        $script:_gateLogWriter.AutoFlush = $true
+        $script:_gateStdoutLines = New-Object System.Collections.Generic.List[string]
 
         $proc = [System.Diagnostics.Process]::new()
         $proc.StartInfo = $psi
@@ -61,16 +71,16 @@ function Invoke-ReadinessGate {
         $stdoutHandler = {
             param($sender, $e)
             if ($null -ne $e.Data) {
-                $script:logWriter.WriteLine($e.Data)
+                $script:_gateLogWriter.WriteLine($e.Data)
                 Write-Host $e.Data
-                $script:stdoutLines.Add($e.Data)
+                $script:_gateStdoutLines.Add($e.Data)
             }
         }
         # Async stderr handler — mirrors to console and log
         $stderrHandler = {
             param($sender, $e)
             if ($null -ne $e.Data) {
-                $script:logWriter.WriteLine($e.Data)
+                $script:_gateLogWriter.WriteLine($e.Data)
                 Write-Host $e.Data -ForegroundColor DarkGray
             }
         }
@@ -86,10 +96,10 @@ function Invoke-ReadinessGate {
 
         $ExitCode = $proc.ExitCode
         $proc.Dispose()
-        $logWriter.Close()
+        $script:_gateLogWriter.Close()
 
         if ($FunctionalTests) {
-            foreach ($Line in $stdoutLines) {
+            foreach ($Line in $script:_gateStdoutLines) {
                 if ([string]$Line -match 'skipped\s*=\s*([1-9][0-9]*)') {
                     $script:FunctionalSkipped += [int]$Matches[1]
                 }
@@ -97,7 +107,7 @@ function Invoke-ReadinessGate {
         }
     }
     catch {
-        try { $logWriter.Close() } catch {}
+        try { $script:_gateLogWriter.Close() } catch {}
         $_ | Out-String | Add-Content -Path $LogPath -Encoding utf8
         $ExitCode = -1
     }

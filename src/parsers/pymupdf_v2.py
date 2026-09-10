@@ -1458,6 +1458,7 @@ def main() -> None:
                 "error": str(_ve),
                 "regions_detected": 0,
                 "regions_processed": 0,
+                "regions_skipped": 0,
                 "regions_failed": 0,
                 "images_persisted": 0,
                 "temporary_files_created": 0,

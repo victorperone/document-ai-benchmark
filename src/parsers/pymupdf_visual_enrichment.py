@@ -43,38 +43,86 @@ def _region_id(page_number: int, index: int, image_bytes: bytes) -> str:
     return f"p{page_number}-picture-{index}-{sha_prefix}"
 
 
-def _render_region(document: Any, page_index: int, rect: tuple, render_dpi: int = _RENDER_DPI) -> bytes | None:
-    """Render a page region to PNG bytes in memory. Returns None on failure."""
-    try:
-        import pymupdf  # type: ignore[import]
-        page = document[page_index]
-        page_rect = page.rect
-        page_area = page_rect.width * page_rect.height
-        if page_area <= 0:
-            return None
+def _render_region(
+    document: Any,
+    page_index: int,
+    rect: tuple,
+    render_dpi: int = _RENDER_DPI,
+) -> bytes | None:
+    """Render a page region to PNG bytes in memory.
 
-        clip = pymupdf.Rect(rect[0], rect[1], rect[2], rect[3])
-        region_area = clip.width * clip.height
-        if region_area / page_area < _MIN_AREA_FRACTION:
-            return None
+    Returns None only when the region is intentionally skipped because
+    it is below the configured visual-enrichment size thresholds.
 
-        scale = render_dpi / 72.0
-        mat = pymupdf.Matrix(scale, scale)
-        pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
-        if pix.width < _MIN_WIDTH_PX:
-            return None
-        if pix.width > _MAX_DIMENSION_PX or pix.height > _MAX_DIMENSION_PX:
-            # Clamp: re-render at lower scale
-            max_scale = min(
-                _MAX_DIMENSION_PX / (pix.width / scale),
-                _MAX_DIMENSION_PX / (pix.height / scale),
-                scale,
-            )
-            mat2 = pymupdf.Matrix(max_scale, max_scale)
-            pix = page.get_pixmap(matrix=mat2, clip=clip, alpha=False)
-        return pix.tobytes("png")
-    except Exception:
+    Actual rendering errors are allowed to propagate so the caller can
+    distinguish them from expected filtering.
+    """
+    import pymupdf  # type: ignore[import]
+
+    page = document[page_index]
+    page_rect = page.rect
+
+    page_area = page_rect.width * page_rect.height
+
+    if page_area <= 0:
+        raise ValueError(
+            f"page {page_index} has non-positive area: "
+            f"{page_rect!r}"
+        )
+
+    clip = pymupdf.Rect(
+        rect[0],
+        rect[1],
+        rect[2],
+        rect[3],
+    )
+
+    region_area = clip.width * clip.height
+
+    # Expected filtering, not a rendering failure.
+    if (
+        region_area / page_area
+        < _MIN_AREA_FRACTION
+    ):
         return None
+
+    scale = render_dpi / 72.0
+    mat = pymupdf.Matrix(scale, scale)
+
+    pix = page.get_pixmap(
+        matrix=mat,
+        clip=clip,
+        alpha=False,
+    )
+
+    # Expected filtering, not a rendering failure.
+    if pix.width < _MIN_WIDTH_PX:
+        return None
+
+    if (
+        pix.width > _MAX_DIMENSION_PX
+        or pix.height > _MAX_DIMENSION_PX
+    ):
+        max_scale = min(
+            _MAX_DIMENSION_PX
+            / (pix.width / scale),
+            _MAX_DIMENSION_PX
+            / (pix.height / scale),
+            scale,
+        )
+
+        mat2 = pymupdf.Matrix(
+            max_scale,
+            max_scale,
+        )
+
+        pix = page.get_pixmap(
+            matrix=mat2,
+            clip=clip,
+            alpha=False,
+        )
+
+    return pix.tobytes("png")
 
 
 def _derived_block(
@@ -204,6 +252,7 @@ def enrich_pages(
     regions_detected = 0
     regions_processed = 0
     regions_failed = 0
+    regions_skipped = 0
     successful_derived_blocks = 0
     processed_hashes: set[str] = set()
 
@@ -238,13 +287,32 @@ def enrich_pages(
                     )
                 continue
 
-            image_bytes = _render_region(document, page_index, rect, render_dpi=render_dpi)
-            if image_bytes is None:
+            try:
+                image_bytes = _render_region(
+                    document,
+                    page_index,
+                    rect,
+                    render_dpi=render_dpi,
+                )
+
+            except Exception as exc:
                 regions_failed += 1
+
                 if failure_fatal:
                     raise RuntimeError(
-                        f"visual region render failed on page {page_number}: {rect!r}"
-                    )
+                        "visual region render failed on "
+                        f"page {page_number}: {rect!r}; "
+                        f"class={box.get('class')!r}; "
+                        f"xref={box.get('xref')!r}; "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+
+                continue
+
+            if image_bytes is None:
+                # This is an expected policy skip: the region is below
+                # the visual-enrichment size thresholds.
+                regions_skipped += 1
                 continue
 
             image_hash = hashlib.sha256(image_bytes).hexdigest()
@@ -335,6 +403,7 @@ def enrich_pages(
         "enabled": True,
         "regions_detected": regions_detected,
         "regions_processed": regions_processed,
+        "regions_skipped": regions_skipped,
         "regions_failed": regions_failed,
         "images_persisted": 0,
         "temporary_files_created": 0,

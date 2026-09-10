@@ -14,7 +14,9 @@ param(
     [switch]$Resume,
     [switch]$DryRun,
     [switch]$PreflightOnly,
-    [switch]$VerboseOutput
+    [switch]$VerboseOutput,
+    [ValidateRange(1, 86400)]
+    [Nullable[int]]$JobTimeoutSeconds = $null
 )
 
 Set-StrictMode -Version Latest
@@ -53,6 +55,7 @@ $BaseArgs = @(
 
 if ($Resume) { $BaseArgs += '--resume' } else { $BaseArgs += '--force' }
 if ($VerboseOutput) { $BaseArgs += '--verbose-output' }
+if ($null -ne $JobTimeoutSeconds) { $BaseArgs += '--job-timeout-seconds'; $BaseArgs += [string]$JobTimeoutSeconds }
 
 if ($DryRun) {
     & $CorePython @BaseArgs '--dry-run'

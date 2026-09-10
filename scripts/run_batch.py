@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +27,7 @@ from src.benchmark.preflight import validate_result  # noqa: E402
 from src.benchmark.artifact_policy import ArtifactPolicy, ArtifactSelectionError  # noqa: E402
 from src.benchmark.paths import build_output_paths  # noqa: E402
 from src.benchmark.post_validation import validate_post_execution, validate_resume_candidate  # noqa: E402
-from src.benchmark.process_tree import run_process_tree  # noqa: E402
+from src.benchmark.process_tree import run_process_tree, ProcessResult  # noqa: E402
 from src.benchmark.execution_paths import (  # noqa: E402
     RUNTIME_DOCKER,
     RUNTIME_HOST,
@@ -59,6 +60,12 @@ class JobRecord:
     elapsed: float = 0.0
     error: str | None = None
     validation: dict | None = None
+    timed_out: bool = False
+    termination_reason: str | None = None  # "timeout" | "exit_code" | "exception" | None
+    timeout_seconds_effective: int | None = None
+    job_log_path: str | None = None
+    exit_code_hex: str | None = None
+    windows_status: str | None = None
 
     @property
     def label(self) -> str:
@@ -350,7 +357,7 @@ def build_source_inventories(
             ]
             env = _build_host_environment("pymupdf")
             result = run_process_tree(
-                cmd, cwd=ROOT, env=env, timeout=3600, capture_output=False
+                cmd, cwd=ROOT, env=env, timeout=None, capture_output=False
             )
             code = result.returncode
         else:
@@ -468,6 +475,15 @@ def _metrics_match(
 
 # ── Phase 5: Execute ──────────────────────────────────────────────────────────
 
+def _open_job_log(jobs_log_root: Path, run_uuid: str, rec: JobRecord):
+    """Open a per-job log file before the subprocess starts. Returns (path, file_object)."""
+    job_log_dir = jobs_log_root / run_uuid / rec.doc.stem
+    job_log_dir.mkdir(parents=True, exist_ok=True)
+    log_name = f"{rec.parser}__{rec.profile}.log"
+    log_path = job_log_dir / log_name
+    return log_path, log_path.open("w", encoding="utf-8", buffering=1)
+
+
 def execute_plan(
     plan: list[JobRecord],
     compose_base: list[str],
@@ -482,9 +498,12 @@ def execute_plan(
     runtime: str = RUNTIME_DOCKER,
     job_timeout_seconds: int | None = None,
     verbose_output: bool = False,
+    run_uuid: str | None = None,
 ) -> None:
     total = len(plan)
     current_doc: Path | None = None
+    jobs_log_root = LOGS_DIR / "jobs"
+    effective_run_uuid = run_uuid or uuid.uuid4().hex
 
     for n, rec in enumerate(plan, 1):
         if rec.doc != current_doc:
@@ -497,15 +516,61 @@ def execute_plan(
             continue
 
         clean_job_output(output_root, rec)
-        log(f"  [START]  {rec.parser}/{rec.profile}")
+
+        # Abrir log por job ANTES de iniciar o subprocesso
+        job_log_path, job_log_file = _open_job_log(jobs_log_root, effective_run_uuid, rec)
+        rec.job_log_path = str(job_log_path)
+        rec.timeout_seconds_effective = job_timeout_seconds
+
+        log(f"  [START]  {rec.parser}/{rec.profile}  log={job_log_path.name}")
         t0 = time.monotonic()
-        rec.exit_code = _run_subprocess(
-            compose_base, rec.parser, rec.doc, rec.profile, container_output_root, artifacts,
-            runtime=runtime, output_root=output_root,
-            timeout_seconds=job_timeout_seconds,
-            verbose_output=verbose_output,
-        )
+        try:
+            proc_result = _run_subprocess(
+                compose_base, rec.parser, rec.doc, rec.profile, container_output_root, artifacts,
+                runtime=runtime, output_root=output_root,
+                timeout_seconds=job_timeout_seconds,
+                verbose_output=verbose_output,
+                job_log_file=job_log_file if runtime == RUNTIME_HOST else None,
+            )
+        except Exception as exc:
+            rec.elapsed = time.monotonic() - t0
+            rec.termination_reason = "exception"
+            rec.exit_code = 1
+            rec.error = f"{type(exc).__name__}: {exc}"
+            rec.status = "fail"
+            job_log_file.write(f"\n[EXCEPTION] {rec.error}\n")
+            job_log_file.close()
+            log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
+            _append_result(results_path, rec)
+            if not continue_on_error:
+                log("\nAborted on first failure. Use --continue-on-error to keep going.")
+                for remaining in plan[n:]:
+                    remaining.status = "aborted"
+                    _append_result(results_path, remaining)
+                return
+            continue
+        finally:
+            try:
+                job_log_file.close()
+            except Exception:
+                pass
+
         rec.elapsed = time.monotonic() - t0
+
+        # Extrair campos de diagnóstico do ProcessResult (host runtime)
+        if isinstance(proc_result, ProcessResult):
+            rec.exit_code = proc_result.returncode
+            rec.timed_out = proc_result.timed_out
+            rec.exit_code_hex = proc_result.exit_code_hex
+            rec.windows_status = proc_result.windows_status
+            if proc_result.timed_out:
+                rec.termination_reason = "timeout"
+            else:
+                rec.termination_reason = "exit_code"
+        else:
+            # Docker: proc_result é int simples
+            rec.exit_code = int(proc_result)
+            rec.termination_reason = "exit_code"
 
         if rec.exit_code == 0:
             inv_path = output_root / "_source_inventory" / f"{rec.doc.stem}.json"
@@ -532,8 +597,15 @@ def execute_plan(
                 log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
         else:
             rec.status = "fail"
-            rec.error = f"exit_code={rec.exit_code}"
-            log(f"  [FAIL ]  {rec.parser}/{rec.profile}  exit={rec.exit_code}  ({rec.elapsed:.0f}s)")
+            status_detail = ""
+            if rec.exit_code_hex:
+                status_detail = f"  [{rec.exit_code_hex} {rec.windows_status}]"
+            if rec.timed_out:
+                rec.error = f"timed_out after {job_timeout_seconds}s"
+                log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
+            else:
+                rec.error = f"exit_code={rec.exit_code}{status_detail}"
+                log(f"  [FAIL ]  {rec.parser}/{rec.profile}  exit={rec.exit_code}{status_detail}  ({rec.elapsed:.0f}s)")
 
         _append_result(results_path, rec)
 
@@ -569,7 +641,13 @@ def _append_result(results_path: Path, rec: JobRecord) -> None:
         "profile": rec.profile,
         "status": rec.status,
         "exit_code": rec.exit_code,
+        "exit_code_hex": rec.exit_code_hex,
+        "windows_status": rec.windows_status,
         "elapsed_seconds": round(rec.elapsed, 2),
+        "timed_out": rec.timed_out,
+        "termination_reason": rec.termination_reason,
+        "timeout_seconds_effective": rec.timeout_seconds_effective,
+        "job_log_path": rec.job_log_path,
         "output_dir": rec.output_dir,
         "error": rec.error,
         "validation": rec.validation,
@@ -678,17 +756,26 @@ def _run_host_subprocess(
     cmd: list[str],
     extra_env: dict[str, str],
     timeout_seconds: int | None = None,
-) -> int:
+    job_log_file: "IO[str] | None" = None,
+) -> ProcessResult:
     env = _build_host_environment(parser_name, extra_env)
     result = run_process_tree(
         cmd,
         cwd=str(ROOT),
         env=env,
         timeout=timeout_seconds,
+        capture_output=True,
     )
+    if job_log_file is not None:
+        for chunk in (result.stdout, result.stderr):
+            if chunk:
+                job_log_file.write(chunk)
+                if not chunk.endswith("\n"):
+                    job_log_file.write("\n")
+        job_log_file.flush()
     if result.timed_out:
         print(f"Host job timed out after {timeout_seconds}s: {parser_name}", file=sys.stderr)
-    return result.returncode
+    return result
 
 
 def _run_subprocess(
@@ -703,7 +790,8 @@ def _run_subprocess(
     output_root: Path | None = None,
     timeout_seconds: int | None = None,
     verbose_output: bool = False,
-) -> int:
+    job_log_file: "IO[str] | None" = None,
+) -> "ProcessResult | int":
     if runtime == RUNTIME_HOST:
         if output_root is None:
             raise ValueError("output_root is required for host runtime")
@@ -713,7 +801,9 @@ def _run_subprocess(
         if verbose_output:
             cmd.append("--verbose")
         return _run_host_subprocess(
-            parser_name, cmd, extra_env, timeout_seconds=timeout_seconds
+            parser_name, cmd, extra_env,
+            timeout_seconds=timeout_seconds,
+            job_log_file=job_log_file,
         )
 
     cmd = _build_docker_command(
@@ -1482,11 +1572,13 @@ def main() -> None:
 
     LOGS_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_uuid = uuid.uuid4().hex
     log_path = LOGS_DIR / f"batch_{ts}.log"
     results_path = LOGS_DIR / f"batch_{ts}_results.jsonl"
     manifest_path = LOGS_DIR / f"batch_{ts}_manifest.json"
     manifest = {
         "batch_start": ts,
+        "run_uuid": run_uuid,
         "execution_runtime": runtime,
         "host_os": platform.platform(),
         "orchestrator_python": sys.version.split()[0],
@@ -1545,6 +1637,7 @@ def main() -> None:
             runtime=runtime,
             job_timeout_seconds=args.job_timeout_seconds,
             verbose_output=args.verbose_output,
+            run_uuid=run_uuid,
         )
         elapsed = time.monotonic() - batch_start
 

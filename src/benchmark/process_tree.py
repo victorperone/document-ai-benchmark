@@ -10,6 +10,33 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
+_NTSTATUS_NAMES: dict[int, str] = {
+    0xC0000005: "STATUS_ACCESS_VIOLATION",
+    0xC0000034: "STATUS_OBJECT_NAME_NOT_FOUND",
+    0xC000001D: "STATUS_ILLEGAL_INSTRUCTION",
+    0xC0000096: "STATUS_PRIVILEGED_INSTRUCTION",
+    0xC00000FD: "STATUS_STACK_OVERFLOW",
+    0xC0000135: "STATUS_DLL_NOT_FOUND",
+    0xC0000138: "STATUS_ORDINAL_NOT_FOUND",
+    0xC0000139: "STATUS_ENTRYPOINT_NOT_FOUND",
+    0xC0000142: "STATUS_DLL_INIT_FAILED",
+    0xC0000374: "STATUS_HEAP_CORRUPTION",
+    0xC0000409: "STATUS_STACK_BUFFER_OVERRUN",
+}
+
+
+def _decode_ntstatus(returncode: int) -> tuple[str, str] | None:
+    """Return (hex_string, name) for Windows NTSTATUS error codes, else None."""
+    if sys.platform != "win32":
+        return None
+    unsigned = returncode & 0xFFFFFFFF
+    if unsigned < 0x80000000:
+        return None
+    hex_str = f"0x{unsigned:08X}"
+    name = _NTSTATUS_NAMES.get(unsigned, "STATUS_UNKNOWN")
+    return hex_str, name
+
+
 @dataclass(frozen=True)
 class ProcessResult:
     """Result of a process whose complete descendant tree is supervised."""
@@ -21,6 +48,8 @@ class ProcessResult:
     timed_out: bool
     pid: int
     duration_seconds: float
+    exit_code_hex: str | None = None
+    windows_status: str | None = None
 
 
 def _windows_job_object() -> object | None:
@@ -231,12 +260,16 @@ def run_process_tree(
         close_windows_job(windows_job)
 
     duration_seconds = time.monotonic() - start_time
+    final_returncode = process.returncode if process.returncode is not None else 1
+    ntstatus = _decode_ntstatus(final_returncode)
     return ProcessResult(
         args=command,
-        returncode=process.returncode if process.returncode is not None else 1,
+        returncode=final_returncode,
         stdout=stdout,
         stderr=stderr,
         timed_out=timed_out,
         pid=process.pid,
         duration_seconds=duration_seconds,
+        exit_code_hex=ntstatus[0] if ntstatus else None,
+        windows_status=ntstatus[1] if ntstatus else None,
     )

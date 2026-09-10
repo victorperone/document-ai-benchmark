@@ -515,10 +515,21 @@ def _read_lock(lock_path: Path) -> dict | None:
 
 
 def _pid_alive(pid: int) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+
+    if sys.platform == "win32":
+        import psutil
+        return psutil.pid_exists(pid)
+
     try:
         os.kill(pid, 0)
         return True
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
         return False
 
 
@@ -701,7 +712,11 @@ def execute_plan(
         else:
             disk_free_before = _free_bytes(output_root)
 
-        # Per-job lock
+        # Clean stale output before acquiring the lock so the lock survives cleanup.
+        clean_job_output(output_root, rec)
+
+        # Per-job lock (acquired after cleanup so .job_lock.json is never inside
+        # the directory that clean_job_output just removed).
         job_lock_path: Path | None = None
         try:
             job_lock_path = acquire_job_lock(output_root, rec, effective_run_uuid)
@@ -718,8 +733,6 @@ def execute_plan(
                     _append_result(results_path, remaining, disk_fields=None)
                 return
             continue
-
-        clean_job_output(output_root, rec)
 
         # Abrir log por job ANTES de iniciar o subprocesso
         job_log_path, job_log_file = _open_job_log(jobs_log_root, effective_run_uuid, rec)
@@ -1012,15 +1025,8 @@ def _run_host_subprocess(
         cwd=str(ROOT),
         env=env,
         timeout=timeout_seconds,
-        capture_output=True,
+        tee_log=job_log_file,
     )
-    if job_log_file is not None:
-        for chunk in (result.stdout, result.stderr):
-            if chunk:
-                job_log_file.write(chunk)
-                if not chunk.endswith("\n"):
-                    job_log_file.write("\n")
-        job_log_file.flush()
     if result.timed_out:
         print(f"Host job timed out after {timeout_seconds}s: {parser_name}", file=sys.stderr)
     return result
@@ -1478,7 +1484,7 @@ def run_preflight(
         # Host: check venv existence for each required parser
         # --------------------------------------------------
 
-        required_venvs = set(parsers) | {"pymupdf"}
+        required_venvs = set(parsers) | {"inventory"}
 
         for venv_name in sorted(required_venvs):
             python_exe = resolve_venv_python(venv_name)
@@ -1885,28 +1891,29 @@ def main() -> None:
     print(f"Results:    {results_path.relative_to(ROOT)}")
     print(f"Manifest:   {manifest_path.relative_to(ROOT)}\n")
 
-    # Acquire output root lock before any writes
+    # Acquire output root lock before any writes.
+    # The try/finally below guarantees release even if source inventory fails.
     output_root_lock_path = acquire_output_root_lock(output_root, run_uuid)
 
-    with log_path.open("w", encoding="utf-8") as lf:
+    try:
+        with log_path.open("w", encoding="utf-8") as lf:
 
-        def log(msg: str) -> None:
-            print(msg)
-            lf.write(msg + "\n")
-            lf.flush()
+            def log(msg: str) -> None:
+                print(msg)
+                lf.write(msg + "\n")
+                lf.flush()
 
-        log(f"batch_start={ts}  total={total}  input={input_dir}  output={output_root}")
+            log(f"batch_start={ts}  total={total}  input={input_dir}  output={output_root}")
 
-        # ── 4. Build source inventories ───────────────────────────────────────
-        log("\n[SOURCE INVENTORIES]")
-        build_source_inventories(
-            docs, doc_sha256, input_dir, output_root, compose_base, args.resume, log,
-            runtime=runtime,
-        )
+            # ── 4. Build source inventories ───────────────────────────────────
+            log("\n[SOURCE INVENTORIES]")
+            build_source_inventories(
+                docs, doc_sha256, input_dir, output_root, compose_base, args.resume, log,
+                runtime=runtime,
+            )
 
-        # ── 5. Execute ────────────────────────────────────────────────────────
-        batch_start = time.monotonic()
-        try:
+            # ── 5. Execute ────────────────────────────────────────────────────
+            batch_start = time.monotonic()
             execute_plan(
                 plan, compose_base, container_output_root,
                 args.artifacts, args.continue_on_error, results_path, log,
@@ -1919,12 +1926,13 @@ def main() -> None:
                 min_free_disk_gb=args.min_free_disk_gb,
                 execution_fingerprint_base=fingerprint_base,
             )
-        finally:
-            release_output_root_lock(output_root_lock_path, run_uuid)
-        elapsed = time.monotonic() - batch_start
+            elapsed = time.monotonic() - batch_start
 
-        # ── 6. Batch summary ──────────────────────────────────────────────────
-        counts = batch_summary(plan, elapsed, log)
+            # ── 6. Batch summary ──────────────────────────────────────────────
+            counts = batch_summary(plan, elapsed, log)
+
+    finally:
+        release_output_root_lock(output_root_lock_path, run_uuid)
 
     if counts["fail"]:
         print(f"\nWARNING: {counts['fail']} job(s) failed. See {log_path.name} for details.")

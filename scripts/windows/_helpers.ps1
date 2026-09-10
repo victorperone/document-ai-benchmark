@@ -94,7 +94,15 @@ Enable Win32 long paths and restart the Windows Server before retrying.
 
 function Set-InstallingMarker {
     param([Parameter(Mandatory)][string]$VenvPath)
-    Set-Content -LiteralPath "$VenvPath\.installing" -Value "" -Encoding UTF8
+
+    if (-not (Test-Path -LiteralPath $VenvPath -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $VenvPath | Out-Null
+    }
+
+    Set-Content `
+        -LiteralPath "$VenvPath\.installing" `
+        -Value "" `
+        -Encoding UTF8
 }
 
 function Remove-InstallingMarker {

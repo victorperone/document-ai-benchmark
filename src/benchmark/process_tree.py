@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import io
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import IO, Mapping, Sequence
 
 
 _NTSTATUS_NAMES: dict[int, str] = {
@@ -205,6 +207,20 @@ def close_windows_job(windows_job: object | None) -> None:
         pass
 
 
+def _tee_reader(pipe: IO[str], buf: io.StringIO, log_file: IO[str]) -> None:
+    """Read *pipe* line by line, write each line to both *buf* and *log_file*."""
+    try:
+        for line in pipe:
+            buf.write(line)
+            log_file.write(line)
+            try:
+                log_file.flush()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def run_process_tree(
     args: Sequence[str | os.PathLike[str]],
     *,
@@ -214,9 +230,20 @@ def run_process_tree(
     capture_output: bool = False,
     encoding: str = "utf-8",
     errors: str = "replace",
+    tee_log: IO[str] | None = None,
 ) -> ProcessResult:
-    """Run a command while owning and reliably timing out its whole tree."""
+    """Run a command while owning and reliably timing out its whole tree.
+
+    When *tee_log* is provided the subprocess stdout and stderr are streamed
+    line-by-line to *tee_log* in real time (incremental persistence) while
+    also being captured and returned in :attr:`ProcessResult.stdout` /
+    :attr:`ProcessResult.stderr`.  *capture_output* is implied when *tee_log*
+    is set.
+    """
     command = tuple(os.fspath(value) for value in args)
+
+    use_pipe = capture_output or (tee_log is not None)
+
     popen_kwargs: dict[str, object] = {
         "cwd": os.fspath(cwd) if cwd is not None else None,
         "env": dict(env) if env is not None else None,
@@ -224,7 +251,7 @@ def run_process_tree(
         "encoding": encoding,
         "errors": errors,
     }
-    if capture_output:
+    if use_pipe:
         popen_kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     windows_job = _windows_job_object()
@@ -244,18 +271,54 @@ def run_process_tree(
     stdout = ""
     stderr = ""
     try:
-        try:
-            out, err = process.communicate(timeout=timeout)
-            stdout = out or ""
-            stderr = err or ""
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            partial_stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-            partial_stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-            terminate_process_tree(process, windows_job=windows_job)
-            out, err = process.communicate()
-            stdout = out if isinstance(out, str) else partial_stdout
-            stderr = err if isinstance(err, str) else partial_stderr
+        if tee_log is not None and process.stdout is not None and process.stderr is not None:
+            # Streaming tee: two reader threads drain stdout/stderr concurrently,
+            # writing each line to the log file as it arrives.
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            t_out = threading.Thread(
+                target=_tee_reader,
+                args=(process.stdout, out_buf, tee_log),
+                daemon=True,
+            )
+            t_err = threading.Thread(
+                target=_tee_reader,
+                args=(process.stderr, err_buf, tee_log),
+                daemon=True,
+            )
+            t_out.start()
+            t_err.start()
+            try:
+                if timeout is not None:
+                    deadline = start_time + timeout
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    process.wait(timeout=remaining)
+                else:
+                    process.wait()
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                terminate_process_tree(process, windows_job=windows_job)
+                process.wait()
+            finally:
+                t_out.join(timeout=10)
+                t_err.join(timeout=10)
+            stdout = out_buf.getvalue()
+            stderr = err_buf.getvalue()
+        else:
+            try:
+                out, err = process.communicate(timeout=timeout)
+                stdout = out or ""
+                stderr = err or ""
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                partial_stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+                partial_stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+                terminate_process_tree(process, windows_job=windows_job)
+                out, err = process.communicate()
+                stdout = out if isinstance(out, str) else partial_stdout
+                stderr = err if isinstance(err, str) else partial_stderr
     finally:
         close_windows_job(windows_job)
 

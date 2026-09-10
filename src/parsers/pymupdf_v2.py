@@ -992,11 +992,9 @@ def preflight_profile(
                 )
 
 
-        # Worker imports (subprocess probe — no model loading).
-        #
-        # This is an administrative preflight timeout, not a parser
-        # inference timeout. Cold imports of PaddleOCR + Transformers +
-        # Torch can be slow on Windows Server.
+        # Worker imports run without a wall-clock timeout.
+        # Cold imports can be slow on Windows Server and benchmark
+        # readiness must observe natural completion or failure.
         try:
             probe_result = run_process_tree(
                 [
@@ -1010,12 +1008,10 @@ def preflight_profile(
                     ),
                 ],
                 capture_output=True,
-                timeout=1000,
             )
 
             if (
                 probe_result.returncode == 0
-                and not probe_result.timed_out
                 and "ok" in probe_result.stdout
             ):
                 checks.append(
@@ -1029,18 +1025,6 @@ def preflight_profile(
                     )
                 )
 
-            elif probe_result.timed_out:
-                checks.append(
-                    make_check(
-                        "visual_worker_imports",
-                        "fail",
-                        (
-                            "import probe exceeded administrative "
-                            "preflight limit of 180s; "
-                            f"elapsed={probe_result.duration_seconds:.1f}s"
-                        ),
-                    )
-                )
 
             else:
                 detail_parts = [

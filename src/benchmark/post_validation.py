@@ -209,6 +209,7 @@ def validate_resume_candidate(
     document_path: Path,
     expected_sha256: str,
     requested_artifacts: ArtifactPolicy,
+    expected_fingerprint: str | None = None,
 ) -> dict:
     checks: list[dict] = []
     paths = build_output_paths(output_root, parser, document_path.stem, profile, create=False)
@@ -305,6 +306,23 @@ def validate_resume_candidate(
         checks.append(make_check("artifact coverage", "fail",
             f"saved {sorted(saved_sel)} doesn't cover requested {sorted(requested_sel)}: missing {missing}"))
         return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
+
+    # §4: execution_fingerprint — reject stale output if adapter/config/code changed
+    if expected_fingerprint is not None:
+        saved_fp = metrics.get("execution_fingerprint")
+        if saved_fp is None:
+            checks.append(make_check(
+                "execution_fingerprint",
+                "warn",
+                "fingerprint not present in saved metrics — produced by older orchestrator version",
+            ))
+        elif saved_fp != expected_fingerprint:
+            checks.append(make_check(
+                "execution_fingerprint",
+                "fail",
+                "fingerprint mismatch — adapter, config, or git state changed; output must be regenerated",
+            ))
+            return make_result(parser=parser, profile=profile, document=doc_name, checks=checks)
 
     # §3.2: if inventory requires content, saved metrics must not say content_expected=False
     if source_inventory is not None:

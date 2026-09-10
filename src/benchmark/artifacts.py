@@ -20,6 +20,7 @@ from src.benchmark.content_metrics import (
     analyze_markdown_content,
 )
 from src.benchmark.metrics_writer import (
+    atomic_write_text,
     write_jsonl,
 )
 from src.benchmark.noise_metrics import (
@@ -120,8 +121,9 @@ def _ensure_transitional_native_manifest(
             "bundle_status": "unavailable",
             "files": [],
         }
-        paths.native_manifest_json.write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
+        atomic_write_text(
+            paths.native_manifest_json,
+            json.dumps(manifest, indent=2) + "\n",
         )
 
 
@@ -335,13 +337,13 @@ def finalize_artifacts(
     removed_selected = artifact_policy.includes("removed_content.jsonl")
 
     if raw_selected:
-        paths.raw_markdown.write_text(native_content, encoding="utf-8")
+        atomic_write_text(paths.raw_markdown, native_content)
 
     if clean_selected:
-        paths.clean_markdown.write_text(normalized.clean_markdown, encoding="utf-8")
+        atomic_write_text(paths.clean_markdown, normalized.clean_markdown)
 
     if enriched_written:
-        paths.enriched_markdown.write_text(enriched_text or "", encoding="utf-8")
+        atomic_write_text(paths.enriched_markdown, enriched_text or "")
 
     jsonl_available = mapping_complete
     jsonl_written = jsonl_selected and jsonl_available

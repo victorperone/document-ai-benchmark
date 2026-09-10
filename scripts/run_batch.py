@@ -227,6 +227,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Stream verbose diagnostics from parser adapters.",
     )
+    p.add_argument(
+        "--min-free-disk-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help=(
+            "Abort job if free disk space on the output volume drops below this threshold "
+            "before starting. Default: disabled."
+        ),
+    )
 
     args = p.parse_args()
 
@@ -390,6 +400,7 @@ def build_run_plan(
     output_root: Path,
     resume: bool,
     artifact_policy: ArtifactPolicy | None = None,
+    fingerprint_base: dict | None = None,
 ) -> tuple[list[JobRecord], dict[Path, str]]:
     plan: list[JobRecord] = []
     sha_cache: dict[Path, str] = {}
@@ -407,6 +418,18 @@ def build_run_plan(
                 output_dir=out_dir,
             )
             if resume:
+                expected_fp: str | None = None
+                if fingerprint_base is not None:
+                    adapter_path = ROOT / "src" / "parsers" / f"{parser_name}_v2.py"
+                    expected_fp = _compute_execution_fingerprint(
+                        document_sha256=sha_cache[doc],
+                        git_commit=fingerprint_base["git_commit"],
+                        git_dirty=fingerprint_base["git_dirty"],
+                        config_sha256=fingerprint_base["config_sha256"],
+                        adapter_path=adapter_path,
+                        python_version=fingerprint_base["python"],
+                        platform_str=fingerprint_base["platform"],
+                    )
                 resume_result = validate_resume_candidate(
                     output_root=output_root,
                     parser=parser_name,
@@ -414,6 +437,7 @@ def build_run_plan(
                     document_path=doc,
                     expected_sha256=sha_cache[doc],
                     requested_artifacts=_policy,
+                    expected_fingerprint=expected_fp,
                 )
                 if resume_result["ok"]:
                     rec.status = "skip"
@@ -473,6 +497,145 @@ def _metrics_match(
     )
 
 
+# ── Lock helpers ─────────────────────────────────────────────────────────────
+
+def _write_lock(lock_path: Path, run_uuid: str) -> None:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(
+        json.dumps({"pid": os.getpid(), "run_uuid": run_uuid}),
+        encoding="utf-8",
+    )
+
+
+def _read_lock(lock_path: Path) -> dict | None:
+    try:
+        return json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def acquire_output_root_lock(output_root: Path, run_uuid: str) -> Path:
+    lock_path = output_root / ".batch_lock.json"
+    output_root.mkdir(parents=True, exist_ok=True)
+    existing = _read_lock(lock_path)
+    if existing is not None:
+        pid = existing.get("pid", -1)
+        other_uuid = existing.get("run_uuid", "")
+        if other_uuid != run_uuid and _pid_alive(pid):
+            raise SystemExit(
+                f"Output root is locked by another batch run "
+                f"(pid={pid}, run_uuid={other_uuid}). "
+                f"Wait for it to finish or remove {lock_path} if the process is dead."
+            )
+    _write_lock(lock_path, run_uuid)
+    return lock_path
+
+
+def release_output_root_lock(lock_path: Path, run_uuid: str) -> None:
+    existing = _read_lock(lock_path)
+    if existing is not None and existing.get("run_uuid") == run_uuid:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def acquire_job_lock(output_root: Path, rec: JobRecord, run_uuid: str) -> Path:
+    job_lock_path = (
+        output_root / rec.parser / rec.doc.stem / rec.profile / ".job_lock.json"
+    )
+    job_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_lock(job_lock_path)
+    if existing is not None:
+        pid = existing.get("pid", -1)
+        if _pid_alive(pid):
+            raise SystemExit(
+                f"Job {rec.parser}/{rec.doc.stem}/{rec.profile} is locked by "
+                f"pid={pid} (run_uuid={existing.get('run_uuid', '?')}). "
+                f"Two concurrent batch runs targeting the same job output are not allowed."
+            )
+    _write_lock(job_lock_path, run_uuid)
+    return job_lock_path
+
+
+def release_job_lock(job_lock_path: Path, run_uuid: str) -> None:
+    existing = _read_lock(job_lock_path)
+    if existing is not None and existing.get("run_uuid") == run_uuid:
+        try:
+            job_lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+# ── Disk guard ────────────────────────────────────────────────────────────────
+
+def _free_bytes(path: Path) -> int:
+    nearest = path
+    while not nearest.exists() and nearest != nearest.parent:
+        nearest = nearest.parent
+    return shutil.disk_usage(nearest).free
+
+
+def check_disk_space(output_root: Path, min_free_gb: float) -> int:
+    free = _free_bytes(output_root)
+    required = int(min_free_gb * 1024 ** 3)
+    if free < required:
+        raise SystemExit(
+            f"INSUFFICIENT_FREE_DISK: {free / 1024**3:.2f} GB free on output volume, "
+            f"minimum required is {min_free_gb} GB."
+        )
+    return free
+
+
+# ── Execution fingerprint ─────────────────────────────────────────────────────
+
+def _compute_execution_fingerprint(
+    document_sha256: str,
+    git_commit: str,
+    git_dirty: bool,
+    config_sha256: str,
+    adapter_path: Path,
+    python_version: str,
+    platform_str: str,
+) -> str:
+    adapter_sha256 = _sha256(adapter_path) if adapter_path.is_file() else "missing"
+    parts = "|".join([
+        document_sha256,
+        git_commit,
+        str(git_dirty),
+        config_sha256,
+        adapter_sha256,
+        python_version,
+        platform_str,
+    ])
+    return hashlib.sha256(parts.encode()).hexdigest()
+
+
+def inject_execution_fingerprint(
+    metrics_path: Path,
+    fingerprint: str,
+) -> None:
+    """Read metrics.json, add execution_fingerprint, rewrite atomically."""
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    metrics["execution_fingerprint"] = fingerprint
+    from src.benchmark.metrics_writer import atomic_write_text
+    atomic_write_text(
+        metrics_path,
+        json.dumps(metrics, indent=2, ensure_ascii=False) + "\n",
+    )
+
+
 # ── Phase 5: Execute ──────────────────────────────────────────────────────────
 
 def _open_job_log(jobs_log_root: Path, run_uuid: str, rec: JobRecord):
@@ -499,6 +662,8 @@ def execute_plan(
     job_timeout_seconds: int | None = None,
     verbose_output: bool = False,
     run_uuid: str | None = None,
+    min_free_disk_gb: float | None = None,
+    execution_fingerprint_base: dict | None = None,
 ) -> None:
     total = len(plan)
     current_doc: Path | None = None
@@ -512,7 +677,46 @@ def execute_plan(
 
         if rec.status == "skip":
             log(f"  [SKIP ]  {rec.parser}/{rec.profile}")
-            _append_result(results_path, rec)
+            _append_result(results_path, rec, disk_fields=None)
+            continue
+
+        # Disk space guard
+        disk_free_before: int | None = None
+        if min_free_disk_gb is not None:
+            try:
+                disk_free_before = check_disk_space(output_root, min_free_disk_gb)
+            except SystemExit as exc:
+                rec.status = "fail"
+                rec.error = str(exc)
+                rec.termination_reason = "exception"
+                log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}")
+                _append_result(results_path, rec, disk_fields={"free_bytes_before": None, "free_bytes_after": None, "job_output_bytes": None})
+                if not continue_on_error:
+                    log("\nAborted on first failure. Use --continue-on-error to keep going.")
+                    for remaining in plan[n:]:
+                        remaining.status = "aborted"
+                        _append_result(results_path, remaining, disk_fields=None)
+                    return
+                continue
+        else:
+            disk_free_before = _free_bytes(output_root)
+
+        # Per-job lock
+        job_lock_path: Path | None = None
+        try:
+            job_lock_path = acquire_job_lock(output_root, rec, effective_run_uuid)
+        except SystemExit as exc:
+            rec.status = "fail"
+            rec.error = str(exc)
+            rec.termination_reason = "exception"
+            log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}")
+            _append_result(results_path, rec, disk_fields=None)
+            if not continue_on_error:
+                log("\nAborted on first failure. Use --continue-on-error to keep going.")
+                for remaining in plan[n:]:
+                    remaining.status = "aborted"
+                    _append_result(results_path, remaining, disk_fields=None)
+                return
             continue
 
         clean_job_output(output_root, rec)
@@ -540,13 +744,14 @@ def execute_plan(
             rec.status = "fail"
             job_log_file.write(f"\n[EXCEPTION] {rec.error}\n")
             job_log_file.close()
+            release_job_lock(job_lock_path, effective_run_uuid)
             log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
-            _append_result(results_path, rec)
+            _append_result(results_path, rec, disk_fields={"free_bytes_before": disk_free_before, "free_bytes_after": None, "job_output_bytes": None})
             if not continue_on_error:
                 log("\nAborted on first failure. Use --continue-on-error to keep going.")
                 for remaining in plan[n:]:
                     remaining.status = "aborted"
-                    _append_result(results_path, remaining)
+                    _append_result(results_path, remaining, disk_fields=None)
                 return
             continue
         finally:
@@ -572,6 +777,20 @@ def execute_plan(
             rec.exit_code = int(proc_result)
             rec.termination_reason = "exit_code"
 
+        # Compute disk usage after job
+        disk_free_after = _free_bytes(output_root)
+        job_output_bytes: int | None = None
+        job_leaf = output_root / rec.parser / rec.doc.stem / rec.profile
+        if job_leaf.is_dir():
+            job_output_bytes = sum(
+                f.stat().st_size for f in job_leaf.rglob("*") if f.is_file()
+            )
+        disk_fields = {
+            "free_bytes_before": disk_free_before,
+            "free_bytes_after": disk_free_after,
+            "job_output_bytes": job_output_bytes,
+        }
+
         if rec.exit_code == 0:
             inv_path = output_root / "_source_inventory" / f"{rec.doc.stem}.json"
             validation = validate_post_execution(
@@ -586,6 +805,25 @@ def execute_plan(
             rec.validation = validation
             if validation["ok"]:
                 rec.status = "done"
+
+                # Inject execution fingerprint into metrics.json
+                if execution_fingerprint_base is not None:
+                    metrics_path = (
+                        output_root / rec.parser / rec.doc.stem / rec.profile / "metrics.json"
+                    )
+                    if metrics_path.is_file():
+                        adapter_path = ROOT / "src" / "parsers" / f"{rec.parser}_v2.py"
+                        fp = _compute_execution_fingerprint(
+                            document_sha256=rec.sha256,
+                            git_commit=execution_fingerprint_base["git_commit"],
+                            git_dirty=execution_fingerprint_base["git_dirty"],
+                            config_sha256=execution_fingerprint_base["config_sha256"],
+                            adapter_path=adapter_path,
+                            python_version=execution_fingerprint_base["python"],
+                            platform_str=execution_fingerprint_base["platform"],
+                        )
+                        inject_execution_fingerprint(metrics_path, fp)
+
                 warns = [c.get("detail", c["name"]) for c in validation["checks"] if c["status"] == "warn"]
                 if warns:
                     log(f"  [WARN ]  {rec.parser}/{rec.profile}  post-validation: {'; '.join(warns)}")
@@ -607,13 +845,14 @@ def execute_plan(
                 rec.error = f"exit_code={rec.exit_code}{status_detail}"
                 log(f"  [FAIL ]  {rec.parser}/{rec.profile}  exit={rec.exit_code}{status_detail}  ({rec.elapsed:.0f}s)")
 
-        _append_result(results_path, rec)
+        release_job_lock(job_lock_path, effective_run_uuid)
+        _append_result(results_path, rec, disk_fields=disk_fields)
 
         if rec.status == "fail" and not continue_on_error:
             log("\nAborted on first failure. Use --continue-on-error to keep going.")
             for remaining in plan[n:]:
                 remaining.status = "aborted"
-                _append_result(results_path, remaining)
+                _append_result(results_path, remaining, disk_fields=None)
             return
 
 
@@ -633,7 +872,11 @@ def clean_job_output(output_root: Path, rec: JobRecord) -> None:
         shutil.rmtree(leaf)
 
 
-def _append_result(results_path: Path, rec: JobRecord) -> None:
+def _append_result(
+    results_path: Path,
+    rec: JobRecord,
+    disk_fields: dict | None = None,
+) -> None:
     row = {
         "document": rec.doc.name,
         "sha256": rec.sha256,
@@ -651,6 +894,7 @@ def _append_result(results_path: Path, rec: JobRecord) -> None:
         "output_dir": rec.output_dir,
         "error": rec.error,
         "validation": rec.validation,
+        "disk": disk_fields,
     }
     with results_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
@@ -1495,9 +1739,24 @@ def main() -> None:
     # ── 2. Validate batch ─────────────────────────────────────────────────────
     validate_batch(jobs_spec, config)
 
+    # Pre-compute fingerprint base so resume check can validate stale outputs
+    _git_commit = _get_git_sha()
+    _git_dirty = _is_git_dirty()
+    _config_sha256 = _sha256(CONFIG_PATH)
+    _fingerprint_base = {
+        "git_commit": _git_commit,
+        "git_dirty": _git_dirty,
+        "config_sha256": _config_sha256,
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+    }
+
     # ── 3. Build run plan ─────────────────────────────────────────────────────
-    plan, doc_sha256 = build_run_plan(docs, jobs_spec, output_root, resume=args.resume,
-                                      artifact_policy=artifact_policy)
+    plan, doc_sha256 = build_run_plan(
+        docs, jobs_spec, output_root, resume=args.resume,
+        artifact_policy=artifact_policy,
+        fingerprint_base=_fingerprint_base,
+    )
 
     total = len(plan)
     pending = sum(1 for r in plan if r.status == "pending")
@@ -1573,6 +1832,15 @@ def main() -> None:
     LOGS_DIR.mkdir(exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_uuid = uuid.uuid4().hex
+
+    git_commit = _fingerprint_base["git_commit"]
+    git_dirty = _fingerprint_base["git_dirty"]
+    config_sha256 = _fingerprint_base["config_sha256"]
+    python_version = _fingerprint_base["python"]
+    platform_str = _fingerprint_base["platform"]
+
+    fingerprint_base = _fingerprint_base
+
     log_path = LOGS_DIR / f"batch_{ts}.log"
     results_path = LOGS_DIR / f"batch_{ts}_results.jsonl"
     manifest_path = LOGS_DIR / f"batch_{ts}_manifest.json"
@@ -1580,11 +1848,11 @@ def main() -> None:
         "batch_start": ts,
         "run_uuid": run_uuid,
         "execution_runtime": runtime,
-        "host_os": platform.platform(),
-        "orchestrator_python": sys.version.split()[0],
-        "git_commit": _get_git_sha(),
-        "git_dirty": _is_git_dirty(),
-        "config_sha256": _sha256(CONFIG_PATH),
+        "host_os": platform_str,
+        "orchestrator_python": python_version,
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "config_sha256": config_sha256,
         "suite": args.suite if args.suite else None,
         "jobs": [{"parser": p, "profile": pr} for p, pr in jobs_spec],
         "documents": [
@@ -1604,12 +1872,16 @@ def main() -> None:
             "limit": args.limit,
             "job_timeout_seconds": args.job_timeout_seconds,
             "verbose_output": args.verbose_output,
+            "min_free_disk_gb": args.min_free_disk_gb,
         },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Master log: {log_path.relative_to(ROOT)}")
     print(f"Results:    {results_path.relative_to(ROOT)}")
     print(f"Manifest:   {manifest_path.relative_to(ROOT)}\n")
+
+    # Acquire output root lock before any writes
+    output_root_lock_path = acquire_output_root_lock(output_root, run_uuid)
 
     with log_path.open("w", encoding="utf-8") as lf:
 
@@ -1629,16 +1901,21 @@ def main() -> None:
 
         # ── 5. Execute ────────────────────────────────────────────────────────
         batch_start = time.monotonic()
-        execute_plan(
-            plan, compose_base, container_output_root,
-            args.artifacts, args.continue_on_error, results_path, log,
-            output_root=output_root,
-            artifact_policy=artifact_policy,
-            runtime=runtime,
-            job_timeout_seconds=args.job_timeout_seconds,
-            verbose_output=args.verbose_output,
-            run_uuid=run_uuid,
-        )
+        try:
+            execute_plan(
+                plan, compose_base, container_output_root,
+                args.artifacts, args.continue_on_error, results_path, log,
+                output_root=output_root,
+                artifact_policy=artifact_policy,
+                runtime=runtime,
+                job_timeout_seconds=args.job_timeout_seconds,
+                verbose_output=args.verbose_output,
+                run_uuid=run_uuid,
+                min_free_disk_gb=args.min_free_disk_gb,
+                execution_fingerprint_base=fingerprint_base,
+            )
+        finally:
+            release_output_root_lock(output_root_lock_path, run_uuid)
         elapsed = time.monotonic() - batch_start
 
         # ── 6. Batch summary ──────────────────────────────────────────────────

@@ -33,21 +33,24 @@ class WindowsAllFeaturesContractTests(unittest.TestCase):
             "$DryRun",
             "$PreflightOnly",
             "$VerboseOutput",
+            # -JobTimeoutSeconds is optional and must NOT be passed unconditionally
+            "$JobTimeoutSeconds",
             "--artifacts",
             "all",
             "--force",
         ):
             self.assertIn(option, text)
 
-        for forbidden in (
-            "$JobTimeoutSeconds",
-            "--job-timeout-seconds",
-        ):
-            self.assertNotIn(forbidden, text)
+        # The timeout must never be hardcoded as a default integer — must be Nullable/null
+        self.assertNotIn("[int]$JobTimeoutSeconds = 3600", text)
+        # Must be passed to runner only conditionally, not in the fixed $BaseArgs block
+        self.assertIn("if ($null -ne $JobTimeoutSeconds)", text)
 
     def test_formal_windows_benchmark_paths_do_not_force_timeouts(self) -> None:
+        # These paths must never hardcode a timeout that kills jobs unconditionally.
+        # run_all_features_host.ps1 is excluded: it deliberately exposes an optional
+        # -JobTimeoutSeconds parameter (passed conditionally, not hardcoded).
         formal_paths = (
-            ROOT / "scripts" / "windows" / "run_all_features_host.ps1",
             ROOT / "scripts" / "windows" / "run_deep_smoke_all.ps1",
             ROOT / "scripts" / "windows" / "run_host_parser_tests.ps1",
             ROOT / "scripts" / "windows" / "check_server_readiness.ps1",
@@ -56,7 +59,6 @@ class WindowsAllFeaturesContractTests(unittest.TestCase):
         )
 
         forbidden = (
-            "$JobTimeoutSeconds",
             "FunctionalTimeoutSeconds",
             "BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS",
             "'--job-timeout-seconds'",
@@ -69,6 +71,13 @@ class WindowsAllFeaturesContractTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for marker in forbidden:
                 self.assertNotIn(marker, text, str(path))
+
+        # check_server_readiness must also not carry a hardcoded -JobTimeoutSeconds param
+        readiness_text = (
+            ROOT / "scripts" / "windows" / "check_server_readiness.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("[int]$JobTimeoutSeconds", readiness_text)
+        self.assertNotIn("-JobTimeoutSeconds", readiness_text)
 
     def test_dry_run_has_exactly_seven_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

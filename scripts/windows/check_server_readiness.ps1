@@ -3,7 +3,6 @@
 [CmdletBinding()]
 param(
     [string]$OutputRoot = 'outputs\deep_smoke',
-    [ValidateRange(1, 86400)][int]$JobTimeoutSeconds = 3600,
     [switch]$VerboseOutput
 )
 
@@ -21,6 +20,14 @@ $FunctionalSkipped = 0
 $Parsers = @('pymupdf','docling','mineru','paddleocr','liteparse','unstructured','xberg')
 $Commit = 'UNKNOWN'
 
+# ---------------------------------------------------------------------------
+# Invoke-ReadinessGate
+#   Runs a command using System.Diagnostics.Process for reliable exit-code
+#   capture, asynchronous stdout/stderr streaming to the log file and console,
+#   and a structured return object so callers never parse Write-Host output.
+#
+# Returns [pscustomobject]@{ Name; Passed; ExitCode; LogPath }
+# ---------------------------------------------------------------------------
 function Invoke-ReadinessGate {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -29,29 +36,86 @@ function Invoke-ReadinessGate {
         [switch]$FunctionalTests
     )
     $SafeName = $Name -replace '[^A-Za-z0-9_.-]', '_'
-    $LogPath = Join-Path $ReportRoot "$SafeName.log"
+    $LogPath  = Join-Path $ReportRoot "$SafeName.log"
     Write-Host "=== GATE: $Name ===" -ForegroundColor Cyan
+
+    $ExitCode = -1
     try {
-        $Output = & $Command @Arguments 2>&1
-        $ExitCode = $LASTEXITCODE
-        $Output | Out-File -FilePath $LogPath -Encoding utf8
-        $Output | ForEach-Object { Write-Host $_ }
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName               = $Command
+        $psi.UseShellExecute        = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError  = $true
+        $psi.CreateNoWindow         = $true
+        foreach ($arg in $Arguments) { $psi.ArgumentList.Add($arg) }
+
+        $logWriter = [System.IO.StreamWriter]::new($LogPath, $false, [System.Text.Encoding]::UTF8)
+        $logWriter.AutoFlush = $true
+
+        $stdoutLines = New-Object System.Collections.Generic.List[string]
+
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+
+        # Async stdout handler — mirrors to console and accumulates for FunctionalTests scan
+        $stdoutHandler = {
+            param($sender, $e)
+            if ($null -ne $e.Data) {
+                $script:logWriter.WriteLine($e.Data)
+                Write-Host $e.Data
+                $script:stdoutLines.Add($e.Data)
+            }
+        }
+        # Async stderr handler — mirrors to console and log
+        $stderrHandler = {
+            param($sender, $e)
+            if ($null -ne $e.Data) {
+                $script:logWriter.WriteLine($e.Data)
+                Write-Host $e.Data -ForegroundColor DarkGray
+            }
+        }
+
+        $proc.add_OutputDataReceived($stdoutHandler)
+        $proc.add_ErrorDataReceived($stderrHandler)
+        $proc.EnableRaisingEvents = $true
+
+        $proc.Start() | Out-Null
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
+        $proc.WaitForExit()
+
+        $ExitCode = $proc.ExitCode
+        $proc.Dispose()
+        $logWriter.Close()
+
         if ($FunctionalTests) {
-            foreach ($Line in $Output) {
+            foreach ($Line in $stdoutLines) {
                 if ([string]$Line -match 'skipped\s*=\s*([1-9][0-9]*)') {
                     $script:FunctionalSkipped += [int]$Matches[1]
                 }
             }
         }
-        if ($ExitCode -ne 0) { throw "exit code $ExitCode" }
-        Write-Host "GATE_$SafeName=PASS" -ForegroundColor Green
-        return $true
     }
     catch {
+        try { $logWriter.Close() } catch {}
         $_ | Out-String | Add-Content -Path $LogPath -Encoding utf8
-        $script:Failures.Add("$Name`: $($_.Exception.Message)")
-        Write-Host "GATE_$SafeName=FAIL $($_.Exception.Message)" -ForegroundColor Red
-        return $false
+        $ExitCode = -1
+    }
+
+    $Passed = ($ExitCode -eq 0)
+    $statusColor = if ($Passed) { 'Green' } else { 'Red' }
+    $statusLabel  = if ($Passed) { 'PASS' } else { "FAIL exit=$ExitCode" }
+    Write-Host "GATE_$SafeName=$statusLabel" -ForegroundColor $statusColor
+
+    if (-not $Passed) {
+        $script:Failures.Add("${Name}: exit code $ExitCode")
+    }
+
+    return [pscustomobject]@{
+        Name    = $Name
+        Passed  = $Passed
+        ExitCode = $ExitCode
+        LogPath = $LogPath
     }
 }
 
@@ -118,44 +182,48 @@ try {
         ) | Out-Null
     }
 
+    $DeepSmokeGate = $null
     if ($NativeWindows -and (Test-Path $PowerShell -PathType Leaf)) {
         foreach ($Parser in $Parsers) {
             Invoke-ReadinessGate -Name "parser_tests_$Parser" -Command $PowerShell `
                 -FunctionalTests -Arguments @(
                     '-NoProfile','-ExecutionPolicy','Bypass','-File',
                     (Join-Path $PSScriptRoot 'run_host_parser_tests.ps1'),
-                    '-Parser',$Parser,'-VerboseOutput','-FunctionalTests',
-                    '-FunctionalTimeoutSeconds',$JobTimeoutSeconds
+                    '-Parser',$Parser,'-VerboseOutput','-FunctionalTests'
                 ) | Out-Null
         }
         $SmokeArgs = @(
             '-NoProfile','-ExecutionPolicy','Bypass','-File',
             (Join-Path $PSScriptRoot 'run_deep_smoke_all.ps1'),
-            '-OutputRoot',$OutputRoot,
-            '-JobTimeoutSeconds',$JobTimeoutSeconds
+            '-OutputRoot',$OutputRoot
         )
         if ($VerboseOutput) { $SmokeArgs += '-VerboseOutput' }
-        Invoke-ReadinessGate -Name 'deep_smoke' -Command $PowerShell `
-            -Arguments $SmokeArgs -FunctionalTests | Out-Null
+        $DeepSmokeGate = Invoke-ReadinessGate -Name 'deep_smoke' -Command $PowerShell `
+            -Arguments $SmokeArgs -FunctionalTests
     }
 
-    # Derive PARSERS_READY exclusively from DEEP_SMOKE_PARSER=PASS lines in the deep smoke log.
-    # deep_smoke gate log is written by Invoke-ReadinessGate to $ReportRoot\deep_smoke.log
+    # Derive PARSERS_READY from DEEP_SMOKE_PARSER=PASS lines written to the gate's log file.
+    # Use .Passed from the structured gate result — never parse Write-Host output.
     $Ready = New-Object System.Collections.Generic.List[string]
-    $DeepSmokeLog = Join-Path $ReportRoot 'deep_smoke.log'
-    if (Test-Path $DeepSmokeLog -PathType Leaf) {
-        $LogLines = Get-Content -LiteralPath $DeepSmokeLog -Encoding utf8
-        # Accept exit code zero from the gate (Invoke-ReadinessGate writes GATE_deep_smoke=PASS)
-        $GatePassed = $LogLines | Where-Object { $_ -match '^GATE_deep_smoke=PASS' }
-        if ($GatePassed) {
-            foreach ($Line in $LogLines) {
-                if ([string]$Line -match '^DEEP_SMOKE_PARSER=PASS\s+parser=(\S+)') {
-                    $ParserName = $Matches[1].ToLower()
-                    if ($Parsers -contains $ParserName -and -not $Ready.Contains($ParserName)) {
-                        $Ready.Add($ParserName)
-                    }
+    if ($null -ne $DeepSmokeGate -and $DeepSmokeGate.Passed) {
+        foreach ($Line in Get-Content -LiteralPath $DeepSmokeGate.LogPath -Encoding utf8) {
+            if ([string]$Line -match '^DEEP_SMOKE_PARSER=PASS\s+parser=(\S+)') {
+                $ParserName = $Matches[1].ToLower()
+                if ($Parsers -contains $ParserName -and -not $Ready.Contains($ParserName)) {
+                    $Ready.Add($ParserName)
                 }
             }
+        }
+    }
+
+    # Verify that all DOCUMENT_AI_OFFLINE_LOG env files are empty (no network calls)
+    $OfflineLog = $env:DOCUMENT_AI_OFFLINE_LOG
+    if (-not [string]::IsNullOrEmpty($OfflineLog) -and (Test-Path $OfflineLog -PathType Leaf)) {
+        $OfflineLines = @(Get-Content -LiteralPath $OfflineLog -Encoding utf8 |
+            Where-Object { $_.Trim() -ne '' })
+        if ($OfflineLines.Count -gt 0) {
+            $Failures.Add("offline_violation: $($OfflineLines.Count) network call(s) logged in DOCUMENT_AI_OFFLINE_LOG")
+            $OfflineLines | Out-File (Join-Path $ReportRoot 'offline_violations.log') -Encoding utf8
         }
     }
 

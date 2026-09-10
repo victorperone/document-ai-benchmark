@@ -4,8 +4,7 @@
     Run Benchmark A: all seven parsers with full_cpu_local on Windows host.
 .DESCRIPTION
     Wrapper around run_batch.py that enforces the correct parameters for Benchmark A:
-      suite=windows_full_cpu_local_all_host, runtime=host, artifacts=all,
-      continue-on-error, no-summary.
+      suite=windows_full_cpu_local_all_host, runtime=host, continue-on-error, no-summary.
 
     Execution flow (unless -DryRun or -PreflightOnly):
       1. Run preflight for all 7 parser/profile pairs.
@@ -21,6 +20,13 @@
     Host runtime automatically namespaces under <OutputRoot>\host\.
 .PARAMETER Limit
     Limit processing to the first N PDFs. 0 = no limit (default).
+.PARAMETER Resume
+    Resume from existing outputs. Without -Resume, --force is passed (default: fresh run).
+.PARAMETER JobTimeoutSeconds
+    Optional per-job timeout in seconds. When omitted, jobs run until completion.
+.PARAMETER ArtifactPreset
+    Artifact preset: FullAudit (all artifacts) or MarkdownOperational (raw.md, document.md, metrics.json).
+    Default: FullAudit.
 .PARAMETER DryRun
     Print the run plan without executing anything. Exits after dry run.
 .PARAMETER PreflightOnly
@@ -35,8 +41,11 @@
     # Full run (preflight then inference)
     .\run_benchmark_a.ps1 -InputDir C:\pdfs -OutputRoot outputs\_validation\benchmark_a
 
-    # Full run limited to 1 PDF
-    .\run_benchmark_a.ps1 -InputDir C:\pdfs -OutputRoot outputs\_validation\benchmark_a -Limit 1
+    # Resume from existing outputs
+    .\run_benchmark_a.ps1 -InputDir C:\pdfs -OutputRoot outputs\_validation\benchmark_a -Resume
+
+    # Full run limited to 1 PDF, markdown-only artifacts
+    .\run_benchmark_a.ps1 -InputDir C:\pdfs -OutputRoot outputs\_validation\benchmark_a -Limit 1 -ArtifactPreset MarkdownOperational
 #>
 [CmdletBinding()]
 param(
@@ -48,6 +57,14 @@ param(
 
     [int]$Limit = 0,
 
+    [switch]$Resume,
+
+    [ValidateRange(1, 86400)]
+    [Nullable[int]]$JobTimeoutSeconds = $null,
+
+    [ValidateSet('FullAudit', 'MarkdownOperational')]
+    [string]$ArtifactPreset = 'FullAudit',
+
     [switch]$DryRun,
 
     [switch]$PreflightOnly
@@ -56,7 +73,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot  = (Resolve-Path "$PSScriptRoot\..\.." ).Path
+$RepoRoot   = (Resolve-Path "$PSScriptRoot\..\.." ).Path
 $CorePython = Join-Path $RepoRoot ".venvs\core\Scripts\python.exe"
 $BatchScript = Join-Path $RepoRoot "scripts\run_batch.py"
 
@@ -64,30 +81,44 @@ if (-not (Test-Path $CorePython)) {
     throw "Core venv not found at '$CorePython'. Run setup_core.ps1 first."
 }
 
+# Resolve artifact spec from preset name
+$ArtifactSpec = switch ($ArtifactPreset) {
+    'FullAudit'            { 'all' }
+    'MarkdownOperational'  { 'raw.md,document.md,metrics.json' }
+}
+
 # Fixed parameters for Benchmark A
 $Suite   = 'windows_full_cpu_local_all_host'
 $Runtime = 'host'
 
-$BaseArgs = @(
+# Base args shared by preflight and run
+$SharedArgs = @(
     $BatchScript,
-    '--suite',    $Suite,
-    '--runtime',  $Runtime,
-    '--input-dir', $InputDir,
-    '--output-root', $OutputRoot,
-    '--artifacts', 'all',
+    '--suite',        $Suite,
+    '--runtime',      $Runtime,
+    '--input-dir',    $InputDir,
+    '--output-root',  $OutputRoot,
+    '--artifacts',    $ArtifactSpec,
     '--continue-on-error',
     '--no-summary'
 )
 
 if ($Limit -gt 0) {
-    $BaseArgs += '--limit', $Limit
+    $SharedArgs += '--limit', [string]$Limit
+}
+
+# Run args include resume/force; preflight is always fresh (no resume flag)
+$RunArgs = $SharedArgs + @(if ($Resume) { '--resume' } else { '--force' })
+
+if ($null -ne $JobTimeoutSeconds) {
+    $RunArgs += '--job-timeout-seconds', [string]$JobTimeoutSeconds
 }
 
 # -- Dry run -------------------------------------------------------------------
 if ($DryRun) {
     Write-Host ""
     Write-Host "=== Benchmark A - DRY RUN ===" -ForegroundColor Cyan
-    & $CorePython @BaseArgs '--dry-run'
+    & $CorePython @RunArgs '--dry-run'
     exit $LASTEXITCODE
 }
 
@@ -95,14 +126,14 @@ if ($DryRun) {
 if ($PreflightOnly) {
     Write-Host ""
     Write-Host "=== Benchmark A - PREFLIGHT ===" -ForegroundColor Cyan
-    & $CorePython @BaseArgs '--preflight'
+    & $CorePython @SharedArgs '--preflight'
     exit $LASTEXITCODE
 }
 
 # -- Full run: preflight then inference ----------------------------------------
 Write-Host ""
 Write-Host "=== Benchmark A - PREFLIGHT (mandatory) ===" -ForegroundColor Cyan
-& $CorePython @BaseArgs '--preflight'
+& $CorePython @SharedArgs '--preflight'
 $PreflightExit = $LASTEXITCODE
 
 if ($PreflightExit -ne 0) {
@@ -114,5 +145,5 @@ if ($PreflightExit -ne 0) {
 
 Write-Host ""
 Write-Host "=== Benchmark A - BATCH ===" -ForegroundColor Cyan
-& $CorePython @BaseArgs
+& $CorePython @RunArgs
 exit $LASTEXITCODE

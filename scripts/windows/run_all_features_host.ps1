@@ -5,6 +5,9 @@
 .DESCRIPTION
     Runs a mandatory offline host preflight followed by a fresh batch by
     default. The Python runner adds the `host` namespace below OutputRoot.
+
+    Preflight args do not receive --force/--resume flags (preflight is always
+    read-only and stateless). Run args receive the resume/force flag.
 #>
 [CmdletBinding()]
 param(
@@ -42,7 +45,8 @@ $OutputPath = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
     Join-Path $RepoRoot $OutputRoot
 }
 
-$BaseArgs = @(
+# Shared base args (no resume/force — both preflight and run receive these)
+$SharedArgs = @(
     $BatchScript,
     '--suite', 'windows_all_features_host',
     '--runtime', 'host',
@@ -53,17 +57,20 @@ $BaseArgs = @(
     '--no-summary'
 )
 
-if ($Resume) { $BaseArgs += '--resume' } else { $BaseArgs += '--force' }
-if ($VerboseOutput) { $BaseArgs += '--verbose-output' }
-if ($null -ne $JobTimeoutSeconds) { $BaseArgs += '--job-timeout-seconds'; $BaseArgs += [string]$JobTimeoutSeconds }
+# Run args: shared + resume/force + optional flags
+$RunArgs = $SharedArgs + @(if ($Resume) { '--resume' } else { '--force' })
+
+if ($VerboseOutput) { $RunArgs += '--verbose-output' }
+if ($null -ne $JobTimeoutSeconds) { $RunArgs += '--job-timeout-seconds'; $RunArgs += [string]$JobTimeoutSeconds }
 
 if ($DryRun) {
-    & $CorePython @BaseArgs '--dry-run'
+    & $CorePython @RunArgs '--dry-run'
     exit $LASTEXITCODE
 }
 
 Write-Host "=== All features host - mandatory preflight ===" -ForegroundColor Cyan
-& $CorePython @BaseArgs '--preflight'
+# Preflight receives SharedArgs only (no --force/--resume/--job-timeout-seconds)
+& $CorePython @SharedArgs '--preflight'
 if ($LASTEXITCODE -ne 0) {
     $PreflightExitCode = $LASTEXITCODE
     Write-Host 'Preflight failed; inference was not started.' -ForegroundColor Red
@@ -73,5 +80,5 @@ if ($LASTEXITCODE -ne 0) {
 if ($PreflightOnly) { exit 0 }
 
 Write-Host "=== All features host - batch ===" -ForegroundColor Cyan
-& $CorePython @BaseArgs
+& $CorePython @RunArgs
 exit $LASTEXITCODE

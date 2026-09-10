@@ -2,14 +2,23 @@
 
 ## Estado atual
 
-**STATUS DO CÓDIGO: CORREÇÕES CONCLUÍDAS — PRONTO PARA VALIDAÇÃO NO SERVIDOR**
+**STATUS DO CÓDIGO: HARDENING CONCLUÍDO — PRONTO PARA VALIDAÇÃO NO SERVIDOR**
 **HOMOLOGAÇÃO NO WINDOWS SERVER NATIVO: PENDENTE**
 
-> **2026-09-04 — Correções concluídas e verificadas**
-> Todos os 11 bugs críticos e médios relevantes identificados na revisão completa do código-fonte
-> foram corrigidos e verificados em revisão independente. O código está pronto para ser executado
-> no Windows Server. Ver `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md` para detalhe dos itens pendentes
-> não bloqueantes (code smells — próxima rodada pós-validação).
+> **2026-09-10 — Core hardening (PRs 0A, 3, 4, 6B, 7, 8, 9) concluído**
+> Branch: `server/windows-native`
+> Commit de referência: `fa08243db37c0af5f0ff5ba12912bc5d8273c97a`
+>
+> Correções implementadas neste ciclo:
+> - PR 0A: observabilidade de log por job, campos `termination_reason`/`timed_out`/`exit_code_hex`/`windows_status`
+> - PR 3: readiness gate corrigido — `Invoke-ReadinessGate` com objeto estruturado e `System.Diagnostics.Process`
+> - PR 4: Docling — cardinalidade `derived_content_by_page` corrigida
+> - PR 6B: LiteParse — direção de rotação OSD corrigida (`rotate(-rotation)`)
+> - PR 7: Unstructured — guard de página seguro (`1 <= page_number <= len`)
+> - PR 8: Xberg — `HF_HOME` explícito + `page_mapping_status` dinâmico
+> - PR 9: escrita atômica (tmp→fsync→replace), `execution_fingerprint`, lock de lote, guard de disco
+>
+> Detalhe completo das alterações: `docs/PLANO_ALTERACOES_DESENVOLVEDOR.md`
 
 Este é o documento canônico da execução host. A implementação e os testes
 portáveis são feitos no WSL; nenhum resultado obtido no WSL certifica o runtime
@@ -73,10 +82,10 @@ Para inspecionar ou executar somente a suíte:
 .\scripts\windows\run_all_features_host.ps1
 ```
 
-O wrapper é fresco por padrão; use `-Resume` somente para outputs cuja
-proveniência, hashes, assets e conteúdo passem a validação integral. O timeout
-padrão de cada job é 3.600 segundos e pode ser alterado por
-`-JobTimeoutSeconds`.
+O wrapper é fresco por padrão (`--force`); use `-Resume` somente para outputs cuja
+proveniência, hashes, assets e conteúdo passem a validação integral. Por padrão
+não há timeout por job (o tempo real de cada parser é capturado como métrica);
+use `-JobTimeoutSeconds` para definir um limite explícito quando necessário.
 
 ## Gates e evidências
 
@@ -140,7 +149,7 @@ imagens/QR) não exercita.
 
 1. Corrigir os bugs 1–7 (críticos) antes de executar qualquer suite v3 com documentos que contenham imagens, figuras, tabelas mescladas ou páginas em branco
 2. Verificar bugs 8–11 com inspeção do resultado real no servidor (`result["page_index"]` valor concreto; `page_no` comportamento na versão docling instalada)
-3. Detalhes e correções propostas: `docs/PLANO_CORRETIVO_DESENVOLVEDOR.md`
+3. Planejamento e priorização das correções pendentes: `docs/PLANO_ALTERACOES_DESENVOLVEDOR.md`
 
 ---
 
@@ -1176,14 +1185,43 @@ Artefatos incluem `document.enriched.md` com blocos `derived:start`.
 
 ---
 
+## Resultado do corpus real — 2026-09-04
+
+Batch `batch_20260904_122905` — 49 jobs, branch `server/windows-native`, commit `fa08243`.
+
+| Parser | Done | Fail | Causa principal |
+|---|---:|---:|---|
+| LiteParse | 7 | 0 | — baseline positivo |
+| MinerU | 6 | 1 | exit=0 mas JSONL inválido (linha 15) |
+| Xberg | 6 | 1 | timeout exato 3600 s |
+| Docling | 2 | 5 | timeout exato 3600 s |
+| Unstructured | 2 | 5 | timeout exato 3600 s |
+| PyMuPDF | 0 | 7 | exit=1 em todos, sem timeout |
+| PaddleOCR | 0 | 7 | 4× `0xC0000005` STATUS_ACCESS_VIOLATION |
+
+Corpus (7 PDFs):
+```text
+TC_000347_2019.pdf  TC_000516_2021.pdf  TC_001323_2020.pdf
+TC_007315_2023.pdf  TC_007646_2021.pdf  TC_109500_2017.pdf
+TC_109857_2017.pdf
+```
+
+Próximo passo: executar com as correções do ciclo 2026-09-10 para confirmar que:
+- LiteParse permanece 7/7
+- MinerU `TC_000347_2019` gera JSONL válido
+- PyMuPDF e PaddleOCR têm tracebacks capturados nos logs por job
+
+---
+
 ## Próximo passo
 
 ```text
-[2026-09-04] Correções concluídas — código liberado para o Windows Server.
+[2026-09-10] Hardening concluído — código liberado para o Windows Server.
 
 Sequência de validação:
-  1. git pull / checkout da branch perf/parser-runtime-optimization no servidor
+  1. git pull / checkout da branch server/windows-native no servidor
   2. .\scripts\windows\check_server_readiness.ps1 -VerboseOutput
-  3. Validar com documento que exerça: imagens, figuras, tabelas mescladas e páginas em branco
-  4. Se SERVER_READINESS=PASS → avançar para suítes v3 formais e fixtures schema3
+  3. Executar os 49 jobs do corpus real (7 PDFs × 7 parsers)
+  4. Conferir SERVER_READINESS=PASS e comparar com baseline fa08243
+  5. Se LiteParse 7/7 e sem regressões → avançar para suítes v3 formais
 ```

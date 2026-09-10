@@ -27,8 +27,6 @@ from src.benchmark.process_tree import (
 from src.enrichment.visual_contract import VisualRequest, VisualResponse
 
 _WORKER_SCRIPT = Path(__file__).parent / "visual_worker.py"
-_READY_TIMEOUT = 300.0
-_REQUEST_TIMEOUT = 180.0
 _SHUTDOWN_TIMEOUT = 10.0
 
 
@@ -135,14 +133,25 @@ class VisualWorkerClient:
         self._proc.stdin.write(line + "\n")
         self._proc.stdin.flush()
 
-    def _read_line(self, timeout: float, operation: str) -> str:
+    def _read_line(
+        self,
+        timeout: float | None,
+        operation: str,
+    ) -> str:
         if self._proc is None:
             raise VisualWorkerError("worker process not running")
         try:
             line = self._stdout_queue.get(timeout=timeout)
         except queue.Empty as exc:
+            if timeout is None:
+                raise VisualWorkerError(
+                    f"worker stopped responding during {operation}. "
+                    f"stderr tail: {self._error_tail()!r}"
+                ) from exc
+
             raise VisualWorkerError(
-                f"worker timed out during {operation} after {timeout:.0f}s. "
+                f"worker timed out during {operation} "
+                f"after {timeout:.0f}s. "
                 f"stderr tail: {self._error_tail()!r}"
             ) from exc
         if line is None:
@@ -153,29 +162,31 @@ class VisualWorkerClient:
         return line.strip()
 
     def _wait_for_ready(self) -> None:
-        import time
-        deadline = time.monotonic() + _READY_TIMEOUT
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise VisualWorkerError(
-                    f"timed out waiting for worker to become ready. "
-                    f"stderr tail: {self._error_tail()!r}"
-                )
             try:
-                raw = self._read_line(remaining, "startup")
+                raw = self._read_line(
+                    None,
+                    "startup",
+                )
             except VisualWorkerError as exc:
-                raise VisualWorkerError(f"worker failed during init: {exc}") from exc
+                raise VisualWorkerError(
+                    f"worker failed during init: {exc}"
+                ) from exc
+
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+
             status = msg.get("status", "")
+
             if status == "ready":
                 return
+
             if status == "init_error":
                 raise VisualWorkerError(
-                    f"worker init failed: {msg.get('error', raw)}. "
+                    f"worker init failed: "
+                    f"{msg.get('error', raw)}. "
                     f"stderr tail: {self._error_tail()!r}"
                 )
 
@@ -202,7 +213,10 @@ class VisualWorkerClient:
                 region_id=request.region_id,
             )
 
-            raw = self._read_line(_REQUEST_TIMEOUT, f"request {payload['request_id']}")
+            raw = self._read_line(
+                None,
+                f"request {payload['request_id']}",
+            )
             try:
                 resp_dict = json.loads(raw)
             except json.JSONDecodeError as exc:

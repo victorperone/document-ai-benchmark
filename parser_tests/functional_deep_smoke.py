@@ -49,10 +49,7 @@ def make_functional_test_case(
                     "DO_NOT_TRACK": "1",
                 }
             )
-            timeout = int(
-                environment.get("BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS", "3600")
-            )
-            self.assertGreater(timeout, 0)
+
 
             with TemporaryDirectory(prefix=f"document-ai-{parser}-") as temporary:
                 output_root = Path(temporary)
@@ -73,14 +70,11 @@ def make_functional_test_case(
                     "all",
                     "--force",
                     "--no-summary",
-                    "--job-timeout-seconds",
-                    str(timeout),
                 ]
                 result = run_process_tree(
                     command,
                     cwd=ROOT,
                     env=environment,
-                    timeout=timeout + 360,
                     capture_output=True,
                 )
                 self.assertEqual(

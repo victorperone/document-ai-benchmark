@@ -209,8 +209,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--job-timeout-seconds",
         type=parse_positive_int,
-        default=3600,
-        help="Maximum host job duration before its process tree is terminated (default: 3600).",
+        default=None,
+        help=(
+            "Optional diagnostic host job timeout in seconds. "
+            "Default: disabled; benchmark jobs run until completion or parser failure."
+        ),
     )
     p.add_argument(
         "--verbose-output",
@@ -477,7 +480,7 @@ def execute_plan(
     output_root: Path,
     artifact_policy: ArtifactPolicy,
     runtime: str = RUNTIME_DOCKER,
-    job_timeout_seconds: int = 3600,
+    job_timeout_seconds: int | None = None,
     verbose_output: bool = False,
 ) -> None:
     total = len(plan)
@@ -674,7 +677,7 @@ def _run_host_subprocess(
     parser_name: str,
     cmd: list[str],
     extra_env: dict[str, str],
-    timeout_seconds: int = 3600,
+    timeout_seconds: int | None = None,
 ) -> int:
     env = _build_host_environment(parser_name, extra_env)
     result = run_process_tree(
@@ -698,7 +701,7 @@ def _run_subprocess(
     *,
     runtime: str = RUNTIME_DOCKER,
     output_root: Path | None = None,
-    timeout_seconds: int = 3600,
+    timeout_seconds: int | None = None,
     verbose_output: bool = False,
 ) -> int:
     if runtime == RUNTIME_HOST:

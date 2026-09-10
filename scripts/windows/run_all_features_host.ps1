@@ -14,9 +14,7 @@ param(
     [switch]$Resume,
     [switch]$DryRun,
     [switch]$PreflightOnly,
-    [switch]$VerboseOutput,
-    [ValidateRange(1, 86400)]
-    [int]$JobTimeoutSeconds = 3600
+    [switch]$VerboseOutput
 )
 
 Set-StrictMode -Version Latest
@@ -50,8 +48,7 @@ $BaseArgs = @(
     '--output-root', $OutputPath,
     '--artifacts', 'all',
     '--continue-on-error',
-    '--no-summary',
-    '--job-timeout-seconds', $JobTimeoutSeconds
+    '--no-summary'
 )
 
 if ($Resume) { $BaseArgs += '--resume' } else { $BaseArgs += '--force' }

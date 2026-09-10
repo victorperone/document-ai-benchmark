@@ -166,7 +166,6 @@ def validate_job(parser: str, profile: str, output_base: Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs" / "deep_smoke")
-    parser.add_argument("--job-timeout-seconds", type=int, default=3600)
     parser.add_argument("--verbose-output", action="store_true")
     parser.add_argument("--validate-fixture-only", action="store_true")
     return parser.parse_args()
@@ -180,8 +179,6 @@ def main() -> int:
         return 0
     if os.name != "nt":
         raise RuntimeError("full deep smoke must run on native Windows Server")
-    if args.job_timeout_seconds <= 0:
-        raise ValueError("--job-timeout-seconds must be positive")
 
     env = os.environ.copy()
     env.update({
@@ -200,12 +197,13 @@ def main() -> int:
                 "--runtime", "host", "--input-dir", str(FIXTURE_ROOT),
                 "--output-root", str(args.output_root.resolve()),
                 "--artifacts", "all", "--force", "--no-summary",
-                "--job-timeout-seconds", str(args.job_timeout_seconds),
             ]
             if args.verbose_output:
                 command.append("--verbose-output")
             result = run_process_tree(
-                command, cwd=ROOT, env=env, timeout=args.job_timeout_seconds + 360,
+                command,
+                cwd=ROOT,
+                env=env,
                 capture_output=True,
             )
             if result.stdout:

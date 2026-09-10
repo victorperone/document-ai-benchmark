@@ -3,7 +3,6 @@
 [CmdletBinding()]
 param(
     [string]$OutputRoot = 'outputs\deep_smoke',
-    [ValidateRange(1, 86400)][int]$JobTimeoutSeconds = 3600,
     [switch]$VerboseOutput
 )
 
@@ -46,8 +45,7 @@ $ResolvedOutput = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
 }
 $Args = @(
     $DeepSmoke,
-    '--output-root', $ResolvedOutput,
-    '--job-timeout-seconds', $JobTimeoutSeconds
+    '--output-root', $ResolvedOutput
 )
 if ($VerboseOutput) { $Args += '--verbose-output' }
 Invoke-NativeChecked -Cmd $CorePython -Args $Args

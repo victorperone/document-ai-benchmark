@@ -27,10 +27,7 @@ param(
 
     [switch]$SingleThread,
 
-    [switch]$FunctionalTests,
-
-    [ValidateRange(1, 86400)]
-    [int]$FunctionalTimeoutSeconds = 3600
+    [switch]$FunctionalTests
 )
 
 Set-StrictMode -Version Latest
@@ -67,10 +64,9 @@ $env:SCARF_NO_ANALYTICS    = '1'
 $env:HF_HUB_DISABLE_TELEMETRY = '1'
 if ($FunctionalTests) {
     $env:BENCHMARK_WINDOWS_FUNCTIONAL = '1'
-    $env:BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS = [string]$FunctionalTimeoutSeconds
 } else {
-    Remove-Item Env:BENCHMARK_WINDOWS_FUNCTIONAL -ErrorAction SilentlyContinue
-    Remove-Item Env:BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS -ErrorAction SilentlyContinue
+    Remove-Item Env:BENCHMARK_WINDOWS_FUNCTIONAL `
+        -ErrorAction SilentlyContinue
 }
 
 # Parser-specific model environment (mirrors runtime_specs.py model_env with {model_root} resolved)

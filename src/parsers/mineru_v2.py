@@ -1493,7 +1493,7 @@ def run_mineru_native(
     native_bundle_destination: Path | None = None,
     parser_name: str = "mineru",
     profile_name: str = "",
-    timeout_seconds: int = 3600,
+    timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     if method not in {
         "txt",

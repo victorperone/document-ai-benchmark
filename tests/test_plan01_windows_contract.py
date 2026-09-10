@@ -29,10 +29,46 @@ class WindowsAllFeaturesContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         for option in (
-            "$Resume", "$DryRun", "$PreflightOnly", "$VerboseOutput",
-            "$JobTimeoutSeconds", "--artifacts", "all", "--force",
+            "$Resume",
+            "$DryRun",
+            "$PreflightOnly",
+            "$VerboseOutput",
+            "--artifacts",
+            "all",
+            "--force",
         ):
             self.assertIn(option, text)
+
+        for forbidden in (
+            "$JobTimeoutSeconds",
+            "--job-timeout-seconds",
+        ):
+            self.assertNotIn(forbidden, text)
+
+    def test_formal_windows_benchmark_paths_do_not_force_timeouts(self) -> None:
+        formal_paths = (
+            ROOT / "scripts" / "windows" / "run_all_features_host.ps1",
+            ROOT / "scripts" / "windows" / "run_deep_smoke_all.ps1",
+            ROOT / "scripts" / "windows" / "run_host_parser_tests.ps1",
+            ROOT / "scripts" / "windows" / "check_server_readiness.ps1",
+            ROOT / "scripts" / "parser_deep_smoke.py",
+            ROOT / "parser_tests" / "functional_deep_smoke.py",
+        )
+
+        forbidden = (
+            "$JobTimeoutSeconds",
+            "FunctionalTimeoutSeconds",
+            "BENCHMARK_FUNCTIONAL_TIMEOUT_SECONDS",
+            "'--job-timeout-seconds'",
+            '"--job-timeout-seconds"',
+            "_REQUEST_TIMEOUT",
+            "_READY_TIMEOUT",
+        )
+
+        for path in formal_paths:
+            text = path.read_text(encoding="utf-8")
+            for marker in forbidden:
+                self.assertNotIn(marker, text, str(path))
 
     def test_dry_run_has_exactly_seven_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

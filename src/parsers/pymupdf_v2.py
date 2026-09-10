@@ -991,29 +991,98 @@ def preflight_profile(
                     )
                 )
 
-        # Worker imports (subprocess probe — fast, no model loading)
+
+        # Worker imports (subprocess probe — no model loading).
+        #
+        # This is an administrative preflight timeout, not a parser
+        # inference timeout. Cold imports of PaddleOCR + Transformers +
+        # Torch can be slow on Windows Server.
         try:
             probe_result = run_process_tree(
-                [str(worker_python), "-c",
-                 "from paddleocr import PaddleOCR; "
-                 "from transformers import AutoProcessor; "
-                 "import torch; print('ok')"],
+                [
+                    str(worker_python),
+                    "-c",
+                    (
+                        "from paddleocr import PaddleOCR; "
+                        "from transformers import AutoProcessor; "
+                        "import torch; "
+                        "print('ok')"
+                    ),
+                ],
                 capture_output=True,
-                timeout=30,
+                timeout=1000,
             )
-            if probe_result.returncode == 0 and "ok" in probe_result.stdout:
-                checks.append(make_check("visual_worker_imports", "pass"))
-            else:
+
+            if (
+                probe_result.returncode == 0
+                and not probe_result.timed_out
+                and "ok" in probe_result.stdout
+            ):
+                checks.append(
+                    make_check(
+                        "visual_worker_imports",
+                        "pass",
+                        (
+                            "imports succeeded in "
+                            f"{probe_result.duration_seconds:.1f}s"
+                        ),
+                    )
+                )
+
+            elif probe_result.timed_out:
                 checks.append(
                     make_check(
                         "visual_worker_imports",
                         "fail",
-                        (probe_result.stderr or probe_result.stdout or "").strip()[:300],
+                        (
+                            "import probe exceeded administrative "
+                            "preflight limit of 180s; "
+                            f"elapsed={probe_result.duration_seconds:.1f}s"
+                        ),
                     )
                 )
+
+            else:
+                detail_parts = [
+                    f"exit_code={probe_result.returncode}",
+                ]
+
+                if probe_result.exit_code_hex:
+                    detail_parts.append(
+                        f"exit_code_hex={probe_result.exit_code_hex}"
+                    )
+
+                if probe_result.windows_status:
+                    detail_parts.append(
+                        f"windows_status={probe_result.windows_status}"
+                    )
+
+                output = (
+                    probe_result.stderr
+                    or probe_result.stdout
+                    or ""
+                ).strip()
+
+                if output:
+                    detail_parts.append(
+                        output[:1000]
+                    )
+
+                checks.append(
+                    make_check(
+                        "visual_worker_imports",
+                        "fail",
+                        "; ".join(detail_parts),
+                    )
+                )
+
         except Exception as exc:
             checks.append(
-                make_check("visual_worker_imports", "fail", str(exc))
+                make_check(
+                    "visual_worker_imports",
+                    "fail",
+                    f"{type(exc).__name__}: {exc}",
+                )
             )
 
     return make_result(PARSER_NAME, profile_name, checks)

@@ -32,8 +32,14 @@ function Invoke-PythonScriptChecked {
         [Parameter(Mandatory)][string]$ScriptText
     )
 
+    $TempDir = [System.IO.Path]::GetTempPath()
+
+    if (-not [System.IO.Directory]::Exists($TempDir)) {
+        [System.IO.Directory]::CreateDirectory($TempDir) | Out-Null
+    }
+
     $TempScript = Join-Path `
-        ([System.IO.Path]::GetTempPath()) `
+        $TempDir `
         ("document-ai-benchmark-" + [guid]::NewGuid().ToString("N") + ".py")
 
     try {

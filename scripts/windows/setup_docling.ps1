@@ -13,7 +13,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $VenvPath = Join-Path $Root '.venvs\docling'
-$ReqFile = Join-Path $Root 'requirements\windows\docling.txt'
+$ReqFile  = Join-Path $Root 'requirements\windows\docling.txt'
+$Python   = "$VenvPath\Scripts\python.exe"
 
 Write-Host "[docling] Setting up docling venv..."
 
@@ -21,10 +22,25 @@ if ($Force -and (Test-Path $VenvPath)) {
     Remove-Item -Recurse -Force $VenvPath
 }
 
-if (-not (Test-Path $VenvPath)) {
-    Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
-}
+Set-InstallingMarker $VenvPath
+try {
+    if (-not (Test-Path $Python)) {
+        Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
+    }
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
+    Invoke-NativeChecked $Python @('-m', 'pip', 'install', '-r', $ReqFile)
+
+    Invoke-NativeChecked $Python @('-m', 'pip', 'check')
+
+    $LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+    Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+} catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+} finally {
+    Remove-InstallingMarker $VenvPath
+}
 
 Write-Host "[docling] Done."

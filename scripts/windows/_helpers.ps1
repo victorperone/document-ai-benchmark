@@ -92,6 +92,42 @@ Enable Win32 long paths and restart the Windows Server before retrying.
     }
 }
 
+function Set-InstallingMarker {
+    param([Parameter(Mandatory)][string]$VenvPath)
+    Set-Content -LiteralPath "$VenvPath\.installing" -Value "" -Encoding UTF8
+}
+
+function Remove-InstallingMarker {
+    param([Parameter(Mandatory)][string]$VenvPath)
+    $m = "$VenvPath\.installing"
+    if (Test-Path -LiteralPath $m) { Remove-Item -LiteralPath $m -Force }
+}
+
+function Write-ReadyMarkerAtomically {
+    param(
+        [Parameter(Mandatory)][string]$VenvPath,
+        [Parameter(Mandatory)][string]$Python,
+        [Parameter(Mandatory)][string]$LockSha256
+    )
+    $payload = @{ schema_version = 1; python = $Python; lock_sha256 = $LockSha256 } |
+        ConvertTo-Json -Compress
+    $tmp = "$VenvPath\.ready.json.$([System.IO.Path]::GetRandomFileName()).tmp"
+    Set-Content -LiteralPath $tmp -Value $payload -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination "$VenvPath\.ready.json" -Force
+}
+
+function Test-ReadyMarker {
+    param([Parameter(Mandatory)][string]$VenvPath)
+    $marker = "$VenvPath\.ready.json"
+    if (-not (Test-Path -LiteralPath $marker)) { return $false }
+    try {
+        $null = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-ModelManifest {
     [CmdletBinding()]
     param(

@@ -14,7 +14,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $VenvPath = Join-Path $Root '.venvs\liteparse'
-$ReqFile = Join-Path $Root 'requirements\windows\liteparse.txt'
+$ReqFile  = Join-Path $Root 'requirements\windows\liteparse.txt'
+$Python   = "$VenvPath\Scripts\python.exe"
 
 Write-Host "[liteparse] Setting up liteparse venv (Python 3.11)..."
 
@@ -22,21 +23,22 @@ if ($Force -and (Test-Path $VenvPath)) {
     Remove-Item -Recurse -Force $VenvPath
 }
 
-if (-not (Test-Path $VenvPath)) {
+Set-InstallingMarker $VenvPath
+try {
+
+if (-not (Test-Path $Python)) {
     Invoke-NativeChecked py @('-3.11', '-m', 'venv', $VenvPath)
 }
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
+Invoke-NativeChecked $Python @(
     '-m', 'pip', 'install',
     'torch==2.9.1', 'torchvision==0.24.1',
     '--index-url', 'https://download.pytorch.org/whl/cpu'
 )
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
+Invoke-NativeChecked $Python @('-m', 'pip', 'install', '-r', $ReqFile)
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
-    '-m', 'pip', 'check'
-)
+Invoke-NativeChecked $Python @('-m', 'pip', 'check')
 
 $Smoke = @'
 import importlib.metadata
@@ -79,7 +81,19 @@ print(
 '@
 
 Invoke-PythonScriptChecked `
-    -Python "$VenvPath\Scripts\python.exe" `
+    -Python $Python `
     -ScriptText $Smoke
+
+$LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+
+} catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+} finally {
+    Remove-InstallingMarker $VenvPath
+}
 
 Write-Host "[liteparse] Done."

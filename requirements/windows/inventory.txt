@@ -1,0 +1,5 @@
+# Minimal requirements for the inventory venv.
+# Only pymupdf core — no pymupdf-layout, no RapidOCR, no ONNX Runtime.
+# This venv is used exclusively by scripts/build_source_inventory.py.
+pymupdf==1.28.2
+psutil==7.2.2

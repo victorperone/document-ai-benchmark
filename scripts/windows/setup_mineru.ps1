@@ -13,7 +13,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $VenvPath = Join-Path $Root '.venvs\mineru'
-$ReqFile = Join-Path $Root 'requirements\windows\mineru.txt'
+$ReqFile  = Join-Path $Root 'requirements\windows\mineru.txt'
+$Python   = "$VenvPath\Scripts\python.exe"
 
 Write-Host "[mineru] Setting up mineru venv..."
 
@@ -21,16 +22,31 @@ if ($Force -and (Test-Path $VenvPath)) {
     Remove-Item -Recurse -Force $VenvPath
 }
 
-if (-not (Test-Path $VenvPath)) {
-    Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
+Set-InstallingMarker $VenvPath
+try {
+    if (-not (Test-Path $Python)) {
+        Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
+    }
+
+    Invoke-NativeChecked $Python @(
+        '-m', 'pip', 'install',
+        'torch==2.9.1', 'torchvision==0.24.1',
+        '--index-url', 'https://download.pytorch.org/whl/cpu'
+    )
+
+    Invoke-NativeChecked $Python @('-m', 'pip', 'install', '-r', $ReqFile)
+
+    Invoke-NativeChecked $Python @('-m', 'pip', 'check')
+
+    $LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+    Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+} catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+} finally {
+    Remove-InstallingMarker $VenvPath
 }
-
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
-    '-m', 'pip', 'install',
-    'torch==2.9.1', 'torchvision==0.24.1',
-    '--index-url', 'https://download.pytorch.org/whl/cpu'
-)
-
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
 
 Write-Host "[mineru] Done."

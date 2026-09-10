@@ -8,7 +8,8 @@ $ErrorActionPreference = 'Stop'
 
 $Root = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $VenvPath = Join-Path $Root '.venvs\visual-enrichment'
-$ReqFile = Join-Path $Root 'requirements\windows\visual_enrichment.txt'
+$ReqFile  = Join-Path $Root 'requirements\windows\visual_enrichment.txt'
+$Python   = "$VenvPath\Scripts\python.exe"
 
 Write-Host "[visual-enrichment] Setting up visual enrichment venv..."
 
@@ -16,12 +17,15 @@ if ($Force -and (Test-Path $VenvPath)) {
     Remove-Item -Recurse -Force $VenvPath
 }
 
-if (-not (Test-Path $VenvPath)) {
+Set-InstallingMarker $VenvPath
+try {
+
+if (-not (Test-Path $Python)) {
     Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
 }
 
 # Install CPU-only PyTorch first (same version as liteparse for model compat)
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
+Invoke-NativeChecked $Python @(
     '-m', 'pip', 'install',
     'torch==2.9.1', 'torchvision==0.24.1',
     '--index-url', 'https://download.pytorch.org/whl/cpu'
@@ -29,15 +33,15 @@ Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
 
 # Install paddlepaddle CPU wheel before paddleocr to avoid version conflicts
 # Pin to same version as the paddleocr venv for runtime consistency
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
+Invoke-NativeChecked $Python @(
     '-m', 'pip', 'install',
     'paddlepaddle==3.2.0',
     '-i', 'https://www.paddlepaddle.org.cn/packages/stable/cpu/'
 )
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'install', '-r', $ReqFile)
+Invoke-NativeChecked $Python @('-m', 'pip', 'install', '-r', $ReqFile)
 
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'check')
+Invoke-NativeChecked $Python @('-m', 'pip', 'check')
 
 # Smoke test: imports only, no model loading, no network
 $Smoke = @'
@@ -88,8 +92,20 @@ print("OK: visual enrichment smoke test passed")
 '@
 
 Invoke-PythonScriptChecked `
-    -Python "$VenvPath\Scripts\python.exe" `
+    -Python $Python `
     -ScriptText $Smoke
+
+$LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+
+} catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+} finally {
+    Remove-InstallingMarker $VenvPath
+}
 
 Write-Host "[visual-enrichment] Setup complete."
 Write-Host ""

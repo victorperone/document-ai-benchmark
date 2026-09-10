@@ -97,4 +97,11 @@ PARSER_RUNTIME_SPECS: dict[str, ParserRuntimeSpec] = {
         preflight_kwargs={"model_root_override": "{model_root}"},
         supported_runtimes=_HOST_ONLY,
     ),
+    "inventory": ParserRuntimeSpec(
+        module="scripts.build_source_inventory",
+        model_args=(),
+        model_env={},
+        preflight_kwargs={},
+        supported_runtimes=_HOST_ONLY,
+    ),
 }

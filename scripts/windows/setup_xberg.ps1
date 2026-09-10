@@ -25,6 +25,7 @@ if ($LASTEXITCODE -ne 0) {
 $Root     = (Get-Item $PSScriptRoot).Parent.Parent.FullName
 $VenvPath = Join-Path $Root '.venvs\xberg'
 $ReqFile  = Join-Path $Root 'requirements\windows\xberg.txt'
+$Python   = "$VenvPath\Scripts\python.exe"
 
 Write-Host "[xberg] Setting up xberg venv..."
 
@@ -32,19 +33,22 @@ if ($Force -and (Test-Path $VenvPath)) {
     Remove-Item -Recurse -Force $VenvPath
 }
 
-if (-not (Test-Path $VenvPath)) {
+Set-InstallingMarker $VenvPath
+try {
+
+if (-not (Test-Path $Python)) {
     Invoke-NativeChecked py @('-3.12', '-m', 'venv', $VenvPath)
 }
 
 # Use --only-binary xberg to prevent accidental Rust compilation on the server.
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @(
+Invoke-NativeChecked $Python @(
     '-m', 'pip', 'install',
     '--only-binary', 'xberg',
     '-r', $ReqFile
 )
 
 Write-Host "[xberg] Running pip check..."
-Invoke-NativeChecked "$VenvPath\Scripts\python.exe" @('-m', 'pip', 'check')
+Invoke-NativeChecked $Python @('-m', 'pip', 'check')
 
 Write-Host "[xberg] Validating imports and native module..."
 $env:HF_HUB_OFFLINE = '1'
@@ -68,7 +72,19 @@ except ImportError:
     print("xberg native extension: OK (verified via xberg.extract)")
 '@
 Invoke-PythonScriptChecked `
-    -Python "$VenvPath\Scripts\python.exe" `
+    -Python $Python `
     -ScriptText $smoke
+
+$LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+
+} catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+} finally {
+    Remove-InstallingMarker $VenvPath
+}
 
 Write-Host "[xberg] Done."

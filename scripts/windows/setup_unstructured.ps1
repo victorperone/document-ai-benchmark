@@ -56,6 +56,7 @@ foreach ($Name in $OfflineEnvNames) {
     )
 }
 
+Set-InstallingMarker $VenvPath
 try {
     Write-Host "[unstructured] Setting up virtual environment..."
 
@@ -146,9 +147,19 @@ print("UNSTRUCTURED IMPORT SMOKE: PASS")
         -Python $Python `
         -ScriptText $Smoke
 
+    $LockSha = (Get-FileHash $ReqFile -Algorithm SHA256).Hash
+    Write-ReadyMarkerAtomically $VenvPath $Python $LockSha
+
     Write-Host "[unstructured] Done."
 }
+catch {
+    if (Test-Path "$VenvPath\.ready.json") {
+        Remove-Item "$VenvPath\.ready.json" -Force
+    }
+    throw
+}
 finally {
+    Remove-InstallingMarker $VenvPath
     foreach ($Name in $OfflineEnvNames) {
         $OriginalValue = $OriginalEnvironment[$Name]
 

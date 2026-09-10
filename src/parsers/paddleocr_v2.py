@@ -1442,11 +1442,9 @@ def main() -> None:
 
             predict_kwargs = build_predict_kwargs(input_path, profile, pipeline)
 
-            # Process pages one at a time — never materialise the full iterator.
-            page_texts: list[str] = []
-            parser_page_elements: list[dict[str, Any]] = []
-            parser_native_pages: list[dict[str, Any]] = []
-            markdown_pages_for_concat: list[Any] = []
+            # Accumulate per-page data keyed by page_idx to guarantee sequential
+            # order regardless of predict_iter delivery order.
+            by_page: dict[int, tuple[list[str], list[dict[str, Any]], list[dict[str, Any]], Any]] = {}
             seen_indexes: set[int] = set()
 
             for result in predict_iter_fn(**predict_kwargs):
@@ -1472,15 +1470,24 @@ def main() -> None:
                     p_elements,
                     p_native,
                 ) = build_paddleocr_page_contract([result])
-                page_texts.extend(p_texts)
-                parser_page_elements.extend(p_elements)
-                parser_native_pages.extend(p_native)
-                markdown_pages_for_concat.append(result.markdown)
+                by_page[page_idx] = (p_texts, p_elements, p_native, result.markdown)
 
             extraction_seconds = (
                 perf_counter()
                 - extraction_started
             )
+
+            # Reorder accumulated pages sequentially (delivery order is not guaranteed).
+            page_texts: list[str] = []
+            parser_page_elements: list[dict[str, Any]] = []
+            parser_native_pages: list[dict[str, Any]] = []
+            markdown_pages_for_concat: list[Any] = []
+            for _idx in sorted(by_page):
+                _t, _e, _n, _md = by_page[_idx]
+                page_texts.extend(_t)
+                parser_page_elements.extend(_e)
+                parser_native_pages.extend(_n)
+                markdown_pages_for_concat.append(_md)
 
         if not page_texts:
             raise RuntimeError(

@@ -7,6 +7,7 @@ from time import perf_counter
 import json
 import shutil
 import os
+import sys
 import tempfile
 from datetime import datetime, timezone
 from importlib import metadata
@@ -152,6 +153,17 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional thread-count override. "
             "If omitted, the MinerU/runtime default is preserved."
+        ),
+    )
+
+    parser.add_argument(
+        "--job-timeout-seconds",
+        type=int,
+        default=None,
+        dest="job_timeout_seconds",
+        help=(
+            "Timeout in seconds passed to the MinerU subprocess. "
+            "When omitted, MinerU runs without an internal timeout."
         ),
     )
 
@@ -475,6 +487,7 @@ def main() -> None:
             ),
             parser_name=PARSER_NAME,
             profile_name=args.profile,
+            timeout_seconds=args.job_timeout_seconds,
         )
 
         extraction_seconds = (
@@ -1538,8 +1551,11 @@ def run_mineru_native(
             temporary_directory
         )
 
+        _mineru_candidate = Path(sys.executable).parent / "mineru.exe"
+        _mineru_exe = str(_mineru_candidate) if _mineru_candidate.exists() else "mineru"
+
         command = [
-            "mineru",
+            _mineru_exe,
             "-p",
             str(input_path),
             "-o",

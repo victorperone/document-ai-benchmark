@@ -358,14 +358,14 @@ def build_source_inventories(
 
         if runtime == RUNTIME_HOST:
             cmd = [
-                str(resolve_venv_python("pymupdf")),
+                str(resolve_venv_python("inventory")),
                 "-m",
                 "scripts.build_source_inventory",
                 "--input-dir", str(input_dir),
                 "--output-dir", str(inventory_dir),
                 "--only", doc.name,
             ]
-            env = _build_host_environment("pymupdf")
+            env = _build_host_environment("inventory")
             result = run_process_tree(
                 cmd, cwd=ROOT, env=env, timeout=None, capture_output=False
             )
@@ -743,7 +743,6 @@ def execute_plan(
             rec.error = f"{type(exc).__name__}: {exc}"
             rec.status = "fail"
             job_log_file.write(f"\n[EXCEPTION] {rec.error}\n")
-            job_log_file.close()
             release_job_lock(job_lock_path, effective_run_uuid)
             log(f"  [FAIL ]  {rec.parser}/{rec.profile}  {rec.error}  ({rec.elapsed:.0f}s)")
             _append_result(results_path, rec, disk_fields={"free_bytes_before": disk_free_before, "free_bytes_after": None, "job_output_bytes": None})
@@ -955,6 +954,8 @@ def _build_host_command(
     output_root: Path,
     profile_name: str,
     artifacts: str,
+    *,
+    job_timeout_seconds: int | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     spec = PARSER_RUNTIME_SPECS[parser_name]
     model_root = resolve_model_root(RUNTIME_HOST, parser_name)
@@ -978,6 +979,9 @@ def _build_host_command(
         "--artifacts", artifacts,
         *model_args,
     ]
+
+    if job_timeout_seconds is not None:
+        cmd += ["--job-timeout-seconds", str(job_timeout_seconds)]
 
     return cmd, model_env
 
@@ -1040,7 +1044,8 @@ def _run_subprocess(
         if output_root is None:
             raise ValueError("output_root is required for host runtime")
         cmd, extra_env = _build_host_command(
-            parser_name, doc_path, output_root, profile_name, artifacts
+            parser_name, doc_path, output_root, profile_name, artifacts,
+            job_timeout_seconds=timeout_seconds,
         )
         if verbose_output:
             cmd.append("--verbose")

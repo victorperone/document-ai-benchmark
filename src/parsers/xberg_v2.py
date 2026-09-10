@@ -771,7 +771,7 @@ def _result_to_page_texts(document: Any, expected_pages: int) -> dict[int, str]:
 def _result_to_artifacts(
     document: Any,
     page_count: int,
-) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]], int]:
     """Convert an unwrapped Xberg ExtractedDocument to benchmark artifacts.
 
     Raises XbergConfigurationError if no per-page data, duplicate page numbers,

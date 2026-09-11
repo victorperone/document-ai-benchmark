@@ -375,7 +375,7 @@ def validate_resume_candidate(
                     continue
         if artifact == "document.jsonl" and isinstance(expected_pages, int):
             try:
-                lines = [ln for ln in artifact_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                lines = [ln for ln in artifact_path.read_text(encoding="utf-8").split("\n") if ln.strip()]
                 if len(lines) != expected_pages:
                     checks.append(make_check(check_name, "fail",
                         f"truncated: expected {expected_pages} records, got {len(lines)}"))
@@ -824,7 +824,7 @@ def _validate_document_jsonl(
         checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
         return
 
-    lines = [ln for ln in content.splitlines() if ln.strip()]
+    lines = [ln for ln in content.split("\n") if ln.strip()]
     records = []
     for i, line in enumerate(lines, 1):
         try:
@@ -881,7 +881,7 @@ def _validate_removed_content_jsonl(
         checks.append(make_check(check_name, "fail", f"unreadable: {exc}"))
         return
 
-    lines = [ln for ln in content.splitlines() if ln.strip()]
+    lines = [ln for ln in content.split("\n") if ln.strip()]
     for i, line in enumerate(lines, 1):
         try:
             json.loads(line)

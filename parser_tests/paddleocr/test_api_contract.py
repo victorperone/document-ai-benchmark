@@ -42,6 +42,8 @@ def _fake_model_paths(profile: dict) -> dict[str, Path]:
 
 
 class TestBuildPipelineKwargsStructure(unittest.TestCase):
+    """Verifies the structure of kwargs returned by build_pipeline_kwargs for all profiles."""
+
     def _kwargs_for(self, profile_name: str) -> dict:
         p = get_profile(PARSER_NAME, profile_name)
         return build_pipeline_kwargs(_fake_model_paths(p), p)
@@ -68,6 +70,8 @@ class TestBuildPipelineKwargsStructure(unittest.TestCase):
 
 
 class TestFullCpuLocalKwargs(unittest.TestCase):
+    """Spot-checks pipeline kwargs for the full_cpu_local PaddleOCR profile."""
+
     def _kwargs(self) -> dict:
         p = get_profile(PARSER_NAME, "full_cpu_local")
         return build_pipeline_kwargs(_fake_model_paths(p), p)
@@ -93,6 +97,8 @@ class TestFullCpuLocalKwargs(unittest.TestCase):
 
 
 class TestFormatBlockContentConditionality(unittest.TestCase):
+    """Verifies that format_block_content is passed to the pipeline only when explicitly True."""
+
     def test_format_block_content_not_added_when_false(self):
         p = get_profile(PARSER_NAME, "default")
         p_copy = dict(p)
@@ -110,6 +116,8 @@ class TestFormatBlockContentConditionality(unittest.TestCase):
 
 
 class TestOfficialMarkdownBundle(unittest.TestCase):
+    """Verifies that persist_official_markdown_bundle saves images and rewrites Markdown links."""
+
     def test_markdown_image_is_persisted_and_link_relocated(self):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "native"

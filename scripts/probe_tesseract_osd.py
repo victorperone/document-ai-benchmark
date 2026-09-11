@@ -1,3 +1,4 @@
+"""Probe raw Tesseract OSD behaviour against synthetic orientation fixtures."""
 from __future__ import annotations
 
 import argparse
@@ -61,6 +62,15 @@ def parse_args() -> argparse.Namespace:
 def run_osd(
     image_path: Path,
 ) -> ProcessResult:
+    """Run Tesseract in Orientation and Script Detection (OSD) mode on an image file.
+
+    Args:
+        image_path: Path to the PNG image to analyse.
+
+    Returns:
+        ``ProcessResult`` with ``stdout`` containing the OSD report and
+        ``returncode`` indicating Tesseract's exit status.
+    """
     command = [
         "tesseract",
         str(image_path),
@@ -79,6 +89,7 @@ def run_osd(
 
 
 def main() -> None:
+    """Render each fixture page to a grayscale PNG and report raw Tesseract OSD output."""
     args = parse_args()
 
     if args.dpi <= 0:

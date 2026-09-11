@@ -1,3 +1,4 @@
+"""Build a three-parser native comparison table (PyMuPDF, Docling, MinerU)."""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +26,7 @@ PROFILES: dict[str, str] = {
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the three-parser native comparison builder."""
     p = argparse.ArgumentParser(
         description=(
             "Build three-parser native comparison "
@@ -55,12 +57,22 @@ def safe_ratio(
     numerator: float,
     denominator: float,
 ) -> float:
+    """Divide numerator by denominator, returning ``0.0`` when denominator is zero.
+
+    Args:
+        numerator: Dividend.
+        denominator: Divisor.
+
+    Returns:
+        ``numerator / denominator``, or ``0.0`` if ``denominator == 0``.
+    """
     if denominator == 0:
         return 0.0
     return numerator / denominator
 
 
 def main() -> None:
+    """Load metrics for all three parsers, then write comparison CSV and Markdown."""
     args = parse_args()
 
     all_metrics: dict[str, dict[str, dict]] = {}

@@ -1,3 +1,4 @@
+"""Inspect PyMuPDF4LLM page_chunks structure with Layout enabled and print per-class box counts."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +10,7 @@ import pymupdf4llm
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the PyMuPDF structural probe."""
     parser = argparse.ArgumentParser(
         description=(
             "Inspect PyMuPDF4LLM page_chunks "
@@ -26,6 +28,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Extract and print structural metadata from a PDF's PyMuPDF4LLM page chunks."""
     args = parse_args()
 
     if not args.input.is_file():

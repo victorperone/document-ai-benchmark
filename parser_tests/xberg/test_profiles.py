@@ -31,6 +31,8 @@ _REQUIRED_KEYS = frozenset({
 
 
 class TestXbergProfilesExist(unittest.TestCase):
+    """Verifies that all expected Xberg profiles are loadable."""
+
     def test_all_required_profiles_exist(self):
         for name in _EXPECTED_PROFILES:
             with self.subTest(profile=name):
@@ -39,6 +41,8 @@ class TestXbergProfilesExist(unittest.TestCase):
 
 
 class TestProfileValues(unittest.TestCase):
+    """Verifies configuration values for all Xberg profiles against the expected contract."""
+
     def _profile(self, name: str) -> dict:
         return get_profile(PARSER_NAME, name)
 
@@ -113,6 +117,8 @@ class TestProfileValues(unittest.TestCase):
 
 
 class TestFullCpuLocalProfile(unittest.TestCase):
+    """Spot-checks specific configuration values for the full_cpu_local Xberg profile."""
+
     def _profile(self) -> dict:
         return get_profile(PARSER_NAME, "full_cpu_local")
 
@@ -168,6 +174,8 @@ class TestFullCpuLocalProfile(unittest.TestCase):
 
 
 class TestFullCpuLayoutProfile(unittest.TestCase):
+    """Spot-checks specific configuration values for the full_cpu_layout Xberg profile."""
+
     def _profile(self) -> dict:
         return get_profile(PARSER_NAME, "full_cpu_layout")
 
@@ -202,6 +210,8 @@ class TestFullCpuLayoutProfile(unittest.TestCase):
 
 
 class TestNewKeysInAllProfiles(unittest.TestCase):
+    """Verifies that X1–X4 new profile keys are present in every Xberg profile."""
+
     def test_all_profiles_have_new_keys(self):
         new_keys = (
             "allow_single_column_tables", "qr_codes",

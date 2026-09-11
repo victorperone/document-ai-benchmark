@@ -1,3 +1,11 @@
+"""Unstructured benchmark adapter v2.
+
+Wraps ``unstructured.partition.pdf.partition_pdf`` for the document AI
+benchmark. Supports fast, auto, hi_res, and ocr_only strategies with optional
+visual enrichment of extracted image crops via a separate SmolVLM worker
+process. Validates model artifacts via a manifest before running hi_res or
+full_cpu_local profiles.
+"""
 from __future__ import annotations
 
 import argparse
@@ -71,6 +79,14 @@ _NEWLINE_IN_CELL_RE = re.compile(r"\n+")
 
 
 def _escape_pipe(text: str) -> str:
+    """Escape pipe characters in a table cell so they do not break GFM Markdown.
+
+    Args:
+        text: Raw cell text.
+
+    Returns:
+        Text with ``|`` replaced by ``\\|``.
+    """
     return _PIPE_RE.sub(r"\\|", text)
 
 
@@ -139,6 +155,20 @@ def _render_table_html(html: str) -> tuple[str, str]:
 
 
 def _render_element(element: Any, *, image_description: bool = False) -> str:
+    """Render a single Unstructured element to a Markdown string.
+
+    Title elements become ATX headings at the appropriate depth; ListItems
+    become indented bullets; Tables are converted to GFM via _render_table_html;
+    PageBreaks produce empty strings; other elements produce plain text.
+
+    Args:
+        element: An Unstructured element object.
+        image_description: Unused flag reserved for future image-alt expansion.
+
+    Returns:
+        Markdown string for the element, or empty string if the element
+        contributes no visible content.
+    """
     category = type(element).__name__
     text = str(getattr(element, "text", "") or "").strip()
     meta = getattr(element, "metadata", None)
@@ -304,6 +334,18 @@ def _check_missing_pages(
 
 
 def _element_to_native(element: Any) -> dict[str, Any]:
+    """Serialize a single Unstructured element to a compact native record dict.
+
+    Extracts category, text, page_number, coordinates, and other metadata
+    fields from the element and its metadata object. Keys with None values are
+    omitted to keep the records compact.
+
+    Args:
+        element: An Unstructured element object.
+
+    Returns:
+        Dict with non-None fields from the element.
+    """
     meta = getattr(element, "metadata", None)
 
     def _safe_coords(coords: Any) -> dict[str, Any] | None:
@@ -343,7 +385,28 @@ def _process_visual_crops(
     profile: dict[str, Any],
     resource_monitor: Any,
 ) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
-    """Describe transient Image/Table crops while their temp directory exists."""
+    """Describe transient Image/Table crops while their temp directory exists.
+
+    Iterates over Image and Table elements that have an ``image_path`` in
+    metadata, sends each unique image (by SHA-256) to the VisualWorkerClient,
+    and returns per-page derived content records.
+
+    Args:
+        elements: Full list of Unstructured elements from partition_pdf.
+        crop_root: Temporary directory root where Unstructured wrote image crops.
+        page_count: Total number of pages in the PDF.
+        profile: PaddleOCR/visual-enrichment profile dict.
+        resource_monitor: Active ResourceMonitor to pass to the worker client.
+
+    Returns:
+        A two-tuple of:
+        - by_page: Per-page list of visual crop derived content records.
+        - unassigned: Records for crops that could not be assigned to a page.
+
+    Raises:
+        RuntimeError: If a crop path escapes the temp root, or on fatal errors
+            when visual_failure_fatal=true.
+    """
     by_page: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
     unassigned: list[dict[str, Any]] = []
     if not profile.get("visual_enrichment_enabled", False):
@@ -440,6 +503,18 @@ def _process_visual_crops(
 
 
 def _render_visual_items(base: str, items: list[dict[str, Any]]) -> str:
+    """Append derived visual-crop blocks to a page's base Markdown text.
+
+    Each item contributes a ``derived:start`` / ``derived:end`` block only when
+    its OCR text or description adds content not already in the base text.
+
+    Args:
+        base: Base page Markdown text.
+        items: List of visual crop derived content records.
+
+    Returns:
+        Updated page text with derived blocks appended.
+    """
     blocks = []
     for item in items:
         text = str(item.get("text") or "").strip()
@@ -475,6 +550,15 @@ def _render_visual_items(base: str, items: list[dict[str, Any]]) -> str:
 
 
 def _count_elements(elements: list[Any]) -> dict[str, Any]:
+    """Count Unstructured element types across the entire document.
+
+    Args:
+        elements: Full list of elements from partition_pdf.
+
+    Returns:
+        Dict of aggregate element counts suitable for the benchmark
+        ``parser_output`` section.
+    """
     counts: Counter[str] = Counter(type(el).__name__ for el in elements)
     return {
         "layout_boxes": len(elements),
@@ -539,6 +623,14 @@ def _count_elements_by_page(
 # ---------------------------------------------------------------------------
 
 def _package_version(name: str) -> str | None:
+    """Return the installed version of a package, or None if not found.
+
+    Args:
+        name: The importlib.metadata package name.
+
+    Returns:
+        Version string, or None if the package is not installed.
+    """
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -546,6 +638,11 @@ def _package_version(name: str) -> str | None:
 
 
 def _get_tesseract_version() -> str | None:
+    """Return the first line of ``tesseract --version`` output, or None on failure.
+
+    Returns:
+        Version string such as ``"tesseract 5.3.1"`` or None if unavailable.
+    """
     try:
         r = run_process_tree(
             ["tesseract", "--version"],
@@ -558,6 +655,14 @@ def _get_tesseract_version() -> str | None:
 
 
 def _get_poppler_version() -> str | None:
+    """Return the first line of pdfinfo or pdftoppm version output, or None.
+
+    Tries pdfinfo first, then pdftoppm. Returns the tool name if found but the
+    version output cannot be parsed.
+
+    Returns:
+        Version string or tool name, or None if no Poppler tool is found.
+    """
     for tool in ("pdfinfo", "pdftoppm"):
         path = shutil.which(tool)
         if path:
@@ -574,6 +679,11 @@ def _get_poppler_version() -> str | None:
 
 
 def _find_tessdata_prefix() -> str | None:
+    """Find the Tesseract tessdata directory from env or known candidate paths.
+
+    Returns:
+        Absolute path string to a valid tessdata directory, or None if not found.
+    """
     import os
     prefix = os.environ.get("TESSDATA_PREFIX")
     if prefix and Path(prefix).is_dir():
@@ -616,6 +726,19 @@ def _single_thread_environment_limits() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any]:
+    """Load and validate the pre-computed Source Inventory for an input PDF.
+
+    Args:
+        input_path: Path to the input PDF.
+        output_root: Root output directory containing ``_source_inventory/``.
+
+    Returns:
+        Source Inventory dict.
+
+    Raises:
+        BenchmarkConfigurationError: If the inventory is missing or its SHA-256
+            does not match the input file.
+    """
     destination = output_root / "_source_inventory" / f"{input_path.stem}.json"
     if not destination.is_file():
         raise BenchmarkConfigurationError(
@@ -633,6 +756,14 @@ def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any
 
 
 def _sha256_file(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -667,6 +798,33 @@ def _build_metrics(
     images_extracted_total: int = 0,
     unassigned_elements_count: int = 0,
 ) -> dict[str, Any]:
+    """Assemble the complete benchmark metrics dict for the Unstructured adapter.
+
+    Args:
+        input_path: Resolved path to the input PDF.
+        profile: Active profile dict.
+        profile_name: Name of the active profile.
+        inventory: Source Inventory dict.
+        artifact_result: Result dict from finalize_artifacts().
+        elements: Full list of Unstructured elements from partition_pdf.
+        element_counts: Aggregate element counts from _count_elements().
+        initialization_seconds: Time to import unstructured and load models.
+        extraction_seconds: Time for partition_pdf() to complete.
+        pipeline_seconds: Total wall-clock time including artifact writes.
+        resources: Resource metrics dict from ResourceMonitor.stop().
+        tokenizer_name: Name of the reference tokenizer.
+        artifact_selected_list: List of artifact names selected by policy.
+        run_log_path: Path to run.log if selected, else None.
+        metrics_json_path: Path to metrics.json if selected, else None.
+        verbose: Whether verbose mode was enabled.
+        ocr_agent_effective: Resolved OCR agent class name, or None.
+        strategy_effective: Effective partition strategy string.
+        images_extracted_total: Total Image elements extracted to temp dir.
+        unassigned_elements_count: Count of elements without a valid page number.
+
+    Returns:
+        Complete metrics dict ready for JSON serialisation.
+    """
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
     input_bytes = input_path.stat().st_size
     clean_bytes = artifact_result.get("output", {}).get("clean_markdown_bytes")
@@ -774,6 +932,17 @@ def _build_metrics(
 # ---------------------------------------------------------------------------
 
 def _spacy_tree_digest(root: Path) -> tuple[str, int]:
+    """Compute a stable SHA-256 tree digest of an installed spaCy model directory.
+
+    Hashes the relative path and SHA-256 of every non-compiled, non-pycache
+    file under root, in sorted order, to produce a single fingerprint.
+
+    Args:
+        root: Root directory of the installed spaCy model package.
+
+    Returns:
+        A two-tuple of (hex_digest_string, file_count).
+    """
     digest = hashlib.sha256()
     count = 0
     for path in sorted(
@@ -799,6 +968,20 @@ def _verify_model_file_record(
     record: dict[str, Any],
     label: str,
 ) -> tuple[bool, str]:
+    """Verify a single model file record from the Unstructured model manifest.
+
+    Checks that the file exists inside model_root, has the expected size, and
+    matches the expected SHA-256 digest.
+
+    Args:
+        model_root: Root directory of the model artifacts.
+        record: Manifest record dict with keys ``path``, ``size_bytes``,
+            ``sha256``.
+        label: Human-readable label used in the returned detail string.
+
+    Returns:
+        A two-tuple of (ok: bool, detail: str).
+    """
     try:
         relative_path = record["path"]
         expected_size = record["size_bytes"]
@@ -829,6 +1012,18 @@ def _verify_model_file_record(
 def _validate_unstructured_model_manifest(
     model_root: Path,
 ) -> list[dict[str, Any]]:
+    """Validate the Unstructured model manifest and all referenced artifact files.
+
+    Checks manifest presence, schema version, offline_validation flag, YOLOX
+    layout file, Table Transformer weight files, and the spaCy wheel and
+    installed model tree digest.
+
+    Args:
+        model_root: Root directory of the model artifacts.
+
+    Returns:
+        List of preflight check dicts (make_check format).
+    """
     checks: list[dict[str, Any]] = []
 
     manifest_path = model_root / MODEL_MANIFEST_RELATIVE_PATH
@@ -923,6 +1118,14 @@ def _validate_unstructured_model_manifest(
 
 
 def _assert_unstructured_models_ready(model_root: Path) -> None:
+    """Assert all Unstructured model artifacts are present and valid.
+
+    Args:
+        model_root: Root directory of the model artifacts.
+
+    Raises:
+        BenchmarkConfigurationError: If any manifest validation check fails.
+    """
     checks = _validate_unstructured_model_manifest(model_root)
     failures = [c for c in checks if c.get("status") == "fail"]
     if failures:
@@ -941,6 +1144,22 @@ def preflight_profile(
     *,
     model_root_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Run all preflight checks for an Unstructured profile before a benchmark run.
+
+    Validates profile configuration, key contract, strategy, network isolation,
+    form extraction support, single-thread environment limits for full_cpu_local,
+    telemetry environment variables, table structure strategy coherence,
+    unstructured/unstructured-inference versions, Python version, OCR
+    prerequisites (Tesseract, tessdata, Poppler), and model manifest for
+    hi_res/full_cpu_local profiles.
+
+    Args:
+        profile_name: Name of the profile to validate.
+        model_root_override: Override for the model artifacts directory.
+
+    Returns:
+        Preflight result dict as produced by make_result().
+    """
     checks: list[dict[str, Any]] = []
 
     # Profile exists
@@ -1162,6 +1381,12 @@ def preflight_profile(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the Unstructured v2 adapter.
+
+    Returns:
+        Parsed namespace with input, output_root, profile, model_root, and the
+        resolved ArtifactPolicy as ``artifact_policy``.
+    """
     parser = argparse.ArgumentParser(description="Unstructured benchmark adapter v2.")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output-root", type=Path, default=Path("/outputs"))
@@ -1184,6 +1409,17 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    """Run the Unstructured v2 benchmark pipeline end-to-end.
+
+    Sets required offline and telemetry environment variables before importing
+    unstructured, then partitions the PDF, renders Markdown, processes optional
+    visual crops, and writes benchmark artifacts.
+
+    Raises:
+        SystemExit: If the input file does not exist.
+        BenchmarkConfigurationError: For single-thread environment limits on
+            full_cpu_local, or model manifest validation failures.
+    """
     from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
     from src.benchmark.artifacts import finalize_artifacts
     from src.benchmark.metrics_writer import write_json

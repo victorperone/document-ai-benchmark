@@ -1,3 +1,16 @@
+"""OCR quality metrics for the document-AI benchmark.
+
+Provides text normalisation, tokenisation, and a suite of metrics used
+to compare parser output against ground-truth text:
+
+- Character Error Rate (CER) and Word Error Rate (WER) via Levenshtein
+  edit distance.
+- Occurrence recall for accented tokens, numeric tokens, BRL currency
+  values, and regression identifiers.
+- Critical-term recall for a configurable set of Portuguese terms.
+- A composite ``evaluate_ocr_text`` function that returns all of the above
+  in a single structured result.
+"""
 from __future__ import annotations
 
 import re
@@ -28,16 +41,18 @@ _MARKDOWN_TRANSLATION = str.maketrans(
 def normalize_ocr_text(
     text: str,
 ) -> str:
-    """
-    Normalize parser Markdown and ground-truth text into a
-    comparable textual representation.
+    """Normalize parser Markdown and ground-truth text for metric comparison.
 
-    Important:
-    accents are deliberately preserved.
+    Applies NFKC Unicode normalisation, strips Markdown presentation
+    characters (``|``, ``*``, ``_``, ``#``, backtick, ``>``, ``[``, ``]``,
+    bullet), removes Markdown table-separator rows, case-folds the result,
+    and collapses whitespace. Accents are deliberately preserved.
 
-    This normalization removes Markdown presentation noise but
-    does not strip diacritics, numbers, currency punctuation,
-    decimal separators, or hyphens.
+    Args:
+        text: Raw text from a parser or from the ground-truth corpus.
+
+    Returns:
+        Normalised, case-folded string ready for metric computation.
     """
 
     value = unicodedata.normalize(
@@ -88,6 +103,18 @@ _WORD_RE = re.compile(
 def tokenize_words(
     text: str,
 ) -> list[str]:
+    """Tokenize text into a list of normalised word tokens.
+
+    Normalises ``text`` first via ``normalize_ocr_text``, then extracts
+    tokens matching ``_WORD_RE`` (Unicode word characters including
+    internal hyphens and apostrophes).
+
+    Args:
+        text: Raw text to tokenize.
+
+    Returns:
+        List of lowercase word strings. Empty list if no tokens are found.
+    """
     return _WORD_RE.findall(
         normalize_ocr_text(
             text
@@ -103,10 +130,18 @@ def levenshtein_distance(
     reference: Sequence[Any],
     hypothesis: Sequence[Any],
 ) -> int:
-    """
-    Memory-efficient Levenshtein edit distance.
+    """Compute the Levenshtein edit distance between two sequences.
 
-    Works both for strings (characters) and lists (words).
+    Uses a single-row DP approach (O(min(m, n)) space). Works for both
+    strings (character-level CER) and token lists (word-level WER).
+
+    Args:
+        reference: The ground-truth sequence.
+        hypothesis: The predicted sequence.
+
+    Returns:
+        Minimum number of single-element insertions, deletions, or
+        substitutions needed to transform ``hypothesis`` into ``reference``.
     """
 
     if len(reference) < len(hypothesis):
@@ -176,6 +211,17 @@ def error_rate(
     distance: int,
     reference_length: int,
 ) -> float:
+    """Compute the normalised error rate from an edit distance.
+
+    Args:
+        distance: Levenshtein edit distance between reference and hypothesis.
+        reference_length: Number of elements in the reference sequence.
+
+    Returns:
+        ``distance / reference_length``, clamped to ``[0.0, …]``. Returns
+        ``0.0`` when both ``distance`` and ``reference_length`` are zero;
+        returns ``1.0`` when ``distance > 0`` and ``reference_length == 0``.
+    """
     if reference_length == 0:
         return (
             0.0
@@ -197,6 +243,21 @@ def calculate_cer(
     reference: str,
     hypothesis: str,
 ) -> dict[str, Any]:
+    """Calculate Character Error Rate between reference and hypothesis.
+
+    Both strings are normalised before comparison.
+
+    Args:
+        reference: Ground-truth text.
+        hypothesis: Parser output text.
+
+    Returns:
+        Dict with keys:
+            ``distance``: character-level edit distance (int).
+            ``reference_characters``: length of normalised reference (int).
+            ``hypothesis_characters``: length of normalised hypothesis (int).
+            ``rate``: CER as a float in ``[0.0, …]``.
+    """
     reference_text = (
         normalize_ocr_text(
             reference
@@ -233,6 +294,21 @@ def calculate_wer(
     reference: str,
     hypothesis: str,
 ) -> dict[str, Any]:
+    """Calculate Word Error Rate between reference and hypothesis.
+
+    Both strings are normalised and tokenised before comparison.
+
+    Args:
+        reference: Ground-truth text.
+        hypothesis: Parser output text.
+
+    Returns:
+        Dict with keys:
+            ``distance``: word-level edit distance (int).
+            ``reference_words``: number of tokens in normalised reference (int).
+            ``hypothesis_words``: number of tokens in normalised hypothesis (int).
+            ``rate``: WER as a float in ``[0.0, …]``.
+    """
     reference_words = (
         tokenize_words(
             reference
@@ -273,6 +349,24 @@ def occurrence_recall(
     reference_values: list[str],
     hypothesis_values: list[str],
 ) -> dict[str, Any]:
+    """Compute multiset recall: how many expected items appear in the hypothesis.
+
+    Each item in ``reference_values`` must be matched at most once by an
+    equal item in ``hypothesis_values``, respecting duplicates via Counter
+    arithmetic.
+
+    Args:
+        reference_values: Expected values (may contain duplicates).
+        hypothesis_values: Values produced by the parser.
+
+    Returns:
+        Dict with keys:
+            ``expected``: total count of reference values (int).
+            ``matched``: count of reference values found in the hypothesis (int).
+            ``missing``: list of reference values absent from the hypothesis.
+            ``recall``: ``matched / expected`` as a float, or ``None`` when
+                ``expected`` is zero.
+    """
     reference_counter = Counter(
         reference_values
     )
@@ -337,6 +431,18 @@ def occurrence_recall(
 def has_diacritic(
     token: str,
 ) -> bool:
+    """Return True if the token contains at least one combining diacritic.
+
+    Decomposes the string to NFD form and checks for Unicode combining
+    characters.
+
+    Args:
+        token: A single word token.
+
+    Returns:
+        ``True`` if any character in the NFD decomposition has a non-zero
+        Unicode combining class; ``False`` otherwise.
+    """
     decomposed = (
         unicodedata.normalize(
             "NFD",
@@ -356,6 +462,15 @@ def has_diacritic(
 def extract_accented_tokens(
     text: str,
 ) -> list[str]:
+    """Extract all word tokens that contain at least one diacritic.
+
+    Args:
+        text: Raw text to scan.
+
+    Returns:
+        List of normalised tokens (in the order they appear) that pass
+        ``has_diacritic``.
+    """
     return [
         token
         for token
@@ -383,6 +498,19 @@ _NUMERIC_RE = re.compile(
 def extract_numeric_tokens(
     text: str,
 ) -> list[str]:
+    """Extract numeric tokens from normalised text.
+
+    Matches sequences that start with a digit and may continue with digits,
+    commas, periods, slashes, percent signs, or hyphens. Trailing punctuation
+    (``.,;:``) is stripped from each match.
+
+    Args:
+        text: Raw text to scan.
+
+    Returns:
+        List of numeric string tokens (e.g. ``"1.234,56"``, ``"2026"``,
+        ``"50%"``).
+    """
     normalized = (
         normalize_ocr_text(
             text
@@ -423,6 +551,18 @@ _CURRENCY_RE = re.compile(
 def extract_currency_values(
     text: str,
 ) -> list[str]:
+    """Extract Brazilian Real (BRL) currency values from normalised text.
+
+    Matches the pattern ``r$<digits>`` (case-insensitive, optional internal
+    spaces). Internal spaces are removed and trailing punctuation is stripped
+    from each match.
+
+    Args:
+        text: Raw text to scan.
+
+    Returns:
+        List of currency strings such as ``"r$1.234,56"``.
+    """
     normalized = (
         normalize_ocr_text(
             text
@@ -465,6 +605,18 @@ _IDENTIFIER_RE = re.compile(
 def extract_regression_ids(
     text: str,
 ) -> list[str]:
+    """Extract benchmark regression identifiers from normalised text.
+
+    Matches tokens of the form ``regressao-NN-2026`` (case-insensitive)
+    and returns them in lower-case.
+
+    Args:
+        text: Raw text to scan.
+
+    Returns:
+        List of lower-cased regression ID strings (e.g.
+        ``"regressao-01-2026"``).
+    """
     normalized = (
         normalize_ocr_text(
             text
@@ -502,6 +654,21 @@ def critical_term_recall(
         DEFAULT_CRITICAL_TERMS
     ),
 ) -> dict[str, Any]:
+    """Compute occurrence recall for a set of critical Portuguese terms.
+
+    Each term is normalised and its occurrence count is compared between
+    reference and hypothesis. The result delegates to ``occurrence_recall``.
+
+    Args:
+        reference: Ground-truth text.
+        hypothesis: Parser output text.
+        terms: Sequence of terms to check. Defaults to
+            ``DEFAULT_CRITICAL_TERMS``.
+
+    Returns:
+        ``occurrence_recall`` result dict (keys: ``expected``, ``matched``,
+        ``missing``, ``recall``).
+    """
     normalized_reference = (
         normalize_ocr_text(
             reference
@@ -561,6 +728,23 @@ def evaluate_ocr_text(
     reference: str,
     hypothesis: str,
 ) -> dict[str, Any]:
+    """Run the full OCR quality evaluation suite on a reference/hypothesis pair.
+
+    Args:
+        reference: Ground-truth text for the document or page.
+        hypothesis: Parser output text to evaluate.
+
+    Returns:
+        Dict with the following keys, each mapping to its respective
+        sub-result dict:
+            ``cer``: Character Error Rate (``calculate_cer``).
+            ``wer``: Word Error Rate (``calculate_wer``).
+            ``accented_token_recall``: Recall of accented word tokens.
+            ``numeric_token_recall``: Recall of numeric tokens.
+            ``currency_value_recall``: Recall of BRL currency values.
+            ``regression_id_recall``: Recall of regression identifiers.
+            ``critical_term_recall``: Recall of domain-specific critical terms.
+    """
     cer = calculate_cer(
         reference,
         hypothesis,

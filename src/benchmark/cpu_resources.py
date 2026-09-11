@@ -1,3 +1,10 @@
+"""CPU resource detection and parallelism resolution.
+
+Queries multiple OS-level sources (process CPU count, scheduler affinity,
+cgroup quotas, ``os.cpu_count``) and returns the most restrictive limit so
+that the orchestrator does not oversubscribe the host or container.
+"""
+
 from __future__ import annotations
 
 import math
@@ -10,6 +17,18 @@ def _quota_to_cpu_count(
     quota: int,
     period: int,
 ) -> int | None:
+    """Convert a cgroup CFS quota/period pair to a CPU count.
+
+    Args:
+        quota: ``cpu.cfs_quota_us`` value in microseconds.  Non-positive
+            values indicate no quota.
+        period: ``cpu.cfs_period_us`` value in microseconds.  Non-positive
+            values are invalid.
+
+    Returns:
+        Ceiling of *quota* / *period* (minimum 1), or ``None`` when either
+        argument is non-positive.
+    """
     if quota <= 0 or period <= 0:
         return None
 

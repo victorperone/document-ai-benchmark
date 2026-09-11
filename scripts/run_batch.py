@@ -1,3 +1,4 @@
+"""Batch orchestrator: discover PDFs, run preflight, build inventories, and execute parsers."""
 from __future__ import annotations
 
 import argparse
@@ -50,6 +51,27 @@ LOGS_DIR = ROOT / "logs"
 
 @dataclass
 class JobRecord:
+    """Mutable state for a single benchmark job (one document × one parser/profile pair).
+
+    Attributes:
+        doc: Absolute path to the input PDF.
+        parser: Parser name (e.g. ``"pymupdf"``).
+        profile: Profile name (e.g. ``"native"``).
+        sha256: SHA-256 hex digest of the input PDF.
+        output_dir: Resolved output directory path string.
+        status: Lifecycle status — one of ``"pending"``, ``"skip"``, ``"done"``,
+            ``"fail"``, or ``"aborted"``.
+        exit_code: Subprocess exit code (``0`` on success).
+        elapsed: Wall-clock seconds the job took.
+        error: Human-readable error description, or ``None`` on success.
+        validation: Post-execution validation result dict, or ``None``.
+        timed_out: ``True`` when the job was terminated by the host timeout.
+        termination_reason: ``"timeout"``, ``"exit_code"``, ``"exception"``, or ``None``.
+        timeout_seconds_effective: Effective job timeout used, or ``None`` if disabled.
+        job_log_path: Absolute path string of the per-job log file, or ``None``.
+        exit_code_hex: Hex representation of the exit code (Windows only), or ``None``.
+        windows_status: Windows NTSTATUS name for the exit code, or ``None``.
+    """
     doc: Path
     parser: str
     profile: str
@@ -69,12 +91,24 @@ class JobRecord:
 
     @property
     def label(self) -> str:
+        """Return a compact ``parser/document-stem/profile`` identifier for logging."""
         return f"{self.parser}/{self.doc.stem}/{self.profile}"
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_positive_int(value: str) -> int:
+    """Convert a string to a positive integer for use as an ``argparse`` type.
+
+    Args:
+        value: String to parse.
+
+    Returns:
+        Parsed positive integer.
+
+    Raises:
+        argparse.ArgumentTypeError: If ``value`` is not a valid integer or is ``<= 0``.
+    """
     try:
         n = int(value)
     except ValueError:
@@ -87,6 +121,7 @@ def parse_positive_int(value: str) -> int:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the batch orchestrator."""
     p = argparse.ArgumentParser(
         description=(
             "Batch orchestrator: discovers PDFs, validates the run plan, "
@@ -252,6 +287,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config() -> dict:
+    """Load and return the benchmark profiles configuration from ``CONFIG_PATH``."""
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
@@ -277,6 +313,18 @@ def validate_runtime_support(
 
 
 def resolve_jobs_spec(args: argparse.Namespace, config: dict) -> list[tuple[str, str]]:
+    """Resolve the list of ``(parser, profile)`` pairs to execute from CLI args and config.
+
+    Args:
+        args: Parsed CLI namespace; uses ``args.suite`` or ``args.parser``/``args.profile``.
+        config: Loaded benchmark configuration dict.
+
+    Returns:
+        List of ``(parser_name, profile_name)`` tuples.
+
+    Raises:
+        SystemExit: If a named suite is not found in the configuration.
+    """
     suite_name = args.suite if args.suite else (None if args.parser else "default")
     if suite_name is not None:
         suites = config["suites"]
@@ -290,6 +338,17 @@ def resolve_jobs_spec(args: argparse.Namespace, config: dict) -> list[tuple[str,
 # ── Phase 1: Discover PDFs ────────────────────────────────────────────────────
 
 def discover_pdfs(input_dir: Path) -> list[Path]:
+    """Discover all PDF files in ``input_dir``, sorted deterministically.
+
+    Args:
+        input_dir: Directory to scan for ``*.pdf`` files.
+
+    Returns:
+        Sorted list of PDF paths.
+
+    Raises:
+        SystemExit: If ``input_dir`` does not exist or contains no PDFs.
+    """
     if not input_dir.is_dir():
         raise SystemExit(f"Input directory not found: {input_dir}")
     docs = sorted(p for p in input_dir.glob("*.pdf") if p.is_file())
@@ -299,6 +358,16 @@ def discover_pdfs(input_dir: Path) -> list[Path]:
 
 
 def apply_document_limit(docs: list[Path], limit: int | None) -> list[Path]:
+    """Return at most ``limit`` documents from the front of ``docs``.
+
+    Args:
+        docs: Full sorted document list.
+        limit: Maximum number of documents to return, or ``None`` for no limit.
+
+    Returns:
+        The first ``limit`` elements of ``docs``, or all of ``docs`` if ``limit``
+        is ``None`` or ``>= len(docs)``.
+    """
     if limit is None or limit >= len(docs):
         return docs
     return docs[:limit]
@@ -307,6 +376,15 @@ def apply_document_limit(docs: list[Path], limit: int | None) -> list[Path]:
 # ── Phase 2: Validate batch ───────────────────────────────────────────────────
 
 def validate_batch(jobs_spec: list[tuple[str, str]], config: dict) -> None:
+    """Check that every requested parser and profile is declared in ``config``.
+
+    Args:
+        jobs_spec: List of ``(parser_name, profile_name)`` pairs to validate.
+        config: Loaded benchmark configuration dict.
+
+    Raises:
+        SystemExit: If any parser or profile is not found in the configuration.
+    """
     parsers_cfg = config.get("parsers", {})
     errors: list[str] = []
 
@@ -326,6 +404,15 @@ def validate_batch(jobs_spec: list[tuple[str, str]], config: dict) -> None:
 # ── Phase 3: Build source inventories ────────────────────────────────────────
 
 def _json_sha_matches(path: Path, expected_sha: str) -> bool:
+    """Return ``True`` if a JSON file exists and its ``sha256`` field matches ``expected_sha``.
+
+    Args:
+        path: Path to the JSON file.
+        expected_sha: SHA-256 hex digest to compare against.
+
+    Returns:
+        ``True`` when the file exists, is valid JSON, and ``data["sha256"] == expected_sha``.
+    """
     if not path.is_file():
         return False
     try:
@@ -346,6 +433,26 @@ def build_source_inventories(
     *,
     runtime: str = RUNTIME_DOCKER,
 ) -> None:
+    """Build or skip source-inventory JSON files for all documents.
+
+    In resume mode, existing inventory files whose embedded ``sha256`` field
+    matches the document digest are skipped.  Missing or stale files are
+    (re)generated by invoking ``build_source_inventory.py`` via the selected
+    runtime (Docker or host).
+
+    Args:
+        docs: Ordered list of PDF paths to process.
+        doc_sha256: Pre-computed SHA-256 digest per document path.
+        input_dir: Directory that contains the source PDFs (passed to the script).
+        output_root: Root output directory where ``_source_inventory/`` is created.
+        compose_base: Docker Compose command prefix (unused for host runtime).
+        resume: When ``True``, skip documents whose inventory is already up-to-date.
+        log: Callable used to emit log lines (signature: ``log(str) -> None``).
+        runtime: Execution runtime — ``"docker"`` or ``"host"``.
+
+    Raises:
+        SystemExit: If the inventory script exits with a non-zero code.
+    """
     inventory_dir = output_root / "_source_inventory"
 
     for doc in docs:
@@ -402,6 +509,27 @@ def build_run_plan(
     artifact_policy: ArtifactPolicy | None = None,
     fingerprint_base: dict | None = None,
 ) -> tuple[list[JobRecord], dict[Path, str]]:
+    """Build the full job plan and pre-compute document SHA-256 digests.
+
+    Each combination of ``(document, parser, profile)`` becomes one
+    ``JobRecord``.  When ``resume=True``, existing outputs are validated via
+    ``validate_resume_candidate``; records that pass are marked ``"skip"``.
+
+    Args:
+        docs: Ordered list of input PDF paths.
+        jobs_spec: List of ``(parser_name, profile_name)`` pairs.
+        output_root: Root directory for parser outputs.
+        resume: When ``True``, evaluate each job for resume eligibility.
+        artifact_policy: Artifact-selection policy; defaults to ``ArtifactPolicy.from_cli(["all"])``.
+        fingerprint_base: Dict with ``git_commit``, ``git_dirty``, ``config_sha256``,
+            ``python``, and ``platform`` keys used to compute execution fingerprints,
+            or ``None`` to skip fingerprint-based resume validation.
+
+    Returns:
+        Tuple of ``(plan, sha_cache)`` where ``plan`` is the ordered list of
+        ``JobRecord`` objects and ``sha_cache`` maps each document path to its
+        SHA-256 digest.
+    """
     plan: list[JobRecord] = []
     sha_cache: dict[Path, str] = {}
     _policy = artifact_policy or ArtifactPolicy.from_cli(["all"])
@@ -447,6 +575,7 @@ def build_run_plan(
 
 
 def _sha256(path: Path) -> str:
+    """Return the SHA-256 hex digest of the file at ``path``."""
     h = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -455,6 +584,7 @@ def _sha256(path: Path) -> str:
 
 
 def _get_git_sha() -> str:
+    """Return the current HEAD commit SHA, or ``"unknown"`` if unavailable."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -466,6 +596,7 @@ def _get_git_sha() -> str:
 
 
 def _is_git_dirty() -> bool:
+    """Return ``True`` when the working tree has uncommitted changes."""
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -483,6 +614,18 @@ def _metrics_match(
     profile: str,
     expected_sha: str,
 ) -> bool:
+    """Return ``True`` when an existing ``metrics.json`` matches the expected digest, parser, and profile.
+
+    Args:
+        output_root: Root output directory.
+        parser: Parser name.
+        doc_stem: Document filename stem (no extension).
+        profile: Profile name.
+        expected_sha: SHA-256 hex digest expected in ``metrics["document"]["sha256"]``.
+
+    Returns:
+        ``True`` when the file exists, is valid JSON, and all three fields match.
+    """
     metrics_path = output_root / parser / doc_stem / profile / "metrics.json"
     if not metrics_path.is_file():
         return False
@@ -500,6 +643,7 @@ def _metrics_match(
 # ── Lock helpers ─────────────────────────────────────────────────────────────
 
 def _write_lock(lock_path: Path, run_uuid: str) -> None:
+    """Write a JSON lock file containing the current PID and ``run_uuid``."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(
         json.dumps({"pid": os.getpid(), "run_uuid": run_uuid}),
@@ -508,6 +652,7 @@ def _write_lock(lock_path: Path, run_uuid: str) -> None:
 
 
 def _read_lock(lock_path: Path) -> dict | None:
+    """Read a JSON lock file and return its contents, or ``None`` on any error."""
     try:
         return json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -515,6 +660,11 @@ def _read_lock(lock_path: Path) -> dict | None:
 
 
 def _pid_alive(pid: int) -> bool:
+    """Return ``True`` when a process with the given PID is running on the host.
+
+    On Windows, delegates to ``psutil.pid_exists``; on POSIX, uses
+    ``os.kill(pid, 0)`` and interprets ``PermissionError`` as alive.
+    """
     if not isinstance(pid, int) or pid <= 0:
         return False
 
@@ -534,6 +684,22 @@ def _pid_alive(pid: int) -> bool:
 
 
 def acquire_output_root_lock(output_root: Path, run_uuid: str) -> Path:
+    """Acquire an exclusive lock on the output root directory.
+
+    Creates ``output_root`` if it does not exist, then writes a
+    ``.batch_lock.json`` sentinel.  Raises ``SystemExit`` when a lock from a
+    *different* ``run_uuid`` owned by a live process is already present.
+
+    Args:
+        output_root: Root output directory to lock.
+        run_uuid: UUID of the current batch run (idempotent if same run retries).
+
+    Returns:
+        Path to the created lock file.
+
+    Raises:
+        SystemExit: If another live batch run holds the lock.
+    """
     lock_path = output_root / ".batch_lock.json"
     output_root.mkdir(parents=True, exist_ok=True)
     existing = _read_lock(lock_path)
@@ -551,6 +717,7 @@ def acquire_output_root_lock(output_root: Path, run_uuid: str) -> Path:
 
 
 def release_output_root_lock(lock_path: Path, run_uuid: str) -> None:
+    """Delete the output root lock file if it belongs to ``run_uuid``."""
     existing = _read_lock(lock_path)
     if existing is not None and existing.get("run_uuid") == run_uuid:
         try:
@@ -560,6 +727,19 @@ def release_output_root_lock(lock_path: Path, run_uuid: str) -> None:
 
 
 def acquire_job_lock(output_root: Path, rec: JobRecord, run_uuid: str) -> Path:
+    """Acquire a per-job lock to prevent two batch runs from writing the same output.
+
+    Args:
+        output_root: Root output directory.
+        rec: Job record identifying the parser, document, and profile.
+        run_uuid: UUID of the current batch run.
+
+    Returns:
+        Path to the created ``.job_lock.json`` sentinel inside the job output directory.
+
+    Raises:
+        SystemExit: If a live process from a different run already holds the job lock.
+    """
     job_lock_path = (
         output_root / rec.parser / rec.doc.stem / rec.profile / ".job_lock.json"
     )
@@ -578,6 +758,7 @@ def acquire_job_lock(output_root: Path, rec: JobRecord, run_uuid: str) -> Path:
 
 
 def release_job_lock(job_lock_path: Path, run_uuid: str) -> None:
+    """Delete the per-job lock file if it belongs to ``run_uuid``."""
     existing = _read_lock(job_lock_path)
     if existing is not None and existing.get("run_uuid") == run_uuid:
         try:
@@ -589,6 +770,7 @@ def release_job_lock(job_lock_path: Path, run_uuid: str) -> None:
 # ── Disk guard ────────────────────────────────────────────────────────────────
 
 def _free_bytes(path: Path) -> int:
+    """Return free bytes on the volume that contains the nearest existing ancestor of ``path``."""
     nearest = path
     while not nearest.exists() and nearest != nearest.parent:
         nearest = nearest.parent
@@ -596,6 +778,18 @@ def _free_bytes(path: Path) -> int:
 
 
 def check_disk_space(output_root: Path, min_free_gb: float) -> int:
+    """Raise ``SystemExit`` when free disk space falls below ``min_free_gb`` GB.
+
+    Args:
+        output_root: Output directory whose volume is checked.
+        min_free_gb: Minimum required free space in gigabytes.
+
+    Returns:
+        Free bytes currently available on the volume.
+
+    Raises:
+        SystemExit: If the free space is below the threshold.
+    """
     free = _free_bytes(output_root)
     required = int(min_free_gb * 1024 ** 3)
     if free < required:
@@ -617,6 +811,24 @@ def _compute_execution_fingerprint(
     python_version: str,
     platform_str: str,
 ) -> str:
+    """Compute a SHA-256 fingerprint that uniquely identifies a job's execution environment.
+
+    The fingerprint is a hash of the document digest, git state, benchmark
+    config digest, parser adapter digest, Python version, and platform string.
+    Two jobs with equal fingerprints are considered bit-for-bit reproducible.
+
+    Args:
+        document_sha256: SHA-256 digest of the input PDF.
+        git_commit: HEAD commit SHA of the repository.
+        git_dirty: ``True`` when the working tree has uncommitted changes.
+        config_sha256: SHA-256 digest of ``benchmark_profiles.json``.
+        adapter_path: Path to the parser adapter source file.
+        python_version: Python version string (e.g. ``"3.11.9"``).
+        platform_str: Platform identifier from ``platform.platform()``.
+
+    Returns:
+        SHA-256 hex digest of the combined fingerprint string.
+    """
     adapter_sha256 = _sha256(adapter_path) if adapter_path.is_file() else "missing"
     parts = "|".join([
         document_sha256,
@@ -676,6 +888,32 @@ def execute_plan(
     min_free_disk_gb: float | None = None,
     execution_fingerprint_base: dict | None = None,
 ) -> None:
+    """Execute all pending jobs in the plan sequentially, writing results as they complete.
+
+    Each ``JobRecord`` with ``status == "pending"`` is dispatched via the
+    selected runtime (Docker or host).  Records marked ``"skip"`` are written
+    to ``results_path`` without running.  On success, post-execution validation
+    is performed; if it fails the record is marked ``"fail"``.
+
+    Args:
+        plan: Ordered list of ``JobRecord`` objects from ``build_run_plan``.
+        compose_base: Docker Compose command prefix.
+        container_output_root: Container-side path for the output root (Docker only).
+        artifacts: Artifact selector string passed to each parser (e.g. ``"all"``).
+        continue_on_error: When ``True``, failures do not abort remaining jobs.
+        results_path: JSONL file to append one result line per job.
+        log: Callable for emitting log lines (signature: ``log(str) -> None``).
+        output_root: Host-side output root directory.
+        artifact_policy: Artifact-selection policy used for post-execution validation.
+        runtime: Execution runtime — ``"docker"`` or ``"host"``.
+        job_timeout_seconds: Optional per-job wall-clock timeout in seconds.
+        verbose_output: Pass ``--verbose`` to parser adapters when ``True``.
+        run_uuid: UUID for this batch run; a new UUID is generated if ``None``.
+        min_free_disk_gb: Abort a job (not the batch) if free disk falls below
+            this threshold before starting.  ``None`` disables the guard.
+        execution_fingerprint_base: Dict used to compute execution fingerprints
+            and inject them into ``metrics.json`` on success.  ``None`` skips.
+    """
     total = len(plan)
     current_doc: Path | None = None
     jobs_log_root = LOGS_DIR / "jobs"
@@ -889,6 +1127,14 @@ def _append_result(
     rec: JobRecord,
     disk_fields: dict | None = None,
 ) -> None:
+    """Append a single JSON result line for ``rec`` to the JSONL results file.
+
+    Args:
+        results_path: Path to the JSONL file (opened in append mode).
+        rec: Completed ``JobRecord`` whose fields are serialised.
+        disk_fields: Optional dict with ``free_bytes_before``, ``free_bytes_after``,
+            and ``job_output_bytes`` values; ``None`` when disk tracking is disabled.
+    """
     row = {
         "document": rec.doc.name,
         "sha256": rec.sha256,
@@ -913,6 +1159,11 @@ def _append_result(
 
 
 def _to_container_input_dir(dir_path: Path) -> str:
+    """Translate a host input directory path to its ``/data/…`` container mount path.
+
+    Raises:
+        SystemExit: If ``dir_path`` is not inside the project ``data/`` directory.
+    """
     data_dir = (ROOT / "data").resolve()
     try:
         return "/data/" + str(dir_path.resolve().relative_to(data_dir))
@@ -921,6 +1172,11 @@ def _to_container_input_dir(dir_path: Path) -> str:
 
 
 def to_container_output_root(output_root: Path) -> str:
+    """Translate a host output root path to its ``/outputs/…`` container mount path.
+
+    Raises:
+        SystemExit: If ``output_root`` is not inside the project ``outputs/`` directory.
+    """
     outputs_dir = (ROOT / "outputs").resolve()
     try:
         relative = output_root.resolve().relative_to(outputs_dir)
@@ -932,6 +1188,11 @@ def to_container_output_root(output_root: Path) -> str:
 
 
 def _to_container_doc_path(doc_path: Path) -> str:
+    """Translate a host PDF path to its ``/data/…`` container mount path.
+
+    Raises:
+        SystemExit: If ``doc_path`` is not inside the project ``data/`` directory.
+    """
     data_dir = (ROOT / "data").resolve()
     try:
         relative = doc_path.resolve().relative_to(data_dir)
@@ -948,6 +1209,19 @@ def _build_docker_command(
     container_output_root: str,
     artifacts: str,
 ) -> list[str]:
+    """Build the ``docker compose run`` command for a single Docker-runtime job.
+
+    Args:
+        compose_base: Docker Compose command prefix (e.g. ``["docker", "compose"]``).
+        parser_name: Parser name, also used as the Compose service name.
+        doc_path: Host-side path to the input PDF.
+        profile_name: Profile name passed to the parser adapter.
+        container_output_root: Container-side ``/outputs/…`` path.
+        artifacts: Artifact selector string (e.g. ``"all"``).
+
+    Returns:
+        Complete command list suitable for ``subprocess.run``.
+    """
     return compose_base + [
         "run", "--rm",
         "-e", "PYTHONPATH=/app",
@@ -970,6 +1244,21 @@ def _build_host_command(
     *,
     job_timeout_seconds: int | None = None,
 ) -> tuple[list[str], dict[str, str]]:
+    """Build the command and extra environment for a single host-runtime job.
+
+    Args:
+        parser_name: Parser name; must be present in ``PARSER_RUNTIME_SPECS``.
+        doc_path: Absolute path to the input PDF on the host.
+        output_root: Host-side output root directory.
+        profile_name: Profile name passed to the parser adapter.
+        artifacts: Artifact selector string (e.g. ``"all"``).
+        job_timeout_seconds: Optional timeout forwarded to the adapter via
+            ``--job-timeout-seconds``; ``None`` omits the flag.
+
+    Returns:
+        Tuple of ``(cmd, model_env)`` where ``cmd`` is the command list and
+        ``model_env`` is a dict of extra environment variables for model paths.
+    """
     spec = PARSER_RUNTIME_SPECS[parser_name]
     model_root = resolve_model_root(RUNTIME_HOST, parser_name)
 
@@ -1003,6 +1292,15 @@ def _build_host_environment(
     parser_name: str,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    """Return a copy of ``os.environ`` with the parser venv's ``bin/`` prepended to ``PATH``.
+
+    Args:
+        parser_name: Parser name used to locate the dedicated venv.
+        extra_env: Additional key-value pairs to overlay (e.g. model path env vars).
+
+    Returns:
+        Complete environment dict for use with ``subprocess.run`` or ``run_process_tree``.
+    """
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
@@ -1019,6 +1317,18 @@ def _run_host_subprocess(
     timeout_seconds: int | None = None,
     job_log_file: "IO[str] | None" = None,
 ) -> ProcessResult:
+    """Run a parser command as a host subprocess and return the ``ProcessResult``.
+
+    Args:
+        parser_name: Parser name; used to build the environment via ``_build_host_environment``.
+        cmd: Command list to execute.
+        extra_env: Additional environment variables (model paths, etc.).
+        timeout_seconds: Optional wall-clock timeout; ``None`` disables it.
+        job_log_file: Optional open file for tee-logging subprocess output.
+
+    Returns:
+        ``ProcessResult`` with ``returncode``, ``timed_out``, and platform-specific fields.
+    """
     env = _build_host_environment(parser_name, extra_env)
     result = run_process_tree(
         cmd,
@@ -1046,6 +1356,27 @@ def _run_subprocess(
     verbose_output: bool = False,
     job_log_file: "IO[str] | None" = None,
 ) -> "ProcessResult | int":
+    """Dispatch a single parser job to the host or Docker runtime.
+
+    Returns a ``ProcessResult`` for the host runtime and a plain ``int``
+    (exit code) for the Docker runtime.
+
+    Args:
+        compose_base: Docker Compose command prefix.
+        parser_name: Parser name.
+        doc_path: Path to the input PDF.
+        profile_name: Profile name.
+        container_output_root: Container-side output root path (Docker only).
+        artifacts: Artifact selector string.
+        runtime: ``"docker"`` or ``"host"``.
+        output_root: Host-side output root (required for host runtime).
+        timeout_seconds: Optional per-job timeout in seconds.
+        verbose_output: Append ``--verbose`` to the parser command when ``True``.
+        job_log_file: Optional open file for tee-logging (host runtime only).
+
+    Returns:
+        ``ProcessResult`` (host) or exit-code ``int`` (Docker).
+    """
     if runtime == RUNTIME_HOST:
         if output_root is None:
             raise ValueError("output_root is required for host runtime")
@@ -1072,6 +1403,16 @@ def _run_subprocess(
 # ── Phase 6: Batch summary ────────────────────────────────────────────────────
 
 def batch_summary(plan: list[JobRecord], elapsed: float, log) -> dict[str, int]:
+    """Log a one-line batch-end summary and return status counts.
+
+    Args:
+        plan: Completed job plan.
+        elapsed: Total wall-clock seconds for the execution phase.
+        log: Callable for emitting log lines.
+
+    Returns:
+        Dict with keys ``"done"``, ``"skip"``, ``"fail"``, ``"aborted"`` and their counts.
+    """
     counts: dict[str, int] = {"done": 0, "skip": 0, "fail": 0, "aborted": 0}
     for rec in plan:
         if rec.status in counts:
@@ -1111,6 +1452,18 @@ def run_summary_scripts(
     jobs_spec: list[tuple[str, str]],
     output_root: Path,
 ) -> bool:
+    """Run post-run comparison summary scripts when all their prerequisite parsers were executed.
+
+    Scripts in ``_COMPARISON_REQUIREMENTS`` are skipped when the current run
+    did not include all required ``(parser, profile)`` pairs.
+
+    Args:
+        jobs_spec: List of ``(parser_name, profile_name)`` pairs that were executed.
+        output_root: Output root directory passed as ``--output-root`` to each script.
+
+    Returns:
+        ``True`` when all eligible scripts exited with code 0, ``False`` otherwise.
+    """
     planned = set(jobs_spec)
     metrics_root = ROOT / "metrics"
     all_ok = True
@@ -1166,6 +1519,23 @@ def run_parser_preflight(
     *,
     runtime: str = RUNTIME_DOCKER,
 ) -> dict:
+    """Run ``parser_preflight.py`` for one parser/profile pair and return its result dict.
+
+    Invokes the preflight script via the selected runtime, parses the
+    ``PREFLIGHT_JSON=…`` sentinel line from stdout, validates the protocol
+    schema and field consistency, and checks exit code agreement.
+
+    Args:
+        compose_base: Docker Compose command prefix (unused for host runtime).
+        parser_name: Parser name to preflight.
+        profile_name: Profile name to preflight.
+        runtime: ``"docker"`` or ``"host"``.
+
+    Returns:
+        Preflight result dict conforming to the preflight JSON schema, with
+        ``ok`` set to ``False`` and a synthetic check entry on any protocol
+        error or mismatch.
+    """
     if runtime == RUNTIME_HOST:
         cmd = [
             str(resolve_venv_python(parser_name)),
@@ -1306,6 +1676,15 @@ def run_parser_preflight(
 def build_compose_base(
     compose_override: str | None,
 ) -> list[str]:
+    """Return the ``docker compose`` command prefix, optionally including an override file.
+
+    Args:
+        compose_override: Path to an additional Compose override file, or ``None``.
+
+    Returns:
+        List starting with ``["docker", "compose"]``, extended with
+        ``["-f", "compose.yaml", "-f", <override>]`` when an override is provided.
+    """
     compose_base: list[str] = [
         "docker",
         "compose",
@@ -1325,6 +1704,7 @@ def build_compose_base(
 def nearest_existing_parent(
     path: Path,
 ) -> Path:
+    """Return the closest ancestor of ``path`` (inclusive) that exists on disk."""
     current = path.resolve()
 
     while (
@@ -1354,6 +1734,24 @@ def run_preflight(
     compose_override: str | None,
     runtime: str = RUNTIME_DOCKER,
 ) -> bool:
+    """Run the full infrastructure and parser/profile preflight checks.
+
+    Validates the benchmark configuration, input directory, output path,
+    required scripts, Docker or host venv setup, and then runs
+    ``run_parser_preflight`` for each unique ``(parser, profile)`` pair.
+
+    Args:
+        jobs_spec: List of ``(parser_name, profile_name)`` pairs to check.
+        docs: Discovered PDF list (used only for the discovery count report).
+        input_dir: Host-side input directory.
+        output_root: Host-side output root directory.
+        compose_base: Docker Compose command prefix.
+        compose_override: Optional Compose override file path, or ``None``.
+        runtime: ``"docker"`` or ``"host"``.
+
+    Returns:
+        ``True`` when all checks pass (zero failures), ``False`` otherwise.
+    """
     failures = 0
     warnings_count = 0
 
@@ -1680,6 +2078,22 @@ def _resolve_batch_output_root(
     benchmark_output_directory: str,
     runtime: str,
 ) -> Path:
+    """Resolve the effective output root path from CLI args and config.
+
+    For the host runtime, a ``"host"`` subdirectory is automatically appended
+    so host and Docker outputs never collide.
+
+    Args:
+        requested_output_root: ``--output-root`` CLI value, or ``None`` to use config.
+        benchmark_output_directory: Default output directory from the benchmark config.
+        runtime: ``"docker"`` or ``"host"``.
+
+    Returns:
+        Resolved absolute output root ``Path``.
+
+    Raises:
+        ValueError: If ``runtime`` is not a recognised value.
+    """
     if requested_output_root:
         base_root = (
             ROOT
@@ -1704,6 +2118,7 @@ def _resolve_batch_output_root(
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Entry point: parse args, build plan, and orchestrate the full benchmark batch run."""
     args = parse_args()
     config = load_config()
     benchmark = config["benchmark"]

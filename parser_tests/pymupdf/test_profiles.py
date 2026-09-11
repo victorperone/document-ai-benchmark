@@ -20,6 +20,8 @@ _ALL_PROFILES = [
 
 
 class TestProfilesExist(unittest.TestCase):
+    """Verifies that all PyMuPDF profiles are loadable and carry exactly the required keys."""
+
     def test_all_profiles_loadable(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):
@@ -42,6 +44,8 @@ class TestProfilesExist(unittest.TestCase):
 
 
 class TestOcrModeValues(unittest.TestCase):
+    """Verifies that every PyMuPDF profile has a valid ocr_mode value consistent with ocr_enabled."""
+
     _VALID_OCR_MODES = {"disabled", "auto", "forced"}
 
     def test_ocr_mode_valid_for_all_profiles(self):
@@ -66,6 +70,8 @@ class TestOcrModeValues(unittest.TestCase):
 
 
 class TestFullCpuLocalProfile(unittest.TestCase):
+    """Spot-checks specific configuration values for the full_cpu_local PyMuPDF profile."""
+
     def _p(self):
         return get_profile(PARSER_NAME, "full_cpu_local")
 
@@ -105,6 +111,8 @@ class TestFullCpuLocalProfile(unittest.TestCase):
 
 
 class TestNoRemoteServices(unittest.TestCase):
+    """Verifies that all OCR-enabled PyMuPDF profiles use only the local rapidtess engine."""
+
     def test_ocr_engine_is_local(self):
         for name in _ALL_PROFILES:
             p = get_profile(PARSER_NAME, name)

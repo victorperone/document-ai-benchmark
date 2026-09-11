@@ -33,6 +33,8 @@ def _make_el(**meta_attrs) -> MagicMock:
 
 
 class TestNativeFields(unittest.TestCase):
+    """Verifies that _element_to_native includes all expected fields from the element."""
+
     def test_element_id_present(self):
         el = _make_el()
         native = _element_to_native(el)
@@ -81,6 +83,8 @@ class TestNativeFields(unittest.TestCase):
 
 
 class TestNativeExclusions(unittest.TestCase):
+    """Verifies that _element_to_native omits None values and never includes raw image bytes."""
+
     def test_no_base64_image_data(self):
         el = _make_el()
         native = _element_to_native(el)

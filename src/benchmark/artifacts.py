@@ -1,3 +1,11 @@
+"""Artifact materialisation pipeline for a single parser run.
+
+``finalize_artifacts`` is the single entry point: it validates the
+``ParserArtifactInput``, runs normalisation, computes all metrics, writes the
+selected output files atomically, and returns the complete metrics dict that
+the orchestrator embeds in ``metrics.json``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -44,12 +52,33 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def _mb(value: int | None) -> float | None:
+    """Convert bytes to megabytes, rounded to 6 decimal places.
+
+    Args:
+        value: Byte count, or ``None``.
+
+    Returns:
+        Megabyte value, or ``None`` when *value* is ``None``.
+    """
     if value is None:
         return None
     return round(value / MB, 6)
 
 
 def _written_size(*, selected: bool, path: Path) -> int | None:
+    """Return the on-disk byte count of an artifact, or ``None``.
+
+    Returns ``None`` when the artifact was not selected or does not exist yet,
+    so callers can distinguish "not written" from "written but empty".
+
+    Args:
+        selected: Whether the artifact was part of the current run's
+            artifact policy.
+        path: Filesystem path to the artifact.
+
+    Returns:
+        File size in bytes, or ``None``.
+    """
     if not selected:
         return None
     if not path.is_file():
@@ -58,6 +87,15 @@ def _written_size(*, selected: bool, path: Path) -> int | None:
 
 
 def _sha256_of_file(path: Path) -> str | None:
+    """Return the hex-encoded SHA-256 digest of a file, or ``None``.
+
+    Args:
+        path: Path to the file.
+
+    Returns:
+        64-character lowercase hex string, or ``None`` when the file does
+        not exist.
+    """
     if not path.is_file():
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -76,6 +114,24 @@ def _text_content_validation(
     expected: bool,
     expectation_reason: str,
 ) -> dict[str, Any]:
+    """Build a content-validation record for a single text artifact.
+
+    Reads the file, checks UTF-8 validity, and determines whether the
+    artifact satisfies its content expectation.
+
+    Args:
+        selected: Whether the artifact was included in the current policy.
+        path: Filesystem path to the artifact file.
+        expected: ``True`` when non-empty, alphanumeric content is
+            required.
+        expectation_reason: Human-readable explanation stored in the
+            record.
+
+    Returns:
+        Dict with keys ``selected``, ``exists``, ``utf8_valid``, ``bytes``,
+        ``sha256``, ``has_alphanumeric``, ``content_expected``,
+        ``expectation_reason``, ``valid``, and ``error``.
+    """
     exists = selected and path.is_file()
     utf8_valid = False
     content = ""
@@ -112,6 +168,17 @@ def _ensure_transitional_native_manifest(
     parser_name: str,
     profile_name: str,
 ) -> None:
+    """Create a stub ``manifest.json`` inside the native directory if absent.
+
+    Used when the ``native`` artifact is selected but the adapter did not
+    produce a real bundle.  The stub marks the bundle as unavailable so that
+    post-validation can still parse and check the manifest structure.
+
+    Args:
+        paths: Resolved output paths for the current run.
+        parser_name: Parser identifier written into the manifest.
+        profile_name: Profile identifier written into the manifest.
+    """
     paths.native_dir.mkdir(parents=True, exist_ok=True)
     if not paths.native_manifest_json.exists():
         manifest = {
@@ -139,6 +206,41 @@ def finalize_artifacts(
     normalization_config: dict[str, Any],
     artifact_policy: ArtifactPolicy,
 ) -> dict[str, Any]:
+    """Validate, normalise, and write all selected benchmark artifacts.
+
+    This is the single aggregation point for a completed parser run.  It:
+
+    1. Validates the closed-enum fields and page-count cardinality constraints
+       in *artifact_input*.
+    2. Runs the normaliser to produce ``raw.md`` and ``document.md`` content.
+    3. Computes noise, content-element, and token metrics.
+    4. Atomically writes each selected artifact file.
+    5. Returns the full metrics dict that the orchestrator writes to
+       ``metrics.json``.
+
+    Args:
+        paths: Resolved output paths for this run.
+        document_id: Stem of the source PDF (used as the directory name).
+        source_file: Basename of the source PDF (stored in JSONL records).
+        parser_name: Parser identifier (e.g. ``"pymupdf"``).
+        profile_name: Profile identifier (e.g. ``"default"``).
+        artifact_input: Populated contract object from the parser adapter.
+        tokenizer_name: tiktoken encoding name used for token counting.
+        normalization_config: Normalisation settings from
+            ``benchmark_profiles.json``.
+        artifact_policy: Which output files to write.
+
+    Returns:
+        Metrics dict with top-level keys ``timing``, ``content_elements``,
+        ``heuristics``, ``tokens``, ``normalization``, ``empty_output_pages``,
+        ``artifacts``, ``quality_eligibility``, ``content_validation``, and
+        ``output``.
+
+    Raises:
+        ValueError: If any field in *artifact_input* violates cardinality or
+            closed-enum constraints, or if ``native_markdown`` contains a
+            derived-content marker.
+    """
     # --- Validate closed enums ---
     if artifact_input.page_mapping_status not in VALID_PAGE_MAPPING_STATUS:
         raise ValueError(

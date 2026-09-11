@@ -25,6 +25,7 @@ PARSER_TEST_ROOT = ROOT / "parser_tests"
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the parser test runner."""
     parser = argparse.ArgumentParser(
         description=(
             "Run parser-specific tests inside "
@@ -42,6 +43,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Discover and run parser-specific tests inside the parser Docker service.
+
+    Returns:
+        Exit code from the ``docker compose run`` process: ``0`` on success,
+        ``2`` when the parser test directory does not exist.
+    """
     args = parse_args()
 
     parser_name = args.parser

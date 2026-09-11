@@ -22,6 +22,8 @@ class _FakeEl:
 
 
 class TestCountElementsByPage(unittest.TestCase):
+    """Tests for _count_elements_by_page — correct per-page distribution of element counts."""
+
     def test_single_table_on_page_2(self):
         elements = [_FakeEl("Table", 2)]
         result = _count_elements_by_page(elements, 3)

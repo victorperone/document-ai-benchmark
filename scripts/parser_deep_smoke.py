@@ -61,6 +61,14 @@ QR_PAYLOAD = "DOC-AI-BENCHMARK-QR-2026"
 
 
 def _sha256(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file, reading it in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -69,6 +77,17 @@ def _sha256(path: Path) -> str:
 
 
 def verify_fixture() -> dict:
+    """Verify the deep-smoke fixture manifest and PDF structure.
+
+    Checks schema version, page count, QR payload, declared feature flags,
+    file sizes, SHA-256 hashes, and raw PDF structure markers.
+
+    Returns:
+        The parsed fixture manifest dict on success.
+
+    Raises:
+        RuntimeError: On any validation failure.
+    """
     manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1 or manifest.get("pages") != 2:
         raise RuntimeError("deep-smoke manifest must declare schema v1 and two pages")
@@ -98,6 +117,17 @@ def verify_fixture() -> dict:
 
 
 def verify_model(parser: str) -> dict:
+    """Verify the model-artifact manifest for a given parser.
+
+    Args:
+        parser: Parser name key from ``MODEL_ROOTS`` (e.g. ``"docling"``).
+
+    Returns:
+        The parsed and verified model manifest dict.
+
+    Raises:
+        RuntimeError: On any manifest validation failure.
+    """
     root = MODEL_ROOTS[parser].resolve()
     return verify_manifest(
         MODEL_COMPONENTS[parser],
@@ -108,6 +138,16 @@ def verify_model(parser: str) -> dict:
 
 
 def _artifact_text(job_root: Path) -> str:
+    """Concatenate the text from the three primary Markdown artifacts in a job output directory.
+
+    Args:
+        job_root: Directory containing ``raw.md``, ``document.md``, and/or
+            ``document.enriched.md``.
+
+    Returns:
+        Single string with all present artifact contents joined by ``"\\n"``.
+        Missing files are silently skipped.
+    """
     contents: list[str] = []
     for name in ("raw.md", "document.md", "document.enriched.md"):
         path = job_root / name
@@ -117,6 +157,22 @@ def _artifact_text(job_root: Path) -> str:
 
 
 def validate_job(parser: str, profile: str, output_base: Path) -> None:
+    """Validate the output artifacts of a completed parser job against the deep-smoke contract.
+
+    Checks that ``metrics.json`` is present and has correct parser provenance,
+    that all required artifact files exist, that the native manifest is present,
+    that all selected content-validation artifacts are valid, that content markers
+    appear the expected number of times, and that no transient visual-crop files
+    were left behind.
+
+    Args:
+        parser: Parser name (e.g. ``"pymupdf"``).
+        profile: Profile name (e.g. ``"full_cpu_local_visual"``).
+        output_base: Root directory for deep-smoke outputs.
+
+    Raises:
+        RuntimeError: On any validation failure.
+    """
     job_root = output_base.resolve() / "host" / parser / FIXTURE_PDF.stem / profile
     metrics_path = job_root / "metrics.json"
     if not metrics_path.is_file():
@@ -164,6 +220,7 @@ def validate_job(parser: str, profile: str, output_base: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the deep-smoke runner."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs" / "deep_smoke")
     parser.add_argument("--verbose-output", action="store_true")
@@ -172,6 +229,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run the deep-smoke suite: verify fixture and models, execute each parser, validate outputs.
+
+    Returns:
+        ``0`` if all parsers pass; ``1`` if one or more parsers fail.
+    """
     args = parse_args()
     verify_fixture()
     print("DEEP_SMOKE_FIXTURE=PASS")

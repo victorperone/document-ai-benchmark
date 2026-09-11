@@ -10,6 +10,14 @@ from pathlib import Path
 
 
 def sha256_file(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file, reading it in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -18,6 +26,23 @@ def sha256_file(path: Path) -> str:
 
 
 def build_manifest(component: str, version: str, root: Path, manifest_path: Path) -> dict:
+    """Walk ``root`` and build a schema-v1 manifest dict for all non-symlink files.
+
+    Symlinks and the manifest file itself are excluded from the file list.
+
+    Args:
+        component: Component name embedded in the manifest (e.g. ``"docling"``).
+        version: Version string embedded in the manifest.
+        root: Model root directory to scan.
+        manifest_path: Manifest file path; excluded from the scanned file list.
+
+    Returns:
+        Manifest dict with ``schema_version``, ``component``, ``version``,
+        ``prepared_at_utc``, and ``files`` keys.
+
+    Raises:
+        RuntimeError: If no model files are found below ``root``.
+    """
     root = root.resolve()
     files = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
@@ -45,6 +70,25 @@ def verify_manifest(
     root: Path,
     manifest_path: Path,
 ) -> dict:
+    """Verify an existing schema-v1 manifest against the files currently on disk.
+
+    Checks schema version, component name, version string, timestamp presence,
+    path safety, file existence, file size, SHA-256 hash, duplicate paths, and
+    unlisted files.
+
+    Args:
+        component: Expected component name.
+        expected_version: Expected version string.
+        root: Model root directory to validate against.
+        manifest_path: Path to the manifest JSON file to read.
+
+    Returns:
+        The parsed manifest dict on success.
+
+    Raises:
+        RuntimeError: On any schema, path-safety, size, or hash mismatch, or
+            if unlisted or missing files are detected.
+    """
     root = root.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != 1:
@@ -99,6 +143,7 @@ def verify_manifest(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the model manifest tool."""
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("prepare", "verify"))
     parser.add_argument("--component", required=True)
@@ -109,6 +154,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run ``prepare`` or ``verify`` and print a structured result line.
+
+    Returns:
+        ``0`` on success; ``1`` on any error (propagated via ``raise SystemExit``).
+    """
     args = parse_args()
     root = args.root.resolve()
     manifest_path = (args.manifest or root / "manifest.json").resolve()

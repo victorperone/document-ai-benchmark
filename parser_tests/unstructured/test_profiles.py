@@ -34,6 +34,8 @@ _REQUIRED_KEYS = frozenset({
 
 
 class TestUnstructuredProfilesExist(unittest.TestCase):
+    """Verifies that exactly the expected set of Unstructured profiles is defined."""
+
     def test_all_required_profiles_exist(self):
         for name in _EXPECTED_PROFILES:
             with self.subTest(profile=name):
@@ -54,6 +56,8 @@ class TestUnstructuredProfilesExist(unittest.TestCase):
 
 
 class TestProfileKeys(unittest.TestCase):
+    """Verifies that each Unstructured profile has exactly the required set of keys."""
+
     def _profile(self, name: str) -> dict:
         return get_profile(PARSER_NAME, name)
 
@@ -75,6 +79,8 @@ class TestProfileKeys(unittest.TestCase):
 
 
 class TestProfileValues(unittest.TestCase):
+    """Verifies configuration values for all Unstructured profiles against the expected contract."""
+
     def _profile(self, name: str) -> dict:
         return get_profile(PARSER_NAME, name)
 
@@ -150,6 +156,8 @@ class TestProfileValues(unittest.TestCase):
 
 
 class TestFullCpuLocalProfile(unittest.TestCase):
+    """Spot-checks specific configuration values for the full_cpu_local Unstructured profile."""
+
     def _profile(self) -> dict:
         return get_profile(PARSER_NAME, "full_cpu_local")
 

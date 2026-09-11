@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+  <!-- Background -->
+  <rect width="960" height="480" fill="#f8fafc" rx="12"/>
+
+  <!-- Title -->
+  <text x="480" y="36" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">Benchmark Pipeline</text>
+
+  <!-- ── Row 1: Main pipeline boxes ── -->
+
+  <!-- Box 1: PDF Input -->
+  <rect x="30" y="70" width="130" height="80" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="95" y="102" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">PDF File</text>
+  <text x="95" y="120" text-anchor="middle" font-size="10.5" fill="#64748b">corpus input</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="162" y1="110" x2="202" y2="110" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Box 2: Source Inventory -->
+  <rect x="204" y="70" width="148" height="80" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="278" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">Source Inventory</text>
+  <text x="278" y="117" text-anchor="middle" font-size="10.5" fill="#64748b">SHA-256 · pages</text>
+  <text x="278" y="132" text-anchor="middle" font-size="10.5" fill="#64748b">chars · images</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="354" y1="110" x2="394" y2="110" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Box 3: Parser Adapter -->
+  <rect x="396" y="70" width="168" height="80" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="480" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#5b21b6">Parser Adapter</text>
+  <text x="480" y="117" text-anchor="middle" font-size="10.5" fill="#64748b">layout · OCR · tables</text>
+  <text x="480" y="132" text-anchor="middle" font-size="10.5" fill="#64748b">headings · visual</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="566" y1="110" x2="606" y2="110" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Box 4: Common Core -->
+  <rect x="608" y="70" width="148" height="80" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5"/>
+  <text x="682" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">Common Core</text>
+  <text x="682" y="117" text-anchor="middle" font-size="10.5" fill="#64748b">normalize · metrics</text>
+  <text x="682" y="132" text-anchor="middle" font-size="10.5" fill="#64748b">tokens · resources</text>
+
+  <!-- Arrow 4→5 -->
+  <line x1="758" y1="110" x2="798" y2="110" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Box 5: Output Bundle -->
+  <rect x="800" y="70" width="130" height="80" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1.5"/>
+  <text x="865" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#92400e">Output Bundle</text>
+  <text x="865" y="117" text-anchor="middle" font-size="10.5" fill="#64748b">artifacts</text>
+  <text x="865" y="132" text-anchor="middle" font-size="10.5" fill="#64748b">metrics.json</text>
+
+  <!-- ── Row 2: Parser Adapters ── -->
+  <text x="480" y="198" text-anchor="middle" font-size="12" font-weight="600" fill="#5b21b6">Available Parser Adapters</text>
+
+  <!-- Parser boxes -->
+  <rect x="30"  y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="89"  y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">PyMuPDF</text>
+  <text x="89"  y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">8 profiles</text>
+
+  <rect x="162" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="221" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">Docling</text>
+  <text x="221" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">7 profiles</text>
+
+  <rect x="294" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="353" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">MinerU</text>
+  <text x="353" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">4 profiles</text>
+
+  <rect x="426" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="485" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">PaddleOCR</text>
+  <text x="485" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">7 profiles</text>
+
+  <rect x="558" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="617" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">LiteParse</text>
+  <text x="617" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">4 profiles</text>
+
+  <rect x="690" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="749" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">Unstructured</text>
+  <text x="749" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">7 profiles</text>
+
+  <rect x="822" y="210" width="118" height="44" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+  <text x="881" y="228" text-anchor="middle" font-size="11" font-weight="600" fill="#5b21b6">XBerg</text>
+  <text x="881" y="244" text-anchor="middle" font-size="9.5" fill="#7c3aed">6 profiles</text>
+
+  <!-- ── Row 3: Common Core breakdown ── -->
+  <text x="480" y="306" text-anchor="middle" font-size="12" font-weight="600" fill="#065f46">Common Core Modules (src/benchmark/)</text>
+
+  <rect x="30"  y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="94"  y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Normalizer</text>
+  <text x="94"  y="352" text-anchor="middle" font-size="9.5" fill="#059669">header/footer cleanup</text>
+
+  <rect x="170" y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="234" y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Token Metrics</text>
+  <text x="234" y="352" text-anchor="middle" font-size="9.5" fill="#059669">o200k_base reference</text>
+
+  <rect x="310" y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="374" y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Noise Metrics</text>
+  <text x="374" y="352" text-anchor="middle" font-size="9.5" fill="#059669">dup · whitespace · OCR</text>
+
+  <rect x="450" y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="514" y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Resource Monitor</text>
+  <text x="514" y="352" text-anchor="middle" font-size="9.5" fill="#059669">CPU · RAM · disk · time</text>
+
+  <rect x="590" y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="654" y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Post Validation</text>
+  <text x="654" y="352" text-anchor="middle" font-size="9.5" fill="#059669">SHA-256 · schema v3</text>
+
+  <rect x="730" y="318" width="128" height="44" rx="6" fill="#f0fdf4" stroke="#059669" stroke-width="1"/>
+  <text x="794" y="336" text-anchor="middle" font-size="10.5" font-weight="600" fill="#065f46">Native Bundle</text>
+  <text x="794" y="352" text-anchor="middle" font-size="9.5" fill="#059669">assets · manifest</text>
+
+  <!-- ── Row 4: Runtimes ── -->
+  <text x="480" y="406" text-anchor="middle" font-size="12" font-weight="600" fill="#b45309">Execution Runtimes</text>
+
+  <rect x="200" y="418" width="180" height="44" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1"/>
+  <text x="290" y="436" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">Docker Container</text>
+  <text x="290" y="452" text-anchor="middle" font-size="9.5" fill="#b45309">PyMuPDF · Docling · MinerU · PaddleOCR · LiteParse</text>
+
+  <rect x="420" y="418" width="180" height="44" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="1"/>
+  <text x="510" y="436" text-anchor="middle" font-size="11" font-weight="600" fill="#92400e">Host venv</text>
+  <text x="510" y="452" text-anchor="middle" font-size="9.5" fill="#b45309">Unstructured · XBerg (host-only)</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+</svg>

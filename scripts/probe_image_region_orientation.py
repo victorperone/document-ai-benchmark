@@ -1,3 +1,4 @@
+"""Inspect image regions inside a PDF and run Tesseract OSD on each rendered region."""
 from __future__ import annotations
 
 import argparse
@@ -203,6 +204,7 @@ def get_image_blocks(
 
 
 def main() -> None:
+    """Iterate over all image blocks in the PDF and report Tesseract OSD results per region."""
     args = parse_args()
 
     if not args.input.is_file():

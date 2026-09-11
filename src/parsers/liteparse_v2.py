@@ -1,3 +1,18 @@
+"""LiteParse v2 benchmark adapter.
+
+Wraps the ``liteparse`` library to produce benchmark outputs compatible with
+the document-AI benchmark framework. Supports native PDF text extraction,
+optional selective Tesseract OCR, embedded-image OCR, and SmolVLM visual
+description.
+
+Outputs produced per run:
+- ``page_texts``: Markdown text per page (native or OCR-merged)
+- ``parser_page_elements``: Per-page element counts
+- ``native_pages``: Structured per-page block data
+- ``metrics.json``: Full benchmark metrics
+
+Entry point: ``main()``
+"""
 from __future__ import annotations
 
 import argparse
@@ -88,6 +103,18 @@ _RULE_RE = re.compile(r"^(---+|\*\*\*+|___+)$")
 
 
 def _parse_markdown_blocks(text: str) -> list[dict[str, Any]]:
+    """Parse a Markdown page text into a list of typed block dicts.
+
+    Recognises headings, table rows, list items, fenced code blocks, horizontal
+    rules, and plain paragraphs. Blank lines are skipped.
+
+    Args:
+        text: Markdown text for a single page.
+
+    Returns:
+        List of block dicts, each with at least a ``"kind"`` key. Heading dicts
+        also include ``"level"``; all others include ``"text"``.
+    """
     blocks: list[dict[str, Any]] = []
     if not text:
         return blocks
@@ -153,6 +180,18 @@ _MIN_ALNUM_RATIO = 0.30
 
 
 def _is_usable_text(text: str) -> bool:
+    """Return True when text passes basic quality thresholds for OCR output.
+
+    Rejects empty strings, text with fewer than 10 alphanumeric characters,
+    text where less than 30% of characters are alphanumeric, and highly
+    repetitive single-character noise sequences.
+
+    Args:
+        text: Raw text string to evaluate.
+
+    Returns:
+        True if the text is considered usable content.
+    """
     stripped = text.strip()
     if not stripped:
         return False
@@ -222,6 +261,17 @@ def _ocr_image_bytes(
     *,
     failure_fatal: bool = False,
 ) -> str:
+    """Run Tesseract OCR on raw PNG/JPEG bytes and return the extracted text.
+
+    Args:
+        image_bytes: Raw image bytes to OCR.
+        lang: Tesseract language string (e.g. ``"por+eng"``).
+        failure_fatal: If True, re-raises exceptions from pytesseract;
+            otherwise returns an empty string on failure.
+
+    Returns:
+        Stripped OCR text, or an empty string on failure when not fatal.
+    """
     import pytesseract
     from PIL import Image
 
@@ -251,6 +301,27 @@ def _describe_image_with_smolvlm(
     model_artifact_directory: str = SMOLVLM_ARTIFACT_DIRECTORY,
     max_new_tokens: int = 256,
 ) -> str:
+    """Generate a visual description of an image using a locally cached SmolVLM model.
+
+    Loads the model and processor on first call and caches them in the
+    module-level ``_smolvlm_cache`` dict keyed by the model directory path.
+    Inference runs on CPU with greedy decoding.
+
+    Args:
+        image_bytes: Raw image bytes (PNG or JPEG) to describe.
+        model_root: Root directory where model artifact directories live.
+        prompt: User prompt to accompany the image.
+        model_artifact_directory: Leaf directory name under ``model_root``
+            containing the SmolVLM HuggingFace checkpoint.
+        max_new_tokens: Maximum number of new tokens to generate.
+
+    Returns:
+        Stripped description string from the model.
+
+    Raises:
+        RuntimeError: If the model directory is missing, if the model produces
+            an empty description, or if any other error occurs during inference.
+    """
     model_dir = (
         model_root
         / model_artifact_directory
@@ -385,6 +456,14 @@ def _describe_image_with_smolvlm(
 
 
 def _image_file_hash(path: Path) -> str:
+    """Compute a SHA-256 hex digest of an image file using 64 KiB streaming chunks.
+
+    Args:
+        path: Path to the image file.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
@@ -393,6 +472,16 @@ def _image_file_hash(path: Path) -> str:
 
 
 def _region_id(page_num: int, index: int, file_hash: str) -> str:
+    """Build a stable region identifier for an image on a page.
+
+    Args:
+        page_num: 1-based page number.
+        index: 0-based image index within the page.
+        file_hash: Full SHA-256 hex digest of the image file.
+
+    Returns:
+        String of the form ``"p<page>-image-<index>-<hash_prefix>"``.
+    """
     return f"p{page_num}-image-{index}-{file_hash[:8]}"
 
 
@@ -706,6 +795,13 @@ def _extract_page_texts(
 
 
 class MergeDecision:
+    """Namespace of string constants for OCR/native text merge policy decisions.
+
+    Used by ``_decide_merge`` and ``_merge_page_texts`` to record how each page
+    text was selected. Constants are stored as class attributes so callers can
+    compare values without hardcoding strings.
+    """
+
     keep_native = "keep_native"
     replace_empty_page = "replace_empty_page"
     replace_garbled_page = "replace_garbled_page"
@@ -714,6 +810,14 @@ class MergeDecision:
 
 
 def _alnum_ratio(text: str) -> float:
+    """Return the fraction of alphanumeric characters in ``text``.
+
+    Args:
+        text: Input string.
+
+    Returns:
+        Float in ``[0.0, 1.0]``; returns ``0.0`` for empty strings.
+    """
     if not text:
         return 0.0
     alnum = sum(1 for c in text if c.isalnum())
@@ -721,6 +825,16 @@ def _alnum_ratio(text: str) -> float:
 
 
 def _replacement_char_ratio(text: str) -> float:
+    """Return the fraction of Unicode replacement characters (U+FFFD) in ``text``.
+
+    A high ratio indicates corrupted or garbled text encoding.
+
+    Args:
+        text: Input string.
+
+    Returns:
+        Float in ``[0.0, 1.0]``; returns ``0.0`` for empty strings.
+    """
     if not text:
         return 0.0
     return text.count("�") / len(text)
@@ -809,6 +923,25 @@ def _build_page_text_with_enrichments(
     enrichments: dict[str, dict[str, Any]],
     image_output_dir: Path | None = None,
 ) -> str:
+    """Append usable OCR text from embedded images to a page's Markdown text.
+
+    Iterates over image objects for a page and, for non-duplicate images with
+    kind ``"image_text"`` or ``"image_text_and_description"``, appends the
+    OCR text. VLM descriptions are intentionally excluded (stored in
+    parser_native only; see adendo §2, §9).
+
+    Args:
+        raw_text: Base Markdown text for the page.
+        page_images: List of image objects returned by LiteParse for this page.
+        enrichments: Mapping from image file path string to enrichment dict
+            (output of ``_process_document_images``).
+        image_output_dir: Directory where extracted images are stored, used
+            to resolve image names when the path attribute is absent.
+
+    Returns:
+        Combined page text with OCR content appended, whitespace normalised,
+        and trailing whitespace stripped followed by a newline.
+    """
     parts: list[str] = [raw_text.rstrip() if raw_text else ""]
 
     for img_obj in page_images:
@@ -871,6 +1004,14 @@ def _text_already_present(reference: str, candidate: str) -> bool:
 
 
 def _count_blocks(blocks: list[dict[str, Any]]) -> Counter[str]:
+    """Count Markdown blocks by their ``"kind"`` field.
+
+    Args:
+        blocks: List of block dicts as returned by ``_parse_markdown_blocks``.
+
+    Returns:
+        Counter mapping kind strings to occurrence counts.
+    """
     return Counter(b.get("kind", "unknown") for b in blocks)
 
 
@@ -881,6 +1022,19 @@ def _build_structured_output(
     all_images: list[Any],
     page_count: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build per-page element summary and native page dicts from final page texts.
+
+    Args:
+        page_texts: Final merged Markdown text for each page (one entry per page).
+        ocr_decisions: Mapping from 1-based page number to OCR decision metadata.
+        image_enrichments: Mapping from image file path string to enrichment dict.
+        all_images: List of image objects from the LiteParse result.
+        page_count: Total number of pages.
+
+    Returns:
+        A ``(parser_page_elements, parser_native_pages)`` tuple, each a list of
+        one dict per page in 1-based order.
+    """
     parser_page_elements: list[dict[str, Any]] = []
     parser_native_pages: list[dict[str, Any]] = []
 
@@ -941,6 +1095,23 @@ def _load_cached_inventory(
     input_path: Path,
     output_root: Path,
 ) -> dict[str, Any]:
+    """Load the pre-computed Source Inventory for the given input PDF.
+
+    The inventory is a JSON file located at
+    ``<output_root>/_source_inventory/<stem>.json``. The SHA-256 of the input
+    file is verified against the stored value to detect stale inventories.
+
+    Args:
+        input_path: Absolute path to the PDF input file.
+        output_root: Root output directory for this benchmark run.
+
+    Returns:
+        Parsed inventory dict (keys include ``"sha256"``, ``"pages"``, etc.).
+
+    Raises:
+        BenchmarkConfigurationError: If the inventory file is missing or its
+            SHA-256 does not match the current input file.
+    """
     destination = (
         output_root
         / "_source_inventory"
@@ -972,6 +1143,14 @@ def _load_cached_inventory(
 
 
 def _sha256(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file using 1 MiB streaming chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -985,6 +1164,14 @@ def _sha256(path: Path) -> str:
 
 
 def _package_version(name: str) -> str | None:
+    """Return the installed version string for a package, or None if not found.
+
+    Args:
+        name: PyPI distribution name to look up.
+
+    Returns:
+        Version string, or None when the package is not installed.
+    """
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -992,6 +1179,12 @@ def _package_version(name: str) -> str | None:
 
 
 def _get_tesseract_version() -> str | None:
+    """Return the first line of ``tesseract --version``, or None on failure.
+
+    Returns:
+        Version string (e.g. ``"tesseract 5.3.3"``), or None when Tesseract
+        is not installed or the invocation fails.
+    """
     try:
         result = run_process_tree(
             ["tesseract", "--version"],
@@ -1024,6 +1217,34 @@ def _build_metrics(
     run_log_path: Path | None,
     metrics_json_path: Path | None,
 ) -> dict[str, Any]:
+    """Assemble the complete benchmark metrics dict for a LiteParse run.
+
+    Combines source inventory data, pipeline timing, per-page OCR decisions,
+    image enrichment statistics, version information, and artifact contract
+    results into the standard benchmark ``metrics.json`` schema.
+
+    Args:
+        input_path: Resolved path to the input PDF.
+        profile: Resolved profile dict.
+        profile_name: Profile name string (e.g. ``"native"``).
+        inventory: Source Inventory dict (see ``_load_cached_inventory``).
+        artifact_result: Output of ``finalize_artifacts``.
+        ocr_decisions: Mapping from 1-based page number to OCR decision info.
+        image_enrichments: Mapping from image file path to enrichment dict.
+        all_images: All image objects returned by LiteParse.
+        liteparse_version: Installed liteparse version string or None.
+        pipeline_seconds: Wall-clock seconds for the pipeline execution.
+        page_count: Total page count from the inventory.
+        resources: CPU/RAM resource metrics from ``ResourceMonitor``.
+        tokenizer_name: Reference tokenizer identifier.
+        artifact_selected_list: List of selected artifact names.
+        merge_decisions: Per-page merge decision strings or None.
+        run_log_path: Path to the run log file, or None.
+        metrics_json_path: Path to the metrics JSON file, or None.
+
+    Returns:
+        Complete metrics dict ready for JSON serialization.
+    """
     pages_needing_ocr = [
         pn for pn, info in ocr_decisions.items()
         if info.get("decision") == "full_page_ocr"
@@ -1167,6 +1388,24 @@ def _build_metrics(
 def _resolve_profile_runtime(
     profile: dict[str, Any],
 ) -> dict[str, Any]:
+    """Validate and enrich a raw LiteParse profile dict with runtime-specific values.
+
+    Validates OCR strategy, engine, worker count, and optional image-description
+    settings. Resolves the effective worker count via ``resolve_parallelism``.
+
+    Args:
+        profile: Raw profile dict loaded via ``get_profile``.
+
+    Returns:
+        A new dict with all original keys plus ``ocr_strategy``, ``ocr_engine``,
+        ``orientation_detection``, ``image_ocr``, ``ocr_failure_fatal``,
+        ``image_description``, ``num_workers_configured``,
+        ``available_logical_cpus``, ``num_workers``, ``parallelism_source``.
+
+    Raises:
+        BenchmarkConfigurationError: If OCR strategy/engine is invalid, worker
+            count is zero or negative, or image description model id is unsafe.
+    """
     resolved = dict(profile)
 
     ocr_enabled = bool(resolved.get("ocr_enabled", False))
@@ -1291,6 +1530,14 @@ def _build_parser_config(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _find_tessdata_prefix() -> str | None:
+    """Locate the Tesseract tessdata directory.
+
+    Checks the ``TESSDATA_PREFIX`` environment variable first, then falls
+    back to the common candidate paths from ``_TESSDATA_CANDIDATES``.
+
+    Returns:
+        Absolute path to the tessdata directory, or None if not found.
+    """
     import os
 
     prefix_env = os.environ.get("TESSDATA_PREFIX")
@@ -1309,6 +1556,21 @@ def preflight_profile(
     *,
     model_artifacts_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Run preflight checks for a LiteParse profile and return a structured result.
+
+    Validates profile configuration, installed package versions, OCR settings
+    (Tesseract, tessdata language files, DPI), SmolVLM image description
+    artifacts, worker count, and remote service constraints.
+
+    Args:
+        profile_name: Name of the LiteParse profile to validate.
+        model_artifacts_override: Optional path override for SmolVLM model
+            artifacts (defaults to ``DEFAULT_MODEL_ARTIFACTS``).
+
+    Returns:
+        A structured preflight result dict (see ``make_result``) with a list
+        of per-check pass/fail entries.
+    """
     checks: list[dict[str, Any]] = []
 
     # Profile configuration
@@ -1645,6 +1907,16 @@ def preflight_profile(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate command-line arguments for the LiteParse v2 adapter.
+
+    Returns:
+        Parsed argument namespace. The ``artifact_policy`` attribute is
+        populated from ``--artifacts`` via ``ArtifactPolicy.from_cli``.
+
+    Raises:
+        SystemExit: If required arguments are missing or ``--artifacts``
+            contains an invalid selection.
+    """
     parser = argparse.ArgumentParser(
         description="LiteParse benchmark adapter v2.",
     )
@@ -1686,6 +1958,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Entry point for the LiteParse v2 benchmark adapter.
+
+    Parses arguments, loads the profile, resolves runtime settings,
+    runs LiteParse conversion with resource monitoring, applies selective
+    OCR and image enrichment where configured, builds the output contract,
+    and writes benchmark artifacts to the output directory.
+    """
     import liteparse as _liteparse
     from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
     from src.benchmark.artifacts import finalize_artifacts

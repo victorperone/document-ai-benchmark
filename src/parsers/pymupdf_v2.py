@@ -1,3 +1,10 @@
+"""PyMuPDF4LLM benchmark adapter v2.
+
+Wraps pymupdf4llm with profile-driven OCR (RapidTess / auto / forced modes),
+optional visual enrichment via a separate SmolVLM worker process, and full
+benchmark artifact generation. Tracks which pages actually receive OCR via
+the OcrTracker callback.
+"""
 from __future__ import annotations
 
 import argparse
@@ -100,6 +107,11 @@ def _resolve_visual_worker_python(project_root: Path) -> Path:
 
 
 def _find_tessdata_prefix() -> str | None:
+    """Find the Tesseract tessdata directory from env or known candidate paths.
+
+    Returns:
+        Absolute path string of the tessdata directory, or None if not found.
+    """
     import os
     prefix_env = os.environ.get("TESSDATA_PREFIX")
     if prefix_env and Path(prefix_env).is_dir():
@@ -111,6 +123,12 @@ def _find_tessdata_prefix() -> str | None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the PyMuPDF v2 adapter.
+
+    Returns:
+        Parsed namespace with input, output_root, profile, the resolved
+        ArtifactPolicy as ``artifact_policy``, and verbose flag.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "PyMuPDF4LLM benchmark adapter v2."
@@ -166,6 +184,7 @@ class OcrTracker:
     """
 
     def __init__(self) -> None:
+        """Initialise the tracker and introspect the rapidtess_api.exec_ocr signature."""
         self.requested_pages: set[int] = set()
         self.processed_pages: set[int] = set()
         self.failed_pages: set[int] = set()
@@ -195,6 +214,20 @@ class OcrTracker:
         language: str = "eng",
         **kwargs,
     ) -> None:
+        """Execute OCR on a page, tracking success and failure.
+
+        Filters extra kwargs not accepted by the underlying plugin when the
+        plugin does not accept **kwargs. Records the page number in
+        requested_pages before calling exec_ocr and in processed_pages or
+        failed_pages depending on the outcome.
+
+        Args:
+            page: The pymupdf Page to process.
+            pixmap: Optional pre-rendered pixmap.
+            dpi: Rendering resolution.
+            language: Tesseract language code.
+            **kwargs: Additional kwargs forwarded to the plugin if supported.
+        """
         page_number = (
             page.number + 1
         )
@@ -244,6 +277,12 @@ class OcrTracker:
 
 
 def _tesseract_version() -> str | None:
+    """Return the first line of ``tesseract --version`` output, or None on failure.
+
+    Returns:
+        Version string such as ``"tesseract 5.3.1"`` or None if Tesseract is
+        unavailable or returns a non-zero exit code.
+    """
     try:
         result = run_process_tree(
             [
@@ -273,6 +312,19 @@ def load_or_build_inventory(
     input_path: Path,
     output_root: Path,
 ) -> dict[str, Any]:
+    """Load the cached Source Inventory for a PDF, rebuilding it if stale.
+
+    If a cached inventory exists and its SHA-256 matches the current file, it is
+    returned immediately. Otherwise, a fresh inventory is computed via
+    analyze_pdf_source() and persisted for future runs.
+
+    Args:
+        input_path: Path to the input PDF.
+        output_root: Root output directory containing ``_source_inventory/``.
+
+    Returns:
+        Source Inventory dict.
+    """
     destination = (
         output_root
         / "_source_inventory"
@@ -318,6 +370,26 @@ def align_chunks(
     list[dict[str, Any]],
     set[int],
 ]:
+    """Align pymupdf4llm page chunks into ordered per-page structures.
+
+    Reads page_number from each chunk's metadata, falling back to the chunk's
+    position in the list. Chunks with out-of-range page numbers are silently
+    discarded.
+
+    Args:
+        chunks: List of page chunk dicts from pymupdf4llm.to_markdown with
+            page_chunks=True.
+        page_count: Total number of pages in the PDF.
+
+    Returns:
+        A three-tuple of:
+        - page_texts: One string per page (zero-based, empty string for
+          missing pages).
+        - native_pages: One dict per page with metadata, toc_items, and
+          page_boxes.
+        - observed_pages: Set of 1-based page numbers for which a chunk was
+          received.
+    """
     page_texts = [
         ""
         for _ in range(page_count)
@@ -418,6 +490,17 @@ def summarize_page_boxes(
         dict[str, Any]
     ],
 ) -> dict[str, Any]:
+    """Aggregate layout box class counts across pages into a summary structure.
+
+    Args:
+        native_pages: List of native page dicts, each containing an optional
+            ``page_boxes`` list of layout box dicts with a ``"class"`` key.
+
+    Returns:
+        Dict with two keys:
+        - ``"summary"``: Aggregate element counts across all pages.
+        - ``"per_page"``: List of per-page element count dicts.
+    """
     total_classes: Counter[str] = (
         Counter()
     )
@@ -594,6 +677,15 @@ def count_log_lines(
     path: Path,
     word: str,
 ) -> int:
+    """Count lines in a log file that contain a given word (case-insensitive).
+
+    Args:
+        path: Path to the log file.
+        word: Word to search for; matching is case-insensitive.
+
+    Returns:
+        Number of matching lines, or 0 if the file does not exist.
+    """
     if not path.is_file():
         return 0
 
@@ -662,6 +754,19 @@ _TO_MARKDOWN_ARGS: frozenset[str] = frozenset(
 def preflight_profile(
     profile_name: str,
 ) -> dict[str, Any]:
+    """Run all preflight checks for a PyMuPDF profile before a benchmark run.
+
+    Validates profile configuration, key contract, OCR coherence, image
+    persistence guard, required packages, pymupdf4llm.to_markdown API
+    compatibility, Tesseract binary presence, tessdata language files, and
+    visual enrichment prerequisites when enabled.
+
+    Args:
+        profile_name: Name of the profile to validate.
+
+    Returns:
+        Preflight result dict as produced by make_result().
+    """
     checks: list[dict[str, Any]] = []
 
     def _pkg(name: str) -> str | None:
@@ -1073,6 +1178,16 @@ def preflight_profile(
 
 
 def main() -> None:
+    """Run the PyMuPDF v2 benchmark pipeline end-to-end.
+
+    Loads the profile, runs pymupdf4llm.to_markdown with OCR tracking, applies
+    optional visual enrichment, writes all benchmark artifacts, and prints a
+    summary to stdout.
+
+    Raises:
+        SystemExit: If the input file does not exist.
+        RuntimeError: For OCR tracker invariant violations.
+    """
     args = parse_args()
 
     artifact_policy: ArtifactPolicy = (

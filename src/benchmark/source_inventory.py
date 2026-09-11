@@ -1,3 +1,13 @@
+"""Source PDF inventory builder.
+
+``analyze_pdf_source`` opens a PDF with PyMuPDF and measures objective
+properties—native text characters, embedded image occurrences, unique image
+cross-references, and vector drawing groups—without any semantic
+interpretation.  The results are stored in
+``outputs/_source_inventory/<doc_stem>.json`` and are used by the benchmark
+orchestrator to determine whether content output is expected.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,6 +26,16 @@ MB = 1024 * 1024
 def calculate_sha256(
     path: Path,
 ) -> str:
+    """Return the hex-encoded SHA-256 digest of the file at *path*.
+
+    Reads the file in 1 MiB chunks to avoid loading large PDFs into memory.
+
+    Args:
+        path: Path to an existing file.
+
+    Returns:
+        64-character lowercase hex string.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -31,6 +51,14 @@ def calculate_sha256(
 def _meaningful_text(
     text: str,
 ) -> bool:
+    """Return ``True`` when *text* contains at least one alphanumeric character.
+
+    Args:
+        text: Any string.
+
+    Returns:
+        ``True`` when the text is not purely whitespace/punctuation.
+    """
     return any(
         character.isalnum()
         for character in text

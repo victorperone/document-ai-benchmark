@@ -8,6 +8,8 @@ from src.parsers.pymupdf_visual_enrichment import _derived_block, enrich_pages
 
 
 class PyMuPDFVisualDeduplicationTests(unittest.TestCase):
+    """Tests for derived-block deduplication — OCR text already present in the page must not repeat."""
+
     def test_ocr_already_in_page_is_not_repeated(self) -> None:
         block = _derived_block(
             region_id="p1-picture-0-deadbeef",
@@ -37,6 +39,8 @@ class PyMuPDFVisualDeduplicationTests(unittest.TestCase):
 
 
 class PyMuPDFVisualFailurePolicyTests(unittest.TestCase):
+    """Tests for enrich_pages worker failure propagation when failure_fatal=True."""
+
     def test_worker_failure_is_fatal_when_requested(self) -> None:
         worker = SimpleNamespace(process=lambda request: (_ for _ in ()).throw(
             RuntimeError("worker failed")

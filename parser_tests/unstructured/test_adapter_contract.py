@@ -38,6 +38,10 @@ def _make_inventory(pages: int = 2) -> dict:
 
 
 class TestAdapterContract(unittest.TestCase):
+    """End-to-end adapter contract test: verifies that unstructured_v2.main() calls
+    the resource monitor, finalize_artifacts, and metrics writer as expected.
+    """
+
     def _run_main(
         self,
         tmp_path: Path,

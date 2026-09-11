@@ -1,3 +1,11 @@
+"""PaddleOCR / PPStructureV3 benchmark adapter v2.
+
+Wraps PPStructureV3 for the document AI benchmark, collecting per-page Markdown,
+structured OCR metrics, and resource usage data. Supports profile-driven control
+of OCR, table recognition, formula recognition, chart recognition, document
+orientation, text-line orientation, region detection, document unwarping, and
+seal recognition.
+"""
 from __future__ import annotations
 
 import argparse
@@ -116,6 +124,14 @@ MODEL_DIRECTORY_CANDIDATES = {
 def _calculate_sha256(
     path: Path,
 ) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -134,6 +150,22 @@ def _load_cached_inventory(
     input_path: Path,
     output_root: Path,
 ) -> dict[str, Any]:
+    """Load and validate the pre-computed Source Inventory for an input PDF.
+
+    Args:
+        input_path: Path to the input PDF.
+        output_root: Root output directory containing the ``_source_inventory/``
+            subdirectory.
+
+    Returns:
+        Source Inventory dict.
+
+    Raises:
+        FileNotFoundError: If the inventory JSON does not exist.
+        TypeError: If the inventory is not a JSON object.
+        ValueError: If the filename or SHA-256 in the inventory does not match
+            the input file.
+    """
     inventory_path = (
         output_root
         / "_source_inventory"
@@ -191,6 +223,14 @@ def _load_cached_inventory(
 def _package_version(
     package_name: str,
 ) -> str | None:
+    """Return the installed version string of a package, or None if not found.
+
+    Args:
+        package_name: The importlib.metadata package name to query.
+
+    Returns:
+        Version string, or None if the package is not installed.
+    """
     try:
         return metadata.version(
             package_name
@@ -200,6 +240,12 @@ def _package_version(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the PaddleOCR v2 adapter.
+
+    Returns:
+        Parsed namespace including input, output_root, profile, model_root, and
+        the resolved ArtifactPolicy stored as ``artifact_policy``.
+    """
     parser = argparse.ArgumentParser(
         description="PaddleOCR benchmark adapter v2.",
     )
@@ -240,6 +286,18 @@ def parse_args() -> argparse.Namespace:
 def required_model_keys(
     profile: dict[str, Any],
 ) -> set[str]:
+    """Determine which model keys are required for the given profile.
+
+    Always includes layout, text_detection, textline_orientation, and
+    text_recognition. Additional keys are added based on which profile features
+    are enabled.
+
+    Args:
+        profile: Validated PaddleOCR profile dict.
+
+    Returns:
+        Set of model key strings from MODEL_NAMES.
+    """
     # PPStructureV3 may instantiate its text-line orientation
     # component even when use_textline_orientation=False.
     # Always resolving this model locally prevents PaddleX from
@@ -316,6 +374,19 @@ def _resolve_model_path(
     model_root: Path,
     model_name: str,
 ) -> Path:
+    """Resolve the local directory for a model, checking known alternative names.
+
+    For models in MODEL_DIRECTORY_CANDIDATES, tries each candidate directory in
+    order. Returns the first existing directory, or the primary candidate if none
+    exist yet.
+
+    Args:
+        model_root: Root directory containing all local PaddleOCR models.
+        model_name: Official model name (key from MODEL_NAMES values).
+
+    Returns:
+        Resolved Path to the model directory (may not exist).
+    """
     directory_names = MODEL_DIRECTORY_CANDIDATES.get(
         model_name,
         (model_name,),
@@ -337,6 +408,18 @@ def resolve_model_paths(
     model_root: Path,
     profile: dict[str, Any],
 ) -> dict[str, Path]:
+    """Resolve and validate all required local model directories for a profile.
+
+    Args:
+        model_root: Root directory containing all local PaddleOCR models.
+        profile: Validated PaddleOCR profile dict.
+
+    Returns:
+        Dict mapping model key to resolved Path.
+
+    Raises:
+        FileNotFoundError: If any required model directory is missing.
+    """
     required_keys = required_model_keys(
         profile
     )
@@ -375,6 +458,18 @@ def resolve_model_paths(
 def validate_profile(
     profile: dict[str, Any],
 ) -> None:
+    """Validate a PaddleOCR profile dict against the known key and type contract.
+
+    Checks for missing required keys, unknown keys, non-bool values for boolean
+    keys, and configuration invariants (e.g. ocr_enabled must be True,
+    chart_recognition incompatibility with paddle_static).
+
+    Args:
+        profile: Profile dict to validate.
+
+    Raises:
+        ValueError: If any validation errors are found.
+    """
     errors: list[str] = []
 
     expected_keys = set(
@@ -486,6 +581,19 @@ def build_pipeline_init_kwargs(
     model_paths: dict[str, Path],
     profile: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build the keyword arguments for the PPStructureV3 constructor.
+
+    Translates resolved model paths and profile feature flags into the
+    PPStructureV3 __init__ parameter names. Predict-only kwargs (those in
+    _PREDICT_ONLY_KWARGS) are intentionally excluded here.
+
+    Args:
+        model_paths: Dict mapping model keys to resolved local paths.
+        profile: Validated PaddleOCR profile dict.
+
+    Returns:
+        Dict of keyword arguments suitable for PPStructureV3(**kwargs).
+    """
     kwargs: dict[str, Any] = {
         "layout_detection_model_dir": str(
             model_paths["layout"]
@@ -688,6 +796,15 @@ def build_pipeline(
     model_paths: dict[str, Path],
     profile: dict[str, Any],
 ) -> PPStructureV3:
+    """Instantiate a PPStructureV3 pipeline from resolved model paths and profile.
+
+    Args:
+        model_paths: Dict mapping model keys to resolved local paths.
+        profile: Validated PaddleOCR profile dict.
+
+    Returns:
+        Configured PPStructureV3 instance.
+    """
     return PPStructureV3(
         **build_pipeline_init_kwargs(
             model_paths,
@@ -701,6 +818,16 @@ def _result_value(
     key: str,
     default: Any,
 ) -> Any:
+    """Safely retrieve a key from a result object or dict, returning a default.
+
+    Args:
+        result: Object or dict to query.
+        key: Key or attribute name to retrieve.
+        default: Value to return if the key is missing or the value is None.
+
+    Returns:
+        The retrieved value, or default if absent or None.
+    """
     try:
         value = result[key]
     except (
@@ -776,6 +903,21 @@ def build_paddleocr_page_contract(
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
+    """Convert a list of PPStructureV3 per-page results into benchmark artifacts.
+
+    Args:
+        results: List of per-page result objects returned by PPStructureV3.
+
+    Returns:
+        A three-tuple of:
+        - page_texts: Markdown text for each page.
+        - parser_page_elements: Per-page summary counts (items, OCR texts,
+          tables, formulas).
+        - parser_native_pages: Per-page serialised native result dicts.
+
+    Raises:
+        TypeError: If page_index is not int or markdown_texts is not str.
+    """
     page_texts: list[str] = []
 
     parser_page_elements: list[
@@ -998,6 +1140,14 @@ def persist_official_markdown_bundle(
 def enabled_text(
     value: bool,
 ) -> str:
+    """Return ``"enabled"`` or ``"disabled"`` for use in console output.
+
+    Args:
+        value: Boolean feature flag.
+
+    Returns:
+        ``"enabled"`` when True, ``"disabled"`` when False.
+    """
     return (
         "enabled"
         if value
@@ -1009,6 +1159,19 @@ def preflight_profile(
     *,
     model_root_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Run all preflight checks for a PaddleOCR profile before a benchmark run.
+
+    Validates profile configuration, profile contract, model root existence,
+    required model directories, and PPStructureV3 API compatibility.
+
+    Args:
+        profile_name: Name of the profile to validate.
+        model_root_override: If provided, use this path instead of
+            DEFAULT_MODEL_ROOT when checking model directories.
+
+    Returns:
+        Preflight result dict as produced by make_result().
+    """
     checks: list[dict[str, Any]] = []
 
     # --------------------------------------------------
@@ -1254,6 +1417,16 @@ def preflight_profile(
 
 
 def main() -> None:
+    """Run the PaddleOCR v2 benchmark pipeline end-to-end.
+
+    Loads the profile, resolves model paths, runs PPStructureV3 via
+    predict_iter, aggregates per-page results, writes benchmark artifacts,
+    and prints a summary to stdout.
+
+    Raises:
+        SystemExit: If the input file does not exist.
+        RuntimeError: For PPStructureV3 API or result integrity errors.
+    """
     args = parse_args()
 
     input_path = args.input.resolve()

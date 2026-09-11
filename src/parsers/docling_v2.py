@@ -1,3 +1,11 @@
+"""Docling benchmark adapter v2.
+
+Wraps Docling with full profile-driven configuration: OCR modes (disabled,
+auto, forced), table structure (fast/accurate/disabled), picture classification,
+SmolVLM picture description, RapidOCR, device selection, and multiple model
+artifact validation checks. Integrates with the v2 benchmark artifact pipeline
+to write clean Markdown, JSONL, and metrics.json outputs.
+"""
 from __future__ import annotations
 
 import argparse
@@ -104,6 +112,16 @@ FULL_CPU_LOCAL_REQUIRED_CAPABILITIES = (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate command-line arguments for the Docling v2 adapter.
+
+    Returns:
+        Parsed argument namespace. The ``artifact_policy`` attribute is
+        populated from ``--artifacts`` via ``ArtifactPolicy.from_cli``.
+
+    Raises:
+        SystemExit: If required arguments are missing or ``--artifacts``
+            contains an invalid selection.
+    """
     parser = argparse.ArgumentParser(
         description="Docling benchmark adapter v2.",
     )
@@ -162,6 +180,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def _package_version(name: str) -> str | None:
+    """Return the installed version string for a package, or None if not found.
+
+    Args:
+        name: PyPI distribution name to look up.
+
+    Returns:
+        Version string, or None when the package is not installed.
+    """
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -170,6 +196,18 @@ def _package_version(name: str) -> str | None:
 def _validate_granite_chart_v4_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
+    """Check that the Granite Vision V4 chart-extraction model directory is complete.
+
+    Verifies presence of the model directory, required config files, and all
+    shards declared in the safetensors index.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when all checks pass;
+        ``detail`` is a human-readable status message.
+    """
     model_dir = (
         artifacts_path
         / GRANITE_CHART_V4_ARTIFACT_DIRECTORY
@@ -213,6 +251,20 @@ def _validate_sharded_safetensors(
     model_dir: Path,
     index_path: Path,
 ) -> tuple[bool, str]:
+    """Validate a sharded safetensors model by checking its index and shard files.
+
+    Parses the ``model.safetensors.index.json``, collects all unique shard
+    filenames from its ``weight_map``, and verifies that each shard exists
+    and is non-empty in ``model_dir``.
+
+    Args:
+        model_dir: Directory expected to contain the shard files.
+        index_path: Path to the ``model.safetensors.index.json`` file.
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when all shards are present
+        and non-empty; ``detail`` describes the result or the first failure.
+    """
     try:
         index_data = json.loads(
             index_path.read_text(encoding="utf-8")
@@ -272,6 +324,18 @@ def _validate_sharded_safetensors(
 def _validate_model_weights(
     model_dir: Path,
 ) -> tuple[bool, str]:
+    """Check that a model directory contains valid safetensors weight files.
+
+    Supports both sharded models (``model.safetensors.index.json`` +
+    individual shards) and single-file models (``model.safetensors``).
+
+    Args:
+        model_dir: Directory expected to contain the weight file(s).
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when weights exist and pass
+        validation; ``detail`` describes the result or failure.
+    """
     index_path = model_dir / "model.safetensors.index.json"
     single_path = model_dir / "model.safetensors"
 
@@ -302,6 +366,14 @@ def _validate_model_weights(
 def _validate_smolvlm_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
+    """Check that the SmolVLM picture-description model artifacts are complete.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+
+    Returns:
+        A ``(ok, detail)`` tuple from the underlying weight validation.
+    """
     model_dir = (
         artifacts_path / SMOLVLM_ARTIFACT_DIRECTORY
     )
@@ -325,6 +397,14 @@ def _validate_smolvlm_artifacts(
 def _validate_code_formula_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
+    """Check that the CodeFormulaV2 enrichment model artifacts are complete.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+
+    Returns:
+        A ``(ok, detail)`` tuple from the underlying weight validation.
+    """
     model_dir = (
         artifacts_path / CODE_FORMULA_ARTIFACT_DIRECTORY
     )
@@ -344,6 +424,19 @@ def _validate_code_formula_artifacts(
 def _validate_picture_classifier_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
+    """Check that the Docling picture-classifier model artifacts are complete.
+
+    Resolves the expected artifact directory via Docling's
+    ``DocumentPictureClassifierOptions`` (falling back to a constant when the
+    import fails) then delegates to ``_validate_model_weights``.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when the model directory and
+        weight files are present and valid.
+    """
     try:
         from docling.datamodel.pipeline_options import (  # type: ignore
             DocumentPictureClassifierOptions,
@@ -384,6 +477,20 @@ def _validate_tableformer_artifacts(
     artifacts_path: Path,
     mode: str = "accurate",
 ) -> tuple[bool, str]:
+    """Check that TableFormer model weights are present for the given accuracy mode.
+
+    Validates the repository directory, the ``model_artifacts/tableformer/<mode>``
+    sub-directory, ``tm_config.json``, and at least one non-empty ``.safetensors``
+    weight file.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+        mode: TableFormer mode to validate, either ``"accurate"`` or ``"fast"``.
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when all expected files exist
+        and are non-empty.
+    """
     repo_dir = (
         artifacts_path / TABLEFORMER_ARTIFACT_DIRECTORY
     )
@@ -444,6 +551,21 @@ def _validate_rapidocr_artifacts(
     backend: str = "torch",
     lang: str = "pt",
 ) -> tuple[bool, str]:
+    """Check that RapidOCR model artifacts are present for a backend/language combination.
+
+    Uses Docling's internal ``_rapidocr_artifacts`` helper to resolve the
+    expected file paths for the detection, classification, and recognition
+    roles, then verifies each file exists and is non-empty.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+        backend: RapidOCR backend identifier (e.g. ``"torch"``).
+        lang: Language token (e.g. ``"pt"``).
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when all required artifact
+        files exist and are non-empty.
+    """
     try:
         from docling.models.stages.ocr.rapid_ocr_model import (  # type: ignore
             RapidOcrModel,
@@ -518,6 +640,16 @@ def _validate_rapidocr_artifacts(
 def _validate_layout_artifacts(
     artifacts_path: Path,
 ) -> tuple[bool, str]:
+    """Check that the Docling layout-detection model artifacts are present.
+
+    This model is always required for the Docling PDF pipeline.
+
+    Args:
+        artifacts_path: Root directory containing Docling model artifacts.
+
+    Returns:
+        A ``(ok, detail)`` tuple from the underlying weight validation.
+    """
     model_dir = (
         artifacts_path / LAYOUT_ARTIFACT_DIRECTORY
     )
@@ -539,6 +671,14 @@ def _validate_layout_artifacts(
 
 
 def sha256_file(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file using 1 MiB streaming chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -547,6 +687,19 @@ def sha256_file(path: Path) -> str:
 
 
 def tree_digest(root: Path) -> tuple[str, int]:
+    """Compute a deterministic SHA-256 digest over all relevant files under a directory tree.
+
+    Files in ``.cache``, ``_hf_runtime``, ``xet``, and ``__pycache__`` directories
+    are excluded, as are ``.pyc``, ``.pyo``, ``.lock``, and ``.tmp`` files. The
+    digest is computed over sorted relative paths paired with their SHA-256 hashes.
+
+    Args:
+        root: Root directory to walk.
+
+    Returns:
+        A ``(digest, count)`` tuple: the hex SHA-256 over the file manifest
+        and the number of files included.
+    """
     digest = hashlib.sha256()
     count = 0
     excluded_parts = {".cache", "_hf_runtime", "xet", "__pycache__"}
@@ -572,6 +725,21 @@ def validate_manifest(
     manifest_path: Path,
     model_root: Path,
 ) -> tuple[bool, str]:
+    """Validate a Docling model manifest against installed artifacts.
+
+    Checks schema version, parser name, docling package version, profile name,
+    offline-validation flags, and per-capability directory tree digests. Only
+    the ``"full_cpu_local"`` profile is supported.
+
+    Args:
+        manifest_path: Path to the ``docling_models_manifest.json`` file.
+        model_root: Root directory of the Docling model artifacts to verify
+            against the manifest's recorded tree digests.
+
+    Returns:
+        A ``(ok, detail)`` tuple. ``ok`` is True when all manifest checks pass;
+        ``detail`` is a human-readable status message.
+    """
     if not manifest_path.is_file():
         return False, f"manifest not found: {manifest_path}"
 
@@ -662,6 +830,17 @@ def validate_manifest(
 
 
 def _normalize_device(value: str) -> AcceleratorDevice:
+    """Map a device string to a Docling ``AcceleratorDevice`` enum value.
+
+    Args:
+        value: One of ``"cpu"``, ``"cuda"``, or ``"auto"``.
+
+    Returns:
+        The corresponding ``AcceleratorDevice`` member.
+
+    Raises:
+        BenchmarkConfigurationError: If ``value`` is not a supported device.
+    """
     if value == "cpu":
         return AcceleratorDevice.CPU
     if value == "cuda":
@@ -674,6 +853,15 @@ def _normalize_device(value: str) -> AcceleratorDevice:
 
 
 def _effective_device(requested: str) -> str:
+    """Resolve the runtime device string, treating ``"auto"`` via CUDA availability.
+
+    Args:
+        requested: Requested device — ``"cpu"``, ``"cuda"``, or ``"auto"``.
+
+    Returns:
+        ``"cuda"`` if CUDA is available and the request is not ``"cpu"``,
+        otherwise ``"cpu"``.
+    """
     if requested == "cpu":
         return "cpu"
     if requested == "cuda":
@@ -682,6 +870,21 @@ def _effective_device(requested: str) -> str:
 
 
 def _resolve_ocr_mode(value: str) -> OcrMode:
+    """Map an OCR-mode string from a profile to a Docling ``OcrMode`` enum value.
+
+    Accepted aliases: ``"auto"`` / ``"pdf_aware_layout_regions"`` →
+    ``PDF_AWARE_LAYOUT_REGIONS``; ``"layout_regions"`` → ``LAYOUT_REGIONS``;
+    ``"forced"`` / ``"full_page"`` → ``FULL_PAGE``.
+
+    Args:
+        value: OCR mode identifier from the profile.
+
+    Returns:
+        Corresponding ``OcrMode`` enum member.
+
+    Raises:
+        BenchmarkConfigurationError: If ``value`` is not a recognised alias.
+    """
     mapping = {
         "auto": OcrMode.PDF_AWARE_LAYOUT_REGIONS,
         "pdf_aware_layout_regions": OcrMode.PDF_AWARE_LAYOUT_REGIONS,
@@ -698,6 +901,17 @@ def _resolve_ocr_mode(value: str) -> OcrMode:
 
 
 def _resolve_table_mode(value: str) -> TableFormerMode:
+    """Map a table-mode string from a profile to a Docling ``TableFormerMode`` enum value.
+
+    Args:
+        value: Either ``"accurate"`` or ``"fast"``.
+
+    Returns:
+        Corresponding ``TableFormerMode`` enum member.
+
+    Raises:
+        BenchmarkConfigurationError: If ``value`` is not recognised.
+    """
     mapping = {
         "accurate": TableFormerMode.ACCURATE,
         "fast": TableFormerMode.FAST,
@@ -711,10 +925,31 @@ def _resolve_table_mode(value: str) -> TableFormerMode:
 
 
 def _enum_value(value: Any) -> Any:
+    """Return ``value.value`` if the object is an enum, otherwise return ``value`` unchanged.
+
+    Args:
+        value: Any object, typically a Docling enum member.
+
+    Returns:
+        The primitive enum value, or the original object when it has no
+        ``.value`` attribute.
+    """
     return getattr(value, "value", value)
 
 
 def _cref_value(value: Any) -> str | None:
+    """Extract the ``cref`` string from a Docling reference object, or coerce to str.
+
+    Docling items expose self-references via a ``.cref`` attribute.
+    This helper normalises any reference-like object to a plain string.
+
+    Args:
+        value: A Docling reference object, a plain string, or None.
+
+    Returns:
+        The ``.cref`` string when available, ``str(value)`` otherwise, or None
+        when ``value`` is None.
+    """
     if value is None:
         return None
 
@@ -726,6 +961,18 @@ def _cref_value(value: Any) -> str | None:
 
 
 def _bbox_to_dict(bbox: Any) -> dict[str, Any] | None:
+    """Convert a Docling bbox object to a plain dictionary.
+
+    Extracts ``l``, ``t``, ``r``, ``b`` float coordinates and the
+    ``coord_origin`` string (if present) from the bbox object.
+
+    Args:
+        bbox: Docling bbox object with numeric coordinate attributes, or None.
+
+    Returns:
+        A dict with the available coordinate fields, or None when the bbox
+        is None or yields no recognised attributes.
+    """
     if bbox is None:
         return None
 
@@ -749,6 +996,24 @@ def _serialize_item_for_page(
     level: int,
     page_number: int,
 ) -> dict[str, Any]:
+    """Serialize a Docling document item as a JSON-safe dict for a specific page.
+
+    Filters item provenance to only the entries matching ``page_number``.
+    For ``PictureItem`` objects, also serialises picture classification and
+    description metadata when present.
+
+    Args:
+        item: A Docling document item (any subclass of ``DocItem``).
+        level: Hierarchy level returned by ``document.iterate_items()``.
+        page_number: The 1-based page number to filter provenance entries.
+
+    Returns:
+        A dict suitable for inclusion in ``native_pages[n]["items"]``.
+
+    Raises:
+        TypeError: If picture classification or description metadata does not
+            expose ``model_dump()`` (unknown schema guard).
+    """
     label = _enum_value(
         getattr(item, "label", None)
     )
@@ -861,6 +1126,14 @@ def _serialize_item_for_page(
 def _new_page_summary(
     page_number: int,
 ) -> dict[str, Any]:
+    """Create a blank per-page layout summary dict with all counters set to zero.
+
+    Args:
+        page_number: 1-based page number to embed in the summary.
+
+    Returns:
+        A dict with ``page_number`` and zeroed element-count fields.
+    """
     return {
         "page_number": page_number,
         "layout_boxes": 0,
@@ -882,6 +1155,17 @@ def _new_page_summary(
 def _summary_from_counts(
     counts: Counter[str],
 ) -> dict[str, Any]:
+    """Build a layout-summary dict from a label-count Counter.
+
+    Maps Docling label names (``"title"``, ``"table"``, etc.) to the
+    benchmark's standard element-count fields.
+
+    Args:
+        counts: Counter mapping Docling label strings to occurrence counts.
+
+    Returns:
+        A dict suitable for merging into a ``_new_page_summary`` dict.
+    """
     return {
         "layout_boxes": sum(counts.values()),
         "tables_detected": counts["table"],
@@ -1083,6 +1367,34 @@ def build_docling_page_contract(
     list[str] | None,
     list[list[dict[str, Any]]],
 ]:
+    """Extract all per-page and document-level data from a Docling conversion result.
+
+    Iterates the Docling ``document`` object to produce the standard benchmark
+    output contract:
+
+    - Per-page Markdown text (via ``export_to_markdown(page_no=...)``)
+    - Per-page layout-element summary dicts
+    - Per-page native item lists (serialised via ``_serialize_item_for_page``)
+    - Document-level label-count summary
+    - Set of page numbers observed during iteration
+    - Optional enriched page Markdown with picture description/classification blocks
+    - Per-page derived content lists
+
+    Args:
+        document: Docling ``ConversionResult.document`` object.
+        page_count: Expected number of pages (from the Source Inventory).
+        effective_prompt: Prompt text used for picture descriptions. When
+            non-empty, picture description and classification blocks are
+            appended to the page texts and collected in derived content.
+
+    Returns:
+        A 7-tuple: ``(page_texts, parser_page_elements, native_pages,
+        parser_summary, observed_pages, enriched_page_markdown,
+        derived_content_by_page)``.
+
+    Raises:
+        RuntimeError: If Docling raises an error exporting a page to Markdown.
+    """
     page_texts: list[str] = []
     native_pages: list[dict[str, Any]] = [
         {
@@ -1286,6 +1598,16 @@ def count_log_lines(
     path: Path,
     word: str,
 ) -> int:
+    """Count lines in a log file that contain a given word (case-insensitive).
+
+    Args:
+        path: Path to the log file. Returns 0 immediately if the file does
+            not exist.
+        word: Substring to search for on each line.
+
+    Returns:
+        Number of lines containing ``word`` (case-insensitive comparison).
+    """
     if not path.is_file():
         return 0
 
@@ -1306,6 +1628,31 @@ def _resolve_profile_runtime(
     threads_override: int | None = None,
     model_artifacts_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Resolve and enrich a Docling profile dict with runtime-specific values.
+
+    Applies CLI overrides for device, thread count, and model artifacts path,
+    then resolves the effective thread count via ``resolve_parallelism``.
+
+    Args:
+        profile: Raw profile dict loaded from YAML/JSON via ``get_profile``.
+        device_override: Optional CLI device override (``"cpu"``, ``"cuda"``,
+            or ``"auto"``). Falls back to the profile's ``accelerator_device``.
+        threads_override: Optional CLI thread count. Falls back to the
+            profile's ``threads`` key (default 2).
+        model_artifacts_override: Optional CLI path to Docling model artifacts.
+            Falls back to the profile's ``model_artifacts_path`` or
+            ``DEFAULT_MODEL_ARTIFACTS``.
+
+    Returns:
+        A new dict with the original profile keys plus:
+        ``accelerator_device``, ``threads_configured``,
+        ``available_logical_cpus``, ``threads``, ``parallelism_source``,
+        ``model_artifacts_path``.
+
+    Raises:
+        BenchmarkConfigurationError: If the thread count is zero or negative,
+            or if ``resolve_parallelism`` raises a ``ValueError``.
+    """
     resolved = dict(profile)
 
     requested_device = (
@@ -1382,6 +1729,19 @@ def _resolve_picture_area_threshold(
     profile: dict[str, Any],
     default: float,
 ) -> float:
+    """Read and validate the ``picture_area_threshold`` from a profile dict.
+
+    Args:
+        profile: Resolved profile dict.
+        default: Fallback value when the key is absent.
+
+    Returns:
+        Validated threshold in the range ``[0.0, 1.0]``.
+
+    Raises:
+        BenchmarkConfigurationError: If the value is not numeric or is outside
+            ``[0.0, 1.0]``.
+    """
     raw_threshold = profile.get(
         "picture_area_threshold",
         default,
@@ -1409,6 +1769,22 @@ def _configure_picture_description(
     options: PdfPipelineOptions,
     profile: dict[str, Any],
 ) -> None:
+    """Configure SmolVLM picture-description settings on a ``PdfPipelineOptions`` object.
+
+    No-ops when ``options.do_picture_description`` is False. When enabled,
+    reads ``picture_description_preset`` (must be ``"smolvlm"``),
+    ``picture_description_prompt``, and ``picture_area_threshold`` from the
+    profile and applies them to a deep copy of the global
+    ``smolvlm_picture_description`` preset object.
+
+    Args:
+        options: ``PdfPipelineOptions`` instance to mutate in place.
+        profile: Resolved profile dict.
+
+    Raises:
+        BenchmarkConfigurationError: If the preset is not ``"smolvlm"``, the
+            prompt is empty, or the area threshold is invalid.
+    """
     if not options.do_picture_description:
         return
 
@@ -1467,6 +1843,26 @@ def _configure_picture_description(
 def _build_pipeline_options(
     profile: dict[str, Any],
 ) -> PdfPipelineOptions:
+    """Build a fully-configured ``PdfPipelineOptions`` object from a resolved profile.
+
+    Validates all required model artifact directories before constructing the
+    options object. Supports OCR (RapidOCR), table structure (TableFormer),
+    picture description (SmolVLM), picture classification, code/formula
+    enrichment, chart extraction (Granite Vision V4), heading hierarchy, and
+    the experimental TableFormer V2 engine.
+
+    Args:
+        profile: Resolved profile dict (output of ``_resolve_profile_runtime``).
+
+    Returns:
+        Configured ``PdfPipelineOptions`` ready to pass to
+        ``DocumentConverter``.
+
+    Raises:
+        BenchmarkConfigurationError: If any required model artifacts are
+            missing or if profile settings are invalid (e.g. unsupported OCR
+            engine, missing optional Docling classes).
+    """
     model_artifacts_path = Path(
         profile["model_artifacts_path"]
     )
@@ -1827,6 +2223,22 @@ def preflight_profile(
     *,
     model_artifacts_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Run preflight checks for a Docling profile and return a structured result.
+
+    Validates profile configuration, runtime resolution, thread count,
+    accelerator device, model artifact directories, OCR settings, table
+    settings, optional enrichment features, CUDA availability, and (for
+    ``"full_cpu_local"``) the certified model manifest.
+
+    Args:
+        profile_name: Name of the Docling profile to validate.
+        model_artifacts_override: Optional path to override the profile's
+            ``model_artifacts_path`` for local testing.
+
+    Returns:
+        A structured preflight result dict (see ``make_result``) with a list
+        of per-check pass/fail entries.
+    """
     checks: list[dict[str, Any]] = []
 
     # --------------------------------------------------
@@ -2357,6 +2769,12 @@ def preflight_profile(
 
 
 def main() -> None:
+    """Entry point for the Docling v2 benchmark adapter.
+
+    Parses arguments, loads the profile, resolves runtime settings,
+    runs Docling conversion with resource monitoring, builds the output
+    contract, and writes benchmark artifacts to the output directory.
+    """
     args = parse_args()
 
     artifact_policy: ArtifactPolicy = (

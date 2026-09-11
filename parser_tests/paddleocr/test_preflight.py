@@ -48,6 +48,8 @@ class _PreflightHelper(unittest.TestCase):
 
 
 class TestPreflightModelRoot(_PreflightHelper):
+    """Tests for the model-root directory check in paddleocr_v2.preflight_profile."""
+
     def test_model_root_exists_passes(self):
         result = self._run_preflight("default")
         check = self._find_check(result, "model root")
@@ -65,6 +67,8 @@ class TestPreflightModelRoot(_PreflightHelper):
 
 
 class TestPreflightProfileContract(_PreflightHelper):
+    """Tests for the profile-contract validation check in paddleocr_v2.preflight_profile."""
+
     def test_profile_contract_passes_for_default(self):
         result = self._run_preflight("default")
         check = self._find_check(result, "profile contract")
@@ -85,6 +89,8 @@ class TestPreflightProfileContract(_PreflightHelper):
 
 
 class TestPreflightSealRecognition(_PreflightHelper):
+    """Tests that seal recognition requires both seal-detection and seal-recognition models."""
+
     def test_seal_recognition_requires_two_seal_models(self):
         profile = get_profile(PARSER_NAME, "full_cpu_local")
         self.assertTrue(profile["seal_recognition"])
@@ -98,6 +104,8 @@ class TestPreflightSealRecognition(_PreflightHelper):
 
 
 class TestPreflightModelSelection(_PreflightHelper):
+    """Tests for model-selection logic — optional models added only when the profile enables them."""
+
     def test_model_selection_check_present(self):
         result = self._run_preflight("default")
         check = self._find_check(result, "model selection")

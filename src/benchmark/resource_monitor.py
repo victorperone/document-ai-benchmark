@@ -1,3 +1,11 @@
+"""Background resource monitor for process-tree CPU and memory usage.
+
+``ResourceMonitor`` spawns a daemon thread that samples the current process
+and all its descendants at a fixed interval.  When stopped it returns a
+summary dict with wall time, CPU seconds, peak/average RSS, and disk I/O
+totals suitable for embedding in ``metrics.json``.
+"""
+
 from __future__ import annotations
 
 import os
@@ -16,11 +24,35 @@ MB = 1024 * 1024
 
 
 def bytes_to_mb(value: int | float) -> float:
+    """Convert *value* bytes to megabytes (1 MiB = 1 048 576 bytes).
+
+    Args:
+        value: Byte count.
+
+    Returns:
+        Equivalent value in megabytes.
+    """
     return value / MB
 
 
 @dataclass
 class _ProcessState:
+    """Per-process tracking state used internally by ``ResourceMonitor``.
+
+    Attributes:
+        process: Live ``psutil.Process`` handle.
+        baseline_cpu_seconds: CPU time recorded when the process was first
+            registered.  Used to compute only the activity during the
+            monitored window.
+        last_cpu_seconds: Most recent CPU time reading.
+        baseline_read_bytes: Disk read bytes at registration time.
+        last_read_bytes: Most recent disk read bytes.
+        baseline_write_bytes: Disk write bytes at registration time.
+        last_write_bytes: Most recent disk write bytes.
+        primed: ``True`` after the first ``cpu_percent(interval=None)``
+            call, which is a required warm-up step for accurate readings.
+    """
+
     process: psutil.Process
     baseline_cpu_seconds: float
     last_cpu_seconds: float
@@ -77,6 +109,7 @@ class ResourceMonitor:
     def _cpu_seconds(
         process: psutil.Process,
     ) -> float:
+        """Return total CPU time (user + system) for *process* in seconds."""
         times = process.cpu_times()
 
         return float(
@@ -87,6 +120,7 @@ class ResourceMonitor:
     def _io_bytes(
         process: psutil.Process,
     ) -> tuple[int, int]:
+        """Return ``(read_bytes, write_bytes)`` for *process*, or ``(0, 0)`` on error."""
         try:
             counters = process.io_counters()
 
@@ -107,6 +141,7 @@ class ResourceMonitor:
     def _process_key(
         process: psutil.Process,
     ) -> tuple[int, float]:
+        """Return a unique, stable key for *process* using PID and creation time."""
         return (
             process.pid,
             process.create_time(),
@@ -118,6 +153,18 @@ class ResourceMonitor:
         *,
         existed_at_start: bool,
     ) -> None:
+        """Register *process* in the tracking table if not already present.
+
+        When *existed_at_start* is ``True``, the current resource counters are
+        used as baselines so only activity after monitoring began is counted.
+        A process discovered later gets a zero baseline because its entire
+        lifetime belongs to the monitored operation.
+
+        Args:
+            process: psutil process handle to register.
+            existed_at_start: Whether the process was alive when
+                ``start()`` was called.
+        """
         try:
             key = self._process_key(
                 process
@@ -172,6 +219,13 @@ class ResourceMonitor:
         *,
         initial: bool = False,
     ) -> None:
+        """Walk the process tree and register any newly spawned descendants.
+
+        Args:
+            initial: When ``True`` all found processes are treated as having
+                existed at monitor start (their baseline is set to their
+                current resource usage).
+        """
         discovered = [
             self.root_process
         ]
@@ -206,6 +260,7 @@ class ResourceMonitor:
                 )
 
     def _sample(self) -> None:
+        """Take one resource sample across all tracked processes."""
         self._discover_processes(
             initial=False
         )
@@ -267,12 +322,22 @@ class ResourceMonitor:
         )
 
     def _run(self) -> None:
+        """Daemon thread body: sample until ``stop_event`` is set."""
         while not self.stop_event.wait(
             self.interval
         ):
             self._sample()
 
     def start(self) -> None:
+        """Start background sampling.
+
+        Discovers the initial process tree, primes CPU counters, and launches
+        the sampling daemon thread.
+
+        Raises:
+            RuntimeError: If ``start`` has already been called on this
+                instance.
+        """
         if self.started:
             raise RuntimeError(
                 "ResourceMonitor already started."
@@ -309,6 +374,23 @@ class ResourceMonitor:
         self.thread.start()
 
     def stop(self) -> dict[str, object]:
+        """Stop background sampling and return the aggregated resource summary.
+
+        Takes a final sample before aggregating, so the stop instant is
+        captured accurately.
+
+        Returns:
+            Dict with keys ``monitor_version``, ``sampling_interval_seconds``,
+            ``logical_cpus``, ``processes_observed``, ``wall_time_seconds``,
+            ``process_cpu_time_seconds``, ``average_cpu_percent``,
+            ``peak_cpu_percent``,
+            ``average_cpu_system_capacity_percent``,
+            ``peak_cpu_system_capacity_percent``, ``average_rss_mb``,
+            ``peak_rss_mb``, ``disk_read_mb``, and ``disk_write_mb``.
+
+        Raises:
+            RuntimeError: If ``start`` has not been called.
+        """
         if not self.started:
             raise RuntimeError(
                 "ResourceMonitor was not started."

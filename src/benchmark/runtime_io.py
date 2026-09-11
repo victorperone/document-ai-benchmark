@@ -72,6 +72,14 @@ class _TeeStream:
         self,
         data: str,
     ) -> int:
+        """Write *data* to both streams and return the primary byte count.
+
+        Args:
+            data: Text string to write.
+
+        Returns:
+            Number of characters written to the primary stream.
+        """
         primary_result = (
             self.primary.write(
                 data
@@ -94,12 +102,14 @@ class _TeeStream:
     def flush(
         self,
     ) -> None:
+        """Flush both the primary and secondary streams."""
         self.primary.flush()
         self.secondary.flush()
 
     def isatty(
         self,
     ) -> bool:
+        """Return whether the primary stream is connected to a terminal."""
         try:
             return bool(
                 self.primary.isatty()
@@ -111,6 +121,7 @@ class _TeeStream:
     def encoding(
         self,
     ) -> str | None:
+        """Return the encoding of the primary stream, or ``None``."""
         return getattr(
             self.primary,
             "encoding",

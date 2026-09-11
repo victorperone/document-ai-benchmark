@@ -1,3 +1,9 @@
+"""Baseline (v1) Docling parser adapter for the document AI benchmark.
+
+Runs Docling with CPU inference, accurate TableFormer mode, and no OCR.
+Writes per-page Markdown, a JSONL record per page, and a metrics.json file.
+Uses ResourceMonitor to track CPU and RAM usage during the full pipeline run.
+"""
 from __future__ import annotations
 
 import argparse
@@ -38,6 +44,11 @@ MONITOR_INTERVAL_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the Docling baseline adapter.
+
+    Returns:
+        Parsed namespace with input, output_dir, device, and threads attributes.
+    """
     parser = argparse.ArgumentParser(
         description="Docling baseline parser for the document AI benchmark."
     )
@@ -61,10 +72,26 @@ def parse_args() -> argparse.Namespace:
 
 
 def bytes_to_mb(value: int | float) -> float:
+    """Convert a byte count to megabytes, rounded to three decimal places.
+
+    Args:
+        value: Size in bytes.
+
+    Returns:
+        Size in megabytes.
+    """
     return round(value / (1024 * 1024), 3)
 
 
 def calculate_sha256(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -75,6 +102,14 @@ def calculate_sha256(path: Path) -> str:
 
 
 def normalize_device(device: str) -> AcceleratorDevice:
+    """Map a device string to the corresponding Docling AcceleratorDevice enum.
+
+    Args:
+        device: One of ``"cpu"``, ``"cuda"``, or ``"auto"``.
+
+    Returns:
+        The matching AcceleratorDevice constant; AUTO for any unrecognised value.
+    """
     if device == "cpu":
         return AcceleratorDevice.CPU
 
@@ -85,6 +120,15 @@ def normalize_device(device: str) -> AcceleratorDevice:
 
 
 def effective_device(requested: str) -> str:
+    """Resolve the effective compute device, checking CUDA availability for ``"auto"``.
+
+    Args:
+        requested: One of ``"cpu"``, ``"cuda"``, or ``"auto"``.
+
+    Returns:
+        ``"cuda"`` when CUDA is available and requested is not ``"cpu"``; otherwise
+        ``"cpu"``.
+    """
     if requested == "cpu":
         return "cpu"
 
@@ -95,10 +139,23 @@ def effective_device(requested: str) -> str:
 
 
 class ResourceMonitor:
+    """Background thread that samples CPU and RSS memory usage at a fixed interval.
+
+    Samples are accumulated via psutil and span the entire process tree (the
+    benchmark process plus any child processes spawned by the parser library).
+    Call ``start()`` before the timed section and ``stop()`` after to obtain the
+    aggregate resource metrics dict.
+    """
+
     def __init__(
         self,
         interval: float = MONITOR_INTERVAL_SECONDS,
     ) -> None:
+        """Initialise the monitor.
+
+        Args:
+            interval: Sampling interval in seconds.
+        """
         self.interval = interval
         self.process = psutil.Process(os.getpid())
         self.logical_cpus = psutil.cpu_count(logical=True) or 1
@@ -110,6 +167,12 @@ class ResourceMonitor:
         self.thread: threading.Thread | None = None
 
     def _process_tree(self) -> list[psutil.Process]:
+        """Return the current process and all its recursive children.
+
+        Returns:
+            List of psutil.Process objects; inaccessible children are silently
+            omitted.
+        """
         processes = [self.process]
 
         try:
@@ -125,6 +188,11 @@ class ResourceMonitor:
         return processes
 
     def _prime_cpu_counters(self) -> None:
+        """Warm up psutil CPU counters so the first real sample is meaningful.
+
+        psutil requires an initial call with ``interval=None`` before subsequent
+        calls return a valid percentage.
+        """
         for process in self._process_tree():
             try:
                 process.cpu_percent(interval=None)
@@ -135,6 +203,11 @@ class ResourceMonitor:
                 pass
 
     def _sample(self) -> None:
+        """Take one CPU and RSS snapshot across the entire process tree.
+
+        Appends the aggregated values to ``self.cpu_samples`` and
+        ``self.memory_samples``.
+        """
         cpu_percent = 0.0
         rss_bytes = 0
 
@@ -154,10 +227,12 @@ class ResourceMonitor:
         self.memory_samples.append(rss_bytes)
 
     def _run(self) -> None:
+        """Background thread target: sample repeatedly until stop_event is set."""
         while not self.stop_event.wait(self.interval):
             self._sample()
 
     def start(self) -> None:
+        """Prime CPU counters and start the background sampling thread."""
         self._prime_cpu_counters()
 
         self.thread = threading.Thread(
@@ -168,6 +243,12 @@ class ResourceMonitor:
         self.thread.start()
 
     def stop(self) -> dict[str, float]:
+        """Stop the sampling thread, take a final sample, and return metrics.
+
+        Returns:
+            Dict with average and peak CPU percentages (both raw and as a fraction
+            of total system capacity) and peak RSS in MB.
+        """
         self.stop_event.set()
 
         if self.thread is not None:
@@ -221,6 +302,14 @@ class ResourceMonitor:
 
 
 def count_page_items(page_document) -> dict[str, int]:
+    """Count document elements by label for a single-page Docling document.
+
+    Args:
+        page_document: A Docling DoclingDocument filtered to one page.
+
+    Returns:
+        Dict mapping element label strings to occurrence counts, sorted by key.
+    """
     counts: Counter[str] = Counter()
 
     for item, _level in page_document.iterate_items():
@@ -237,6 +326,11 @@ def count_page_items(page_document) -> dict[str, int]:
 
 
 def main() -> int:
+    """Run the Docling baseline pipeline and write Markdown, JSONL, and metrics outputs.
+
+    Returns:
+        0 on success, 1 if the input file does not exist.
+    """
     args = parse_args()
 
     input_path = Path(args.input)

@@ -16,6 +16,8 @@ _ALL_PROFILES = [
 
 
 class TestProfilesExist(unittest.TestCase):
+    """Verifies that all MinerU profiles are loadable and expose a valid method key."""
+
     def test_all_profiles_loadable(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):
@@ -40,6 +42,8 @@ class TestProfilesExist(unittest.TestCase):
 
 
 class TestFullCpuLocalProfile(unittest.TestCase):
+    """Spot-checks specific configuration values for the full_cpu_local MinerU profile."""
+
     def _p(self):
         return get_profile(PARSER_NAME, "full_cpu_local")
 
@@ -65,6 +69,8 @@ class TestFullCpuLocalProfile(unittest.TestCase):
 
 
 class TestNoGpuProfiles(unittest.TestCase):
+    """Verifies that no MinerU profile enables GPU acceleration (CPU-only constraint)."""
+
     def test_no_profile_sets_gpu(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):

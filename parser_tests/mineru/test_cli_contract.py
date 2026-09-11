@@ -52,6 +52,8 @@ def _run_native_dry(
 
 
 class TestCliCommandStructure(unittest.TestCase):
+    """Verifies the command array produced by run_mineru_native has the correct structure."""
+
     def test_command_starts_with_mineru(self):
         cmd = _run_native_dry()
         self.assertEqual(cmd[0], "mineru")
@@ -78,6 +80,8 @@ class TestCliCommandStructure(unittest.TestCase):
 
 
 class TestCliBackendPropagation(unittest.TestCase):
+    """Verifies that backend and method flag values are forwarded verbatim to the CLI."""
+
     def test_pipeline_backend_propagated(self):
         cmd = _run_native_dry(backend="pipeline")
         idx = cmd.index("-b")
@@ -95,6 +99,8 @@ class TestCliBackendPropagation(unittest.TestCase):
 
 
 class TestInvalidMethodRejected(unittest.TestCase):
+    """Verifies that run_mineru_native rejects unknown method values before invoking the CLI."""
+
     def test_invalid_method_raises(self):
         with NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             input_path = Path(f.name)

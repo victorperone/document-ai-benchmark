@@ -15,6 +15,8 @@ def _summary(*, inputs: int = 1, results: int = 1, errors: int = 0):
 
 
 class TestXbergResultEnvelope(unittest.TestCase):
+    """Tests for _unwrap_extraction_result — validation of the Xberg envelope contract."""
+
     def test_valid_envelope(self) -> None:
         document = SimpleNamespace(content="text", pages=[])
         envelope = SimpleNamespace(

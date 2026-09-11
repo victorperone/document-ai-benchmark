@@ -1,3 +1,4 @@
+"""Evaluate PyMuPDF OCR quality on orientation-variant synthetic fixtures."""
 from __future__ import annotations
 
 import json
@@ -58,6 +59,19 @@ def require(
     key: str,
     context: str,
 ) -> Any:
+    """Return ``mapping[key]``, raising ``RuntimeError`` with context if the key is absent.
+
+    Args:
+        mapping: Dict to look up.
+        key: Key to retrieve.
+        context: Dotted path used in the error message (e.g. ``"ground_truth.page"``).
+
+    Returns:
+        The value at ``mapping[key]``.
+
+    Raises:
+        RuntimeError: If ``key`` is not present in ``mapping``.
+    """
     if key not in mapping:
         raise RuntimeError(
             f"Missing {context}.{key}. "
@@ -71,6 +85,17 @@ def require(
 def load_json(
     path: Path,
 ) -> dict[str, Any]:
+    """Read and parse a JSON file, raising ``RuntimeError`` if absent.
+
+    Args:
+        path: Path to the JSON file.
+
+    Returns:
+        Parsed JSON object.
+
+    Raises:
+        RuntimeError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise RuntimeError(
             f"Missing file: {path}"
@@ -86,6 +111,17 @@ def load_json(
 def load_jsonl(
     path: Path,
 ) -> list[dict[str, Any]]:
+    """Read and parse a JSONL file, returning one dict per non-empty line.
+
+    Args:
+        path: Path to the JSONL file.
+
+    Returns:
+        List of parsed JSON objects.
+
+    Raises:
+        RuntimeError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise RuntimeError(
             f"Missing file: {path}"
@@ -103,6 +139,14 @@ def load_jsonl(
 def percent(
     value: float | None,
 ) -> str:
+    """Format a ratio as a percentage string, or ``"N/A"`` when the value is ``None``.
+
+    Args:
+        value: Ratio in the range ``[0, 1]``, or ``None``.
+
+    Returns:
+        String like ``"12.34%"``, or ``"N/A"``.
+    """
     if value is None:
         return "N/A"
 
@@ -112,6 +156,7 @@ def percent(
 
 
 def main() -> None:
+    """Evaluate OCR quality across orientation-variant fixtures and print a comparison table."""
     ground = load_json(
         GROUND_TRUTH
     )

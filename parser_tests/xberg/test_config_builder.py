@@ -68,6 +68,12 @@ def _profile(**overrides) -> dict:
 
 @unittest.skipUnless(XBERG_AVAILABLE, "xberg not installed")
 class TestXbergConfigBuilder(unittest.TestCase):
+    """Tests for _build_xberg_config using real Xberg 1.0.14 dataclasses.
+
+    Verifies OCR strategy, preprocessing fields, language propagation, disabled
+    downstream features, image extraction conditionality, and layout guard.
+    """
+
     def test_root_strategy_is_not_pipeline(self) -> None:
         from src.parsers.xberg_v2 import _build_xberg_config
 

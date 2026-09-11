@@ -1,3 +1,4 @@
+"""Probe the Docling v2 Python API: versions, symbols, defaults, and function signatures."""
 from __future__ import annotations
 
 import importlib.metadata
@@ -57,6 +58,11 @@ def dump_model(
 def print_separator(
     title: str,
 ) -> None:
+    """Print a section separator with a title, surrounded by ``=`` borders.
+
+    Args:
+        title: Section heading to display.
+    """
     print()
     print("=" * 78)
     print(title)

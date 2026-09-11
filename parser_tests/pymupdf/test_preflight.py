@@ -89,6 +89,8 @@ class _PreflightHelper(unittest.TestCase):
 
 
 class TestPreflightPackageChecks(_PreflightHelper):
+    """Tests for pymupdf4llm / pymupdf package presence checks in preflight_profile."""
+
     def test_all_packages_present_native_passes(self):
         result = self._run_preflight("native")
         self.assertTrue(result["ok"], result)
@@ -109,6 +111,8 @@ class TestPreflightPackageChecks(_PreflightHelper):
 
 
 class TestPreflightOcrDependencies(_PreflightHelper):
+    """Tests for RapidOCR and Tesseract dependency checks in preflight_profile."""
+
     def test_rapidocr_missing_fails_for_ocr_profile(self):
         result = self._run_preflight("ocr_auto_rapidtess", rapidocr_available=False)
         self.assertFalse(result["ok"])
@@ -133,6 +137,8 @@ class TestPreflightOcrDependencies(_PreflightHelper):
 
 
 class TestPreflightTessdata(_PreflightHelper):
+    """Tests for tessdata language-file presence checks in preflight_profile."""
+
     def test_tessdata_lang_present_passes(self):
         result = self._run_preflight("ocr_auto_rapidtess", tessdata_lang_present=True)
         # The check name includes the language from the profile
@@ -146,6 +152,8 @@ class TestPreflightTessdata(_PreflightHelper):
 
 
 class TestPreflightFullCpuLocal(_PreflightHelper):
+    """End-to-end preflight smoke for the full_cpu_local PyMuPDF profile."""
+
     def test_full_cpu_local_passes(self):
         result = self._run_preflight("full_cpu_local")
         self.assertTrue(result["ok"], result)

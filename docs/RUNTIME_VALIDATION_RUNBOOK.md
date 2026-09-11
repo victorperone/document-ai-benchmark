@@ -1,8 +1,8 @@
 # Runtime Validation Runbook
 
-**Branch:** `perf/parser-runtime-optimization`
-**Data:** 2026-09-03
-**Status:** Código preparado — homologação nativa Windows Server pendente
+**Branch:** `server/windows-native`
+**Data:** 2026-09-11
+**Status:** Protocolo validado — todos os 7 parsers integrados ao Common Core v2
 
 ---
 

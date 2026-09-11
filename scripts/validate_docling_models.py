@@ -66,6 +66,11 @@ _OFFLINE_ENV = {
 
 
 def _apply_offline_env() -> dict[str, str | None]:
+    """Set Hugging Face offline-mode environment variables and return the previous values.
+
+    Returns:
+        Dict mapping each env var name to its previous value (``None`` if it was unset).
+    """
     saved: dict[str, str | None] = {}
     for k, v in _OFFLINE_ENV.items():
         saved[k] = os.environ.get(k)
@@ -74,6 +79,11 @@ def _apply_offline_env() -> dict[str, str | None]:
 
 
 def _restore_env(saved: dict[str, str | None]) -> None:
+    """Restore environment variables to the values captured by ``_apply_offline_env``.
+
+    Args:
+        saved: Dict of ``{env_var: previous_value}`` returned by ``_apply_offline_env``.
+    """
     for k, v in saved.items():
         if v is None:
             os.environ.pop(k, None)
@@ -102,6 +112,18 @@ def _block_network() -> None:
 
 
 def file_record(path: Path, model_root: Path) -> dict:
+    """Return a manifest file record with relative path, size, and SHA-256 digest.
+
+    Args:
+        path: Absolute path to the artifact file.
+        model_root: Root of the model artifacts tree; ``path`` must be inside it.
+
+    Returns:
+        Dict with ``path`` (relative POSIX), ``size_bytes``, and ``sha256`` fields.
+
+    Raises:
+        RuntimeError: If ``path`` is not inside ``model_root``.
+    """
     try:
         rel = path.resolve().relative_to(model_root.resolve()).as_posix()
     except ValueError as exc:
@@ -120,6 +142,14 @@ def file_record(path: Path, model_root: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def validate_structural(model_root: Path) -> list[dict]:
+    """Run Level-A structural validation: check that all required artifact directories exist.
+
+    Args:
+        model_root: Root of the Docling model artifacts tree.
+
+    Returns:
+        List of check result dicts with ``check``, ``pass``, and ``detail`` fields.
+    """
     results = []
 
     def check(name: str, ok: bool, detail: str) -> None:
@@ -166,6 +196,14 @@ def validate_structural(model_root: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def validate_components(model_root: Path) -> list[dict]:
+    """Run Level-B component validation: attempt to load each model processor offline.
+
+    Args:
+        model_root: Root of the Docling model artifacts tree.
+
+    Returns:
+        List of check result dicts with ``check``, ``pass``, and ``detail`` fields.
+    """
     results: list[dict] = []
 
     def check(name: str, ok: bool, detail: str) -> None:
@@ -263,6 +301,15 @@ def validate_components(model_root: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def validate_pipeline_init(model_root: Path) -> tuple[bool, str]:
+    """Run Level-C validation: initialise the full Docling pipeline offline.
+
+    Args:
+        model_root: Root of the Docling model artifacts tree.
+
+    Returns:
+        Tuple of ``(ok, detail)`` where ``ok`` is ``True`` when the pipeline
+        initialised without error and ``detail`` is a human-readable description.
+    """
     print("  Constructing PdfPipelineOptions from full_cpu_local profile...")
     try:
         from docling.datamodel.base_models import (  # type: ignore[import-untyped]
@@ -302,6 +349,18 @@ def _model_record(
     subdir: str,
     enabled: bool,
 ) -> dict:
+    """Build a manifest capability record for a model sub-directory.
+
+    Args:
+        model_root: Root of the Docling model artifacts tree.
+        subdir: Relative path of the model sub-directory within ``model_root``.
+        enabled: Whether this capability is enabled in the profile.
+
+    Returns:
+        Dict with ``enabled``, ``directory``, and ``present`` fields plus
+        ``tree_digest``, ``file_count``, and ``weight_files`` when the
+        directory exists and is enabled.
+    """
     model_dir = model_root / subdir
     if not enabled or not model_dir.is_dir():
         return {"enabled": enabled, "directory": subdir, "present": model_dir.is_dir()}
@@ -335,6 +394,18 @@ def build_manifest(
     pipeline_initialized: bool,
     manifest_path: Path,
 ) -> None:
+    """Write the certified Docling model manifest JSON to ``manifest_path``.
+
+    Aggregates validation results from all three levels and records tree digests
+    for each model capability directory.  Writes atomically via a ``.tmp`` file.
+
+    Args:
+        model_root: Root of the Docling model artifacts tree.
+        structural_results: Level-A check results from ``validate_structural``.
+        component_results: Level-B check results from ``validate_components``.
+        pipeline_initialized: ``True`` when Level-C pipeline init passed.
+        manifest_path: Destination path for the JSON manifest file.
+    """
     structural_pass = all(r["pass"] for r in structural_results)
     component_pass = all(r["pass"] for r in component_results)
 
@@ -392,6 +463,7 @@ def build_manifest(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the Docling model validator."""
     parser = argparse.ArgumentParser(
         description="Validate Docling model artifacts for full_cpu_local.",
     )
@@ -430,6 +502,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Entry point: run structural, component, and pipeline validation; optionally write manifest."""
     args = parse_args()
 
     if args.check_manifest:

@@ -1,3 +1,10 @@
+"""Artifact selection policy for benchmark runs.
+
+Determines which output files are written for each parser run.  The policy
+is constructed once from CLI arguments and then consulted by every writing
+code-path so that the selection is applied consistently.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -49,6 +56,24 @@ class ArtifactPolicy:
         cls,
         values: Iterable[str] | None,
     ) -> "ArtifactPolicy":
+        """Build a policy from raw CLI token(s).
+
+        ``None`` produces the default selection (``document.md`` and
+        ``run.log``).  The special token ``"all"`` selects every known
+        artifact.  Multiple values and comma-separated strings are both
+        accepted.
+
+        Args:
+            values: Iterable of strings from ``--artifacts``, or ``None``
+                to use the default selection.
+
+        Returns:
+            A frozen ``ArtifactPolicy`` instance.
+
+        Raises:
+            ArtifactSelectionError: If the resulting set would be empty, or
+                if any token names an unknown artifact.
+        """
         if values is None:
             return cls(
                 selected=frozenset(
@@ -114,6 +139,14 @@ class ArtifactPolicy:
         self,
         artifact: str,
     ) -> bool:
+        """Return ``True`` if *artifact* is in the selected set.
+
+        Args:
+            artifact: Artifact name, e.g. ``"document.md"``.
+
+        Returns:
+            ``True`` when the artifact should be written.
+        """
         return (
             artifact
             in self.selected
@@ -122,6 +155,11 @@ class ArtifactPolicy:
     def as_list(
         self,
     ) -> list[str]:
+        """Return the selected artifacts in canonical ``ALL_ARTIFACTS`` order.
+
+        Returns:
+            Ordered list of selected artifact names.
+        """
         return [
             artifact
             for artifact
@@ -134,6 +172,7 @@ class ArtifactPolicy:
     def is_all(
         self,
     ) -> bool:
+        """Return ``True`` when every known artifact is selected."""
         return self.selected == frozenset(
             ALL_ARTIFACTS
         )

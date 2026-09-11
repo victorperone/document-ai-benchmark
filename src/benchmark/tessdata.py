@@ -1,3 +1,10 @@
+"""Candidate tessdata directory paths for Tesseract OCR.
+
+``_TESSDATA_CANDIDATES`` lists the conventional installation locations on
+Windows and Linux.  Callers iterate this tuple until they find an existing
+directory, or raise an error if none is found.
+"""
+
 from __future__ import annotations
 
 _TESSDATA_CANDIDATES: tuple[str, ...] = (

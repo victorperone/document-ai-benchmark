@@ -1,3 +1,11 @@
+"""Parser runtime specification registry.
+
+``PARSER_RUNTIME_SPECS`` maps each parser name to a ``ParserRuntimeSpec``
+describing which Python module to invoke, which CLI arguments pass model
+paths, which environment variables should be set, and which runtimes
+(``"docker"``, ``"host"``) the parser supports.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,6 +17,23 @@ _HOST_ONLY: frozenset[str] = frozenset({"host"})
 
 @dataclass(frozen=True)
 class ParserRuntimeSpec:
+    """Runtime specification for a single parser.
+
+    Attributes:
+        module: Dotted Python module path passed to ``python -m`` when
+            launching the parser subprocess.
+        model_args: Extra CLI arguments appended to the subprocess command
+            for passing model paths.  The placeholder ``{model_root}`` is
+            expanded to the resolved model root at launch time.
+        model_env: Environment variable overrides for the subprocess.  The
+            placeholder ``{model_root}`` is expanded in values.
+        preflight_kwargs: Key/value pairs forwarded to the adapter's
+            ``preflight()`` function.  The placeholder ``{model_root}`` is
+            expanded in values.
+        supported_runtimes: Set of runtime identifiers on which this parser
+            can run.  Defaults to both ``"docker"`` and ``"host"``.
+    """
+
     module: str
     model_args: tuple[str, ...] = ()
     model_env: dict[str, str] = field(default_factory=dict)

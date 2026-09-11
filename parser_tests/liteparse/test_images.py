@@ -154,6 +154,8 @@ class LiteParseImageMarkdownTests(unittest.TestCase):
 
 
 class LiteParseImageProfileExecutionTests(unittest.TestCase):
+    """Tests for _process_document_images — profile flags control which sub-pipelines run."""
+
     def test_disabled_rotation_and_image_ocr_are_not_executed(self) -> None:
         with TemporaryDirectory() as tmp:
             image_path = Path(tmp) / "image.png"

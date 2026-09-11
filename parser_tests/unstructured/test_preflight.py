@@ -51,6 +51,8 @@ def _tree_digest(root: Path) -> str:
 
 
 class TestPreflightVersion(unittest.TestCase):
+    """Tests for the unstructured package version check in preflight_profile."""
+
     def test_correct_version_passes(self):
         with patch("src.parsers.unstructured_v2._package_version",
                    side_effect=lambda n: UNSTRUCTURED_REQUIRED_VERSION if n == "unstructured" else UNSTRUCTURED_INFERENCE_REQUIRED_VERSION):
@@ -70,6 +72,8 @@ class TestPreflightVersion(unittest.TestCase):
 
 
 class TestPreflightRemoteRejection(unittest.TestCase):
+    """Tests that preflight_profile rejects profiles with remote_services_enabled=True."""
+
     def test_remote_services_enabled_true_fails(self):
         with patch("src.parsers.unstructured_v2.get_profile",
                    return_value={
@@ -98,6 +102,8 @@ class TestPreflightRemoteRejection(unittest.TestCase):
 
 
 class TestPreflightTesseractCheck(unittest.TestCase):
+    """Tests that preflight_profile fails when Tesseract is absent for OCR profiles."""
+
     def test_missing_tesseract_in_ocr_profile_fails(self):
         with patch("src.parsers.unstructured_v2.shutil.which", return_value=None):
             result = preflight_profile("auto_ocr")
@@ -105,6 +111,8 @@ class TestPreflightTesseractCheck(unittest.TestCase):
 
 
 class TestPreflightTableStrategyCompat(unittest.TestCase):
+    """Tests that preflight_profile rejects infer_table_structure=True with the fast strategy."""
+
     def test_infer_table_with_fast_strategy_fails(self):
         with patch("src.parsers.unstructured_v2.get_profile",
                    return_value={
@@ -133,6 +141,8 @@ class TestPreflightTableStrategyCompat(unittest.TestCase):
 
 
 class TestPreflightInferenceVersion(unittest.TestCase):
+    """Tests for the unstructured-inference package version check in preflight_profile."""
+
     def test_inference_version_mismatch_fails(self):
         with patch("src.parsers.unstructured_v2._package_version",
                    side_effect=lambda n: (
@@ -153,6 +163,8 @@ class TestPreflightInferenceVersion(unittest.TestCase):
 
 
 class TestPreflightFormExtraction(unittest.TestCase):
+    """Tests that preflight_profile rejects profiles with extract_forms=True (unsupported)."""
+
     def _fake_profile(self, extract_forms: bool) -> dict:
         return {
             "strategy": "fast",
@@ -191,6 +203,8 @@ class TestPreflightFormExtraction(unittest.TestCase):
 
 
 class TestPreflightModelManifest(unittest.TestCase):
+    """Tests for the model-manifest validation check in preflight_profile (full_cpu_local only)."""
+
     def test_missing_manifest_fails(self):
         with TemporaryDirectory() as tmp:
             result = preflight_profile(

@@ -101,6 +101,8 @@ class TestPreflightResultStructure(unittest.TestCase):
 
 
 class TestPreflightWrongVersion(unittest.TestCase):
+    """Tests that a mismatched xberg package version produces a fail check."""
+
     def _run_with_version(self, version: str):
         from src.parsers.xberg_v2 import preflight_profile
         mock_xberg = _make_mock_xberg()
@@ -131,6 +133,8 @@ class TestPreflightWrongVersion(unittest.TestCase):
 
 
 class TestPreflightUnknownKeys(unittest.TestCase):
+    """Tests that unknown profile keys cause a 'profile keys' fail check in preflight_profile."""
+
     def test_unknown_profile_key_produces_fail(self):
         from src.parsers.xberg_v2 import preflight_profile
         bad_profile = {**_NATIVE_PROFILE, "bogus_key_xyz": True}
@@ -150,6 +154,8 @@ class TestPreflightUnknownKeys(unittest.TestCase):
 
 
 class TestPreflightOcrChecks(unittest.TestCase):
+    """Tests for Tesseract and tessdata presence checks when OCR is enabled in a profile."""
+
     def _ocr_profile(self, **overrides) -> dict:
         base = {
             **_NATIVE_PROFILE,
@@ -198,6 +204,8 @@ class TestPreflightOcrChecks(unittest.TestCase):
 
 
 class TestPreflightNoNetwork(unittest.TestCase):
+    """Verifies that the native profile constant has remote access disabled."""
+
     def test_remote_services_disabled_in_native(self):
         self.assertFalse(_NATIVE_PROFILE["remote_services_enabled"])
 

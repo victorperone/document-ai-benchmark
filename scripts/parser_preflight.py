@@ -1,3 +1,4 @@
+"""Generic preflight runner: validates a parser adapter and profile without executing inference."""
 from __future__ import annotations
 
 import argparse
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the generic preflight runner."""
     p = argparse.ArgumentParser(
         description=(
             "Generic preflight runner. "
@@ -42,6 +44,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def _emit(result: dict) -> None:
+    """Print a preflight result dict as a ``PREFLIGHT_JSON=`` protocol line to stdout.
+
+    Args:
+        result: Preflight result dict to serialise.
+    """
     print(
         "PREFLIGHT_JSON="
         + json.dumps(result, ensure_ascii=False)
@@ -54,6 +61,17 @@ def _fail_result(
     name: str,
     detail: str,
 ) -> dict:
+    """Build a minimal failing preflight result dict with a single failed check.
+
+    Args:
+        parser: Parser name.
+        profile: Profile name.
+        name: Check name for the single failed check entry.
+        detail: Human-readable failure detail string.
+
+    Returns:
+        Schema-v1 preflight result dict with ``ok=False``.
+    """
     return {
         "schema_version": 1,
         "parser": parser,
@@ -70,6 +88,12 @@ def _fail_result(
 
 
 def _container_checks() -> list[dict]:
+    """Run Docker-container-specific environment checks (``/app``, ``/data``, ``/outputs``).
+
+    Returns:
+        List of check dicts (``name``, ``status``, ``detail``) for the three
+        standard container directories.
+    """
     from src.benchmark.preflight import make_check
 
     checks: list[dict] = []
@@ -114,6 +138,14 @@ def _container_checks() -> list[dict]:
 
 
 def _host_checks(project_root: Path) -> list[dict]:
+    """Run host-runtime environment checks (project root, data directory, writable outputs).
+
+    Args:
+        project_root: Absolute path to the repository root on the host.
+
+    Returns:
+        List of check dicts for the three host-specific checks.
+    """
     from src.benchmark.preflight import make_check
 
     checks: list[dict] = []
@@ -162,6 +194,20 @@ def _build_override_kwargs(
     parser_name: str,
     model_artifacts_path: Path | None,
 ) -> dict:
+    """Build the keyword-argument overrides to pass to the adapter's ``preflight_profile()``.
+
+    Only applies when ``runtime == "host"``; returns an empty dict for Docker.
+    Resolves model-root placeholders in the parser's ``preflight_kwargs`` spec.
+
+    Args:
+        runtime: Execution runtime (``"host"`` or ``"docker"``).
+        parser_name: Parser name used to look up the runtime spec.
+        model_artifacts_path: Explicit model artifacts path override, or ``None``
+            to resolve via ``resolve_model_root``.
+
+    Returns:
+        Dict of keyword arguments for ``preflight_profile()``, potentially empty.
+    """
     if runtime != "host":
         return {}
 
@@ -182,6 +228,7 @@ def _build_override_kwargs(
 
 
 def main() -> None:
+    """Orchestrate the preflight pipeline and exit with code 0 (pass) or 1 (fail)."""
     args = parse_args()
     parser_name = args.parser
     profile_name = args.profile

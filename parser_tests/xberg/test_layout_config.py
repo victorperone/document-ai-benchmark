@@ -10,6 +10,8 @@ PARSER_NAME = "xberg"
 
 
 class TestLayoutProfileKeys(unittest.TestCase):
+    """Verifies that layout-related keys are present in _PROFILE_KEYS and the full_cpu_layout profile."""
+
     def test_layout_keys_in_profile_keys_frozenset(self):
         for key in (
             "layout_enabled", "layout_strategy", "layout_apply_heuristics",
@@ -60,6 +62,8 @@ class TestLanguageDetectionFixed(unittest.TestCase):
 
 
 class TestAllowSingleColumnTables(unittest.TestCase):
+    """Verifies that allow_single_column_tables defaults to False in primary profiles."""
+
     def test_default_is_false_in_primary_profiles(self):
         primary = [
             "native_markdown", "ocr_auto_tesseract", "ocr_force_tesseract",

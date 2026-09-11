@@ -12,6 +12,8 @@ from src.parsers.xberg_v2 import (
 
 
 class TestQrPayloadSafety(unittest.TestCase):
+    """Tests for _qr_payload_is_safe — length and control-character validation."""
+
     def test_short_text_is_safe(self):
         self.assertTrue(_qr_payload_is_safe("https://example.com"))
 
@@ -35,6 +37,8 @@ class TestQrPayloadSafety(unittest.TestCase):
 
 
 class TestBuildQrDerivedBlocks(unittest.TestCase):
+    """Tests for _build_qr_derived_blocks — per-page QR record distribution and filtering."""
+
     def _make_results(self, *items):
         return list(items)
 
@@ -73,6 +77,8 @@ class TestBuildQrDerivedBlocks(unittest.TestCase):
 
 
 class TestRenderQrEnrichedPage(unittest.TestCase):
+    """Tests for _render_qr_enriched_page — derived-block injection into page text."""
+
     def test_no_qr_returns_unchanged_text(self):
         text = "# Heading\n\nSome content.\n"
         result = _render_qr_enriched_page(text, [])

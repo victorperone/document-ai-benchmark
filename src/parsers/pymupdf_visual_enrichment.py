@@ -39,6 +39,16 @@ def _box_to_rect(box: dict[str, Any]) -> tuple[float, float, float, float] | Non
 
 
 def _region_id(page_number: int, index: int, image_bytes: bytes) -> str:
+    """Build a stable, unique region identifier from page, index, and image content.
+
+    Args:
+        page_number: 1-based page number.
+        index: 0-based region index within the page.
+        image_bytes: Raw PNG bytes of the rendered region.
+
+    Returns:
+        String of the form ``"p<page>-picture-<index>-<sha256_prefix>"``.
+    """
     sha_prefix = hashlib.sha256(image_bytes).hexdigest()[:8]
     return f"p{page_number}-picture-{index}-{sha_prefix}"
 
@@ -135,6 +145,24 @@ def _derived_block(
     ocr_engine: str,
     base_text: str = "",
 ) -> str:
+    """Build a ``derived:start`` / ``derived:end`` fenced block for a visual region.
+
+    Emits OCR text and/or visual description only when they add content not
+    already present in the base page text. Returns an empty string when both
+    items are redundant.
+
+    Args:
+        region_id: Stable region identifier from _region_id().
+        page_number: 1-based page number.
+        description: Visual description from the SmolVLM model.
+        ocr_text: OCR text extracted from the region.
+        description_model: Model name used for description.
+        ocr_engine: OCR engine name.
+        base_text: Existing page Markdown used to check for duplicates.
+
+    Returns:
+        A formatted derived block string, or empty string if nothing to emit.
+    """
     lines = [
         "<!-- derived:start",
         "type=visual_description",
@@ -193,6 +221,18 @@ def _embedded_image_boxes(document: Any, page_index: int) -> list[dict[str, Any]
 
 
 def _overlaps_classified_image(candidate: dict[str, Any], boxes: list[dict[str, Any]]) -> bool:
+    """Return True if the candidate box overlaps >= 75% with any classified box.
+
+    Used to suppress embedded images that are already covered by a layout-
+    classified region.
+
+    Args:
+        candidate: Box dict with a ``"bbox"`` key.
+        boxes: List of classified layout box dicts to check against.
+
+    Returns:
+        True if the candidate is substantially contained within any listed box.
+    """
     rect = _box_to_rect(candidate)
     if rect is None:
         return False
@@ -212,6 +252,19 @@ def _overlaps_classified_image(candidate: dict[str, Any], boxes: list[dict[str, 
 
 
 def _insert_blocks(text: str, positioned: list[tuple[int | None, str]]) -> str:
+    """Insert derived blocks into a page text at specified character positions.
+
+    Blocks with a valid integer position are inserted in reverse position order
+    (to preserve offsets). Blocks with None or out-of-range positions are
+    appended at the end.
+
+    Args:
+        text: Base page Markdown text.
+        positioned: List of (position, block_text) tuples; position may be None.
+
+    Returns:
+        Updated page text with all blocks inserted or appended.
+    """
     result = text
     tail: list[str] = []
     valid = []

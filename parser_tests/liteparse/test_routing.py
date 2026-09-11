@@ -27,6 +27,7 @@ def _triggers_full_page_ocr(reasons: list[str]) -> bool:
 
 
 class LiteParseOCRRoutingTests(unittest.TestCase):
+    """Tests for selective-OCR routing logic — which complexity reasons trigger full-page OCR."""
 
     def test_scanned_reason_triggers_full_page_ocr(self) -> None:
         cr = _make_complexity_result(1, ["scanned"])

@@ -1,3 +1,9 @@
+"""Discovery helpers for optional external command-line tools.
+
+Currently only covers Tesseract OCR, whose executable location is
+non-standard on Windows and must be searched explicitly.
+"""
+
 from __future__ import annotations
 
 import shutil
@@ -6,6 +12,14 @@ from pathlib import Path
 
 
 def resolve_tesseract_executable() -> str | None:
+    """Return the absolute path to the Tesseract OCR executable, or ``None``.
+
+    Searches ``PATH`` first.  On Windows, also checks the two conventional
+    installation directories if ``PATH`` lookup fails.
+
+    Returns:
+        Absolute path string when Tesseract is found, ``None`` otherwise.
+    """
     found = shutil.which("tesseract")
     if found:
         return found

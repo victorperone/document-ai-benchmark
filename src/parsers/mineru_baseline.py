@@ -1,3 +1,10 @@
+"""Baseline (v1) MinerU parser adapter for the document AI benchmark.
+
+Runs the ``mineru`` CLI as a subprocess, captures its output files, and
+assembles Markdown, JSONL, and metrics.json artifacts. Uses a process-tree-
+aware ResourceMonitor to track CPU and RAM for the MinerU subprocess and all
+its descendants.
+"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +33,11 @@ MONITOR_INTERVAL_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the MinerU baseline adapter.
+
+    Returns:
+        Parsed namespace with input, output_dir, method, and threads attributes.
+    """
     parser = argparse.ArgumentParser(
         description="MinerU benchmark adapter."
     )
@@ -51,10 +63,26 @@ def parse_args() -> argparse.Namespace:
 
 
 def bytes_to_mb(value: int | float) -> float:
+    """Convert bytes to megabytes, rounded to three decimal places.
+
+    Args:
+        value: Size in bytes.
+
+    Returns:
+        Size in megabytes.
+    """
     return round(value / (1024 * 1024), 3)
 
 
 def calculate_sha256(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -68,10 +96,22 @@ def calculate_sha256(path: Path) -> str:
 
 
 class ResourceMonitor:
+    """Background thread that samples CPU and RSS memory usage at a fixed interval.
+
+    Uses a process-cache mechanism so that child processes spawned by MinerU
+    are tracked without repeatedly resetting their CPU counters. Processes that
+    disappear between samples are removed from the cache.
+    """
+
     def __init__(
         self,
         interval: float = MONITOR_INTERVAL_SECONDS,
     ) -> None:
+        """Initialise the monitor.
+
+        Args:
+            interval: Sampling interval in seconds.
+        """
         self.interval = interval
         self.process = psutil.Process(os.getpid())
         self.logical_cpus = (
@@ -94,6 +134,11 @@ class ResourceMonitor:
         self.primed_pids: set[int] = set()
 
     def _discover_processes(self) -> None:
+        """Refresh the process cache with the current process tree.
+
+        Reuses existing Process objects where possible so that CPU counters
+        accumulated for already-known processes are not reset.
+        """
         discovered: dict[int, psutil.Process] = {
             self.process.pid: self.process
         }
@@ -122,6 +167,12 @@ class ResourceMonitor:
         self.processes = discovered
 
     def _prime_new_processes(self) -> None:
+        """Discover new child processes and prime their CPU counters.
+
+        Only processes that have not been primed before receive the initial
+        cpu_percent(interval=None) call. Processes that can no longer be
+        accessed are removed from the cache.
+        """
         self._discover_processes()
 
         for pid, process in list(
@@ -145,6 +196,12 @@ class ResourceMonitor:
                 )
 
     def _sample(self) -> None:
+        """Take one CPU and RSS snapshot across the process tree.
+
+        Newly discovered processes are primed on their first sample and
+        excluded from that sample's CPU aggregate. Inaccessible processes are
+        removed from the cache and the primed set.
+        """
         self._discover_processes()
 
         cpu_percent = 0.0
@@ -190,12 +247,14 @@ class ResourceMonitor:
         )
 
     def _run(self) -> None:
+        """Background thread target: sample repeatedly until stop_event is set."""
         while not self.stop_event.wait(
             self.interval
         ):
             self._sample()
 
     def start(self) -> None:
+        """Prime CPU counters and start the background sampling thread."""
         self._prime_new_processes()
 
         self.thread = threading.Thread(
@@ -206,6 +265,12 @@ class ResourceMonitor:
         self.thread.start()
 
     def stop(self) -> dict[str, float]:
+        """Stop sampling, take a final sample, and return resource metrics.
+
+        Returns:
+            Dict with average and peak CPU percentages (raw and system-capacity
+            normalised) and peak RSS in MB.
+        """
         self.stop_event.set()
 
         if self.thread is not None:
@@ -266,6 +331,19 @@ def find_output_file(
     root: Path,
     exact_name: str,
 ) -> Path:
+    """Recursively find a single MinerU output file by exact name under root.
+
+    Args:
+        root: Root directory to search.
+        exact_name: Exact filename to look for (e.g. ``"document.md"``).
+
+    Returns:
+        Path to the unique matching file.
+
+    Raises:
+        FileNotFoundError: If no matching file is found.
+        RuntimeError: If more than one matching file is found.
+    """
     matches = list(
         root.rglob(exact_name)
     )
@@ -288,6 +366,12 @@ def print_log_tail(
     path: Path,
     lines: int = 80,
 ) -> None:
+    """Print the last N lines of a log file to stdout with a header banner.
+
+    Args:
+        path: Path to the log file.
+        lines: Maximum number of tail lines to print (default 80).
+    """
     if not path.exists():
         return
 
@@ -306,6 +390,14 @@ def print_log_tail(
 
 
 def main() -> int:
+    """Run the MinerU baseline pipeline and write Markdown, JSONL, and metrics.
+
+    Invokes the ``mineru`` CLI as a subprocess, locates its output Markdown
+    file, processes each page, and writes benchmark artifacts.
+
+    Returns:
+        0 on success, 1 if the input file does not exist or MinerU fails.
+    """
     args = parse_args()
 
     input_path = Path(args.input)

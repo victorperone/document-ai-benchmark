@@ -29,6 +29,7 @@ def _make_png_bytes(color: str = "white") -> bytes:
 
 
 class LiteParseRotationTests(unittest.TestCase):
+    """Tests for _detect_and_correct_orientation — pytesseract OSD integration and fallback."""
 
     def _run_detect(
         self,

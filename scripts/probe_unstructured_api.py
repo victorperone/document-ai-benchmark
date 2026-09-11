@@ -30,23 +30,46 @@ _warnings: list[str] = []
 
 
 def _ok(label: str, detail: str = "") -> None:
+    """Print a PASS-marked result line.
+
+    Args:
+        label: Short check description.
+        detail: Optional additional context appended after two spaces.
+    """
     suffix = f"  {detail}" if detail else ""
     print(f"  {PASS_MARK} {label}{suffix}")
 
 
 def _fail(label: str, detail: str = "") -> None:
+    """Record a failure and print a FAIL-marked result line.
+
+    Args:
+        label: Short check description.
+        detail: Optional failure context appended after two spaces.
+    """
     _failures.append(label)
     suffix = f"  {detail}" if detail else ""
     print(f"  {FAIL_MARK} {label}{suffix}")
 
 
 def _warn(label: str, detail: str = "") -> None:
+    """Record a warning and print a WARN-marked result line.
+
+    Args:
+        label: Short check description.
+        detail: Optional warning context appended after two spaces.
+    """
     _warnings.append(label)
     suffix = f"  {detail}" if detail else ""
     print(f"  {WARN_MARK} {label}{suffix}")
 
 
 def _section(title: str) -> None:
+    """Print a section separator with a title.
+
+    Args:
+        title: Section heading to display.
+    """
     print(f"\n{'=' * 60}")
     print(f"  {title}")
     print("=" * 60)

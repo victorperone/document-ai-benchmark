@@ -1,3 +1,11 @@
+"""Native-bundle construction and validation for parser artifacts.
+
+A native bundle is a self-contained directory (``native/``) that stores the
+parser's own output file(s) together with a ``manifest.json`` that lists every
+file with its size and SHA-256 digest.  This module handles copying assets,
+rewriting local Markdown links, and writing the manifest.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -18,6 +26,15 @@ _REMOTE_SCHEMES = frozenset({"http", "https", "data", "mailto"})
 
 @dataclass(frozen=True)
 class MarkdownLocalLink:
+    """A local (non-remote) link found in a Markdown document.
+
+    Attributes:
+        target: The raw link target string as it appears in the source.
+        start: Character offset of the first character of *target* in the
+            source string.
+        end: Character offset one past the last character of *target*.
+    """
+
     target: str
     start: int
     end: int
@@ -25,12 +42,30 @@ class MarkdownLocalLink:
 
 @dataclass(frozen=True)
 class NativeBundleResult:
+    """Result returned by ``copy_native_bundle``.
+
+    Attributes:
+        markdown: Rewritten Markdown text with link targets pointing to the
+            bundle-relative asset paths.
+        manifest: The manifest dict that was written to ``manifest.json``.
+        relocated_links: Number of unique local link targets that were
+            copied and rewritten.
+    """
+
     markdown: str
     manifest: dict
     relocated_links: int
 
 
 def sha256_file(path: Path) -> str:
+    """Return the hex-encoded SHA-256 digest of *path*, streaming in 1 MiB chunks.
+
+    Args:
+        path: Path to an existing file.
+
+    Returns:
+        64-character lowercase hex string.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -66,6 +101,21 @@ def ensure_safe_relative_path(value: str) -> PurePosixPath:
 
 
 def collect_local_markdown_links(markdown: str) -> list[MarkdownLocalLink]:
+    """Extract all local (non-remote) link targets from *markdown*.
+
+    Remote links (``http``, ``https``, ``data``, ``mailto``) and in-page
+    anchors (``#…``) are ignored.  Unsafe paths are rejected immediately.
+
+    Args:
+        markdown: Markdown source text.
+
+    Returns:
+        List of ``MarkdownLocalLink`` instances in document order.
+
+    Raises:
+        ValueError: If a local link uses an unsupported scheme or netloc, or
+            if a path component fails the safe-relative-path check.
+    """
     links: list[MarkdownLocalLink] = []
     for match in _MARKDOWN_LINK_RE.finditer(markdown):
         target = match.group("target")
@@ -83,6 +133,18 @@ def _relative_to_root(
     path: Path,
     root: Path,
 ) -> Path:
+    """Return *path* relative to *root*, handling Windows 8.3 short-name aliases.
+
+    Args:
+        path: Absolute or relative filesystem path.
+        root: The root directory that *path* must be a descendant of.
+
+    Returns:
+        Relative ``Path`` from *root* to *path*.
+
+    Raises:
+        ValueError: If *path* does not resolve to a descendant of *root*.
+    """
     candidate = path.resolve()
     resolved_root = root.resolve()
 
@@ -115,6 +177,18 @@ def _descendant(
     path: Path,
     root: Path,
 ) -> Path:
+    """Resolve *path* and assert it is a descendant of *root*.
+
+    Args:
+        path: Filesystem path to validate.
+        root: Required ancestor directory.
+
+    Returns:
+        Resolved absolute ``Path``.
+
+    Raises:
+        ValueError: If the resolved path is not inside *root*.
+    """
     candidate = path.resolve()
 
     try:
@@ -195,6 +269,24 @@ def write_native_manifest(
     profile: str,
     bundle_status: str = "available",
 ) -> dict:
+    """Write ``manifest.json`` inside *bundle_root* and return the manifest dict.
+
+    When *bundle_status* is ``"available"`` every non-manifest file under
+    *bundle_root* is enumerated with its size and SHA-256 digest.  An
+    ``"unavailable"`` bundle produces an empty ``files`` list.
+
+    Args:
+        bundle_root: Root directory of the native bundle.
+        parser: Parser identifier stored in the manifest.
+        profile: Profile identifier stored in the manifest.
+        bundle_status: Either ``"available"`` or ``"unavailable"``.
+
+    Returns:
+        The manifest dict that was written to ``manifest.json``.
+
+    Raises:
+        ValueError: If *bundle_status* is not a valid value.
+    """
     if bundle_status not in {"available", "unavailable"}:
         raise ValueError(f"invalid native bundle status: {bundle_status}")
     files = []

@@ -1,3 +1,11 @@
+"""Metrics discovery and loading helpers for benchmark summary scripts.
+
+Scans the output directory tree for ``metrics.json`` files, validates their
+provenance against their filesystem path, and provides helpers for loading
+per-parser/profile datasets and asserting that all datasets share the same
+document set.
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,11 +15,22 @@ from typing import Mapping
 
 
 class SummaryInputError(RuntimeError):
-    pass
+    """Raised when a metrics file is malformed or inconsistent with its path."""
 
 
 @dataclass
 class MetricsRecord:
+    """A single discovered ``metrics.json`` with its parsed content.
+
+    Attributes:
+        path: Absolute path to the ``metrics.json`` file.
+        parser: Parser identifier (from the directory structure).
+        profile: Profile identifier (from the directory structure).
+        document: Document basename including extension (from the JSON).
+        document_stem: Document basename without extension.
+        data: Parsed metrics dict.
+    """
+
     path: Path
     parser: str
     profile: str
@@ -26,6 +45,25 @@ def discover_metrics(
     parser: str | None = None,
     profile: str | None = None,
 ) -> list[MetricsRecord]:
+    """Discover and validate all ``metrics.json`` files under *output_root*.
+
+    Walks the expected ``<parser>/<document>/<profile>/metrics.json``
+    directory structure, reads each file, and cross-checks the JSON
+    ``run.parser``, ``run.profile``, and ``document.file`` fields against the
+    path components.
+
+    Args:
+        output_root: Root of the benchmark output tree.
+        parser: When provided, only metrics for this parser are returned.
+        profile: When provided, only metrics for this profile are returned.
+
+    Returns:
+        Sorted list of ``MetricsRecord`` instances.
+
+    Raises:
+        SummaryInputError: If a file contains invalid JSON, or if any JSON
+            field is inconsistent with the directory path.
+    """
     if parser is not None and profile is not None:
         pattern = f"{parser}/*/{profile}/metrics.json"
     elif parser is not None:
@@ -106,6 +144,21 @@ def load_metrics_by_document(
     parser: str,
     profile: str,
 ) -> dict[str, dict]:
+    """Return a mapping of document basename to metrics dict for one run.
+
+    Args:
+        output_root: Root of the benchmark output tree.
+        parser: Parser identifier to filter by.
+        profile: Profile identifier to filter by.
+
+    Returns:
+        Dict mapping ``document`` (basename with extension) to the parsed
+        metrics dict.
+
+    Raises:
+        SummaryInputError: If any file is invalid, or if the same document
+            appears more than once under the same parser/profile.
+    """
     records = discover_metrics(
         output_root,
         parser=parser,
@@ -127,6 +180,22 @@ def load_metrics_by_document(
 def require_same_documents(
     datasets: Mapping[str, Mapping[str, object]],
 ) -> list[str]:
+    """Assert that all datasets cover exactly the same set of documents.
+
+    Used before cross-parser comparisons to ensure every dataset has a result
+    for every document.
+
+    Args:
+        datasets: Mapping of dataset name (e.g. ``"pymupdf/default"``) to an
+            inner mapping whose keys are document basenames.
+
+    Returns:
+        Sorted list of all document names in the union.
+
+    Raises:
+        SummaryInputError: If any dataset is missing documents that appear in
+            another dataset.
+    """
     names = list(datasets.keys())
     if not names:
         return []

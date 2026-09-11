@@ -38,12 +38,36 @@ if _GUARD_ACTIVE:
     _LOOPBACK_PREFIXES = ("127.", "::1", "0:0:0:0:0:0:0:1")
 
     def _is_loopback(host: str) -> bool:
+        """Return True if ``host`` resolves to a loopback address.
+
+        Accepts ``localhost``, ``::1``, and any address whose string
+        representation starts with a prefix in ``_LOOPBACK_PREFIXES``
+        (``127.``, ``::1``, ``0:0:0:0:0:0:0:1``).
+
+        Args:
+            host: Hostname or IP address string as passed to
+                ``socket.socket.connect``.
+
+        Returns:
+            ``True`` if the host is loopback; ``False`` otherwise.
+        """
         h = host.strip().lower().rstrip(".")
         if h in ("localhost", "::1"):
             return True
         return any(h.startswith(p) for p in _LOOPBACK_PREFIXES)
 
     def _log_attempt(host: str, port: int | None, stack: str) -> None:
+        """Append a blocked connection attempt to the offline guard log.
+
+        Creates the log directory if it does not exist. Silently ignores
+        ``OSError`` so that a write failure never prevents the guard from
+        blocking the connection.
+
+        Args:
+            host: Target hostname or IP of the blocked connection.
+            port: Target port number, or ``None`` if not available.
+            stack: Formatted traceback string at the point of the call.
+        """
         _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "ts": time.time(),
@@ -60,6 +84,23 @@ if _GUARD_ACTIVE:
     _original_connect = socket.socket.connect
 
     def _guarded_connect(self: socket.socket, address: object) -> None:  # type: ignore[override]
+        """Replacement for ``socket.socket.connect`` that blocks non-loopback connections.
+
+        Extracts the host and port from ``address``, checks whether the host
+        is a loopback address, and raises ``OSError`` if it is not. Every
+        blocked attempt is logged via ``_log_attempt`` before raising.
+
+        Args:
+            self: The ``socket.socket`` instance (passed implicitly as the
+                monkey-patched method receiver).
+            address: The connection target. For TCP/UDP sockets this is a
+                ``(host, port)`` tuple; for Unix-domain sockets a path string.
+
+        Raises:
+            OSError: Always raised for non-loopback destinations, with a
+                message that names the blocked host/port and advises how to
+                disable the guard.
+        """
         host: str = ""
         port: int | None = None
         if isinstance(address, (tuple, list)) and len(address) >= 2:

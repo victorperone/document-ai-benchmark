@@ -1,3 +1,4 @@
+"""Analyse every PDF in the input directory and write a JSON source-inventory file per document."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +11,7 @@ from src.benchmark.source_inventory import (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the source-inventory builder."""
     parser = argparse.ArgumentParser(
         description=(
             "Build objective source-PDF inventory."
@@ -40,6 +42,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Analyse each PDF in the input directory and write a JSON source-inventory per file."""
     args = parse_args()
 
     pdfs = sorted(

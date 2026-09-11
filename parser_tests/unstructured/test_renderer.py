@@ -23,6 +23,8 @@ def _make_el(category: str, text: str = "", **meta_attrs) -> MagicMock:
 
 
 class TestTitleRendering(unittest.TestCase):
+    """Tests for Title element rendering — heading level derived from category_depth."""
+
     def test_no_depth_renders_h1(self):
         el = _make_el("Title", "Hello", category_depth=None)
         result = _render_element(el)
@@ -55,6 +57,8 @@ class TestTitleRendering(unittest.TestCase):
 
 
 class TestParagraphRendering(unittest.TestCase):
+    """Tests for NarrativeText and Text element rendering — text returned unchanged."""
+
     def test_narrative_text_returned_as_is(self):
         el = _make_el("NarrativeText", "Some long paragraph.")
         self.assertEqual(_render_element(el), "Some long paragraph.")
@@ -65,6 +69,8 @@ class TestParagraphRendering(unittest.TestCase):
 
 
 class TestListItemRendering(unittest.TestCase):
+    """Tests for ListItem rendering — indentation driven by category_depth."""
+
     def test_no_depth_renders_dash(self):
         el = _make_el("ListItem", "item", category_depth=None)
         self.assertEqual(_render_element(el), "- item")
@@ -87,6 +93,8 @@ class TestListItemRendering(unittest.TestCase):
 
 
 class TestPageBreakRendering(unittest.TestCase):
+    """Tests that PageBreak elements always render as an empty string."""
+
     def test_pagebreak_returns_empty(self):
         el = _make_el("PageBreak", "")
         self.assertEqual(_render_element(el), "")
@@ -97,6 +105,8 @@ class TestPageBreakRendering(unittest.TestCase):
 
 
 class TestCodeSnippetRendering(unittest.TestCase):
+    """Tests that CodeSnippet elements are wrapped in a Markdown fenced code block."""
+
     def test_code_snippet_gets_fenced(self):
         el = _make_el("CodeSnippet", "x = 1")
         result = _render_element(el)
@@ -109,12 +119,16 @@ class TestCodeSnippetRendering(unittest.TestCase):
 
 
 class TestFormulaRendering(unittest.TestCase):
+    """Tests that Formula element text is preserved as-is."""
+
     def test_formula_text_preserved(self):
         el = _make_el("Formula", "E = mc^2")
         self.assertEqual(_render_element(el), "E = mc^2")
 
 
 class TestHeaderFooterRendering(unittest.TestCase):
+    """Tests that Header and Footer element text is preserved as-is."""
+
     def test_header_text_preserved(self):
         el = _make_el("Header", "Chapter 1")
         self.assertEqual(_render_element(el), "Chapter 1")
@@ -125,6 +139,8 @@ class TestHeaderFooterRendering(unittest.TestCase):
 
 
 class TestImageRendering(unittest.TestCase):
+    """Tests for Image element rendering — OCR text preserved, dead placeholders suppressed."""
+
     def test_image_with_path_does_not_persist_dead_placeholder(self):
         el = _make_el("Image", "", image_path="/tmp/img_001.png")
         self.assertEqual(_render_element(el), "")
@@ -139,6 +155,8 @@ class TestImageRendering(unittest.TestCase):
 
 
 class TestTableHtmlRendering(unittest.TestCase):
+    """Tests for _render_table_html — Markdown conversion and HTML preservation for complex tables."""
+
     def test_simple_2x2_table(self):
         html = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
         md, mode = _render_table_html(html)
@@ -182,6 +200,8 @@ class TestTableHtmlRendering(unittest.TestCase):
 
 
 class TestTableElementRendering(unittest.TestCase):
+    """Tests for Table element rendering — HTML path and plain-text fallback."""
+
     def test_table_with_html_uses_renderer(self):
         html = "<table><tr><th>X</th></tr><tr><td>Y</td></tr></table>"
         el = _make_el("Table", "X Y", text_as_html=html)
@@ -195,6 +215,8 @@ class TestTableElementRendering(unittest.TestCase):
 
 
 class TestVisualItemDeduplication(unittest.TestCase):
+    """Tests for _render_visual_items — derived-block deduplication against the base page text."""
+
     def test_content_already_in_base_does_not_leave_comment_only_block(self):
         base = "IMAGEM OCR: Orcamento local 2026"
         items = [{

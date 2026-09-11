@@ -24,6 +24,8 @@ def _make_result(pages):
 
 
 class TestPageTextExtraction(unittest.TestCase):
+    """Tests for _result_to_page_texts — mapping page content by page number."""
+
     def test_page_text_mapped_by_number(self):
         pages = [_make_page("Content A", 1), _make_page("Content B", 2)]
         result = _make_result(pages)
@@ -65,6 +67,8 @@ class TestPageTextExtraction(unittest.TestCase):
 
 
 class TestPageContractNoBytes(unittest.TestCase):
+    """Verifies that _result_to_page_texts never returns bytes values — only strings."""
+
     def test_page_text_no_bytes_values(self):
         pages = [_make_page("Text content", 1)]
         result = _make_result(pages)

@@ -54,6 +54,8 @@ class _DocumentStub:
 
 
 class TestBuildPictureDescriptionBlocks(unittest.TestCase):
+    """Tests for _build_picture_description_blocks — derived block construction and page routing."""
+
     def test_no_pictures_returns_none(self):
         doc = _DocumentStub([
             _TextItemStub("paragraph text", [1]),
@@ -230,6 +232,8 @@ class TestBuildPictureDescriptionBlocks(unittest.TestCase):
 
 
 class TestPageExportContract(unittest.TestCase):
+    """Tests for build_docling_page_contract — error handling on absent source pages."""
+
     def test_missing_document_page_does_not_create_synthetic_blank_page(self):
         class Document:
             pages = {1: object()}

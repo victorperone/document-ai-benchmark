@@ -1,3 +1,9 @@
+"""Baseline (v1) PyMuPDF4LLM parser adapter for the document AI benchmark.
+
+Runs pymupdf4llm with no OCR and no image export, writing per-page Markdown,
+a JSONL record per page, and a metrics.json file. Uses a ResourceMonitor to
+capture CPU and RSS usage across the pipeline.
+"""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +31,11 @@ MONITOR_INTERVAL_SECONDS = 0.1
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the PyMuPDF baseline adapter.
+
+    Returns:
+        Parsed namespace with ``input`` and ``output_dir`` attributes.
+    """
     parser = argparse.ArgumentParser(
         description="PyMuPDF4LLM baseline parser for the document AI benchmark."
     )
@@ -36,6 +47,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def json_default(value: Any) -> Any:
+    """JSON serialisation fallback: convert iterables to lists, others to str.
+
+    Args:
+        value: A non-serialisable value encountered by json.dumps.
+
+    Returns:
+        A list if the value is iterable, otherwise its string representation.
+    """
     try:
         return list(value)
     except TypeError:
@@ -43,10 +62,26 @@ def json_default(value: Any) -> Any:
 
 
 def bytes_to_mb(value: int | float) -> float:
+    """Convert bytes to megabytes, rounded to three decimal places.
+
+    Args:
+        value: Size in bytes.
+
+    Returns:
+        Size in megabytes.
+    """
     return round(value / (1024 * 1024), 3)
 
 
 def calculate_sha256(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -57,7 +92,19 @@ def calculate_sha256(path: Path) -> str:
 
 
 class ResourceMonitor:
+    """Background thread that samples CPU and RSS memory usage at a fixed interval.
+
+    Covers the current process and all recursive child processes via psutil.
+    Call ``start()`` before the timed section and ``stop()`` after to obtain a
+    summary metrics dict.
+    """
+
     def __init__(self, interval: float = MONITOR_INTERVAL_SECONDS) -> None:
+        """Initialise the monitor.
+
+        Args:
+            interval: Sampling interval in seconds.
+        """
         self.interval = interval
         self.process = psutil.Process(os.getpid())
         self.logical_cpus = psutil.cpu_count(logical=True) or 1
@@ -69,6 +116,12 @@ class ResourceMonitor:
         self.thread: threading.Thread | None = None
 
     def _process_tree(self) -> list[psutil.Process]:
+        """Return the monitored process and all its recursive children.
+
+        Returns:
+            List of psutil.Process objects; inaccessible children are silently
+            omitted.
+        """
         processes = [self.process]
 
         try:
@@ -79,6 +132,7 @@ class ResourceMonitor:
         return processes
 
     def _prime_cpu_counters(self) -> None:
+        """Warm up psutil CPU counters so the first real sample is meaningful."""
         for process in self._process_tree():
             try:
                 process.cpu_percent(interval=None)
@@ -86,6 +140,11 @@ class ResourceMonitor:
                 pass
 
     def _sample(self) -> None:
+        """Take one CPU and RSS snapshot across the process tree.
+
+        Appends aggregated values to ``self.cpu_samples`` and
+        ``self.memory_samples``.
+        """
         cpu_percent = 0.0
         rss_bytes = 0
 
@@ -100,10 +159,12 @@ class ResourceMonitor:
         self.memory_samples.append(rss_bytes)
 
     def _run(self) -> None:
+        """Background thread target: sample repeatedly until stop_event is set."""
         while not self.stop_event.wait(self.interval):
             self._sample()
 
     def start(self) -> None:
+        """Prime CPU counters and start the background sampling thread."""
         self._prime_cpu_counters()
 
         self.thread = threading.Thread(
@@ -113,6 +174,12 @@ class ResourceMonitor:
         self.thread.start()
 
     def stop(self) -> dict[str, float]:
+        """Stop sampling, take a final sample, and return resource metrics.
+
+        Returns:
+            Dict with average and peak CPU percentages (raw and system-capacity
+            normalised) and peak RSS in MB.
+        """
         self.stop_event.set()
 
         if self.thread is not None:
@@ -145,6 +212,11 @@ class ResourceMonitor:
 
 
 def main() -> int:
+    """Run the PyMuPDF4LLM baseline pipeline and write Markdown, JSONL, and metrics.
+
+    Returns:
+        0 on success, 1 if the input file does not exist or is not a regular file.
+    """
     args = parse_args()
 
     input_path = Path(args.input)

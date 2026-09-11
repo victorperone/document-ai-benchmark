@@ -59,6 +59,8 @@ def _minimal_metrics() -> dict:
 
 
 class TestMetricsJsonSerializable(unittest.TestCase):
+    """Verifies that the PyMuPDF metrics dict is always JSON-serializable and byte-free."""
+
     def test_minimal_metrics_serializable(self):
         metrics = _minimal_metrics()
         try:
@@ -86,6 +88,8 @@ class TestMetricsJsonSerializable(unittest.TestCase):
 
 
 class TestVersionsBlock(unittest.TestCase):
+    """Verifies that the versions sub-block contains all required package version keys."""
+
     def test_tiktoken_in_versions(self):
         metrics = _minimal_metrics()
         self.assertIn("tiktoken", metrics["run"]["versions"])

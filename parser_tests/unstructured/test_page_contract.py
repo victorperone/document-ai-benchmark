@@ -28,6 +28,8 @@ def _make_el(category: str, text: str, page_num: int | None) -> MagicMock:
 
 
 class TestPageBoundaries(unittest.TestCase):
+    """Tests for _elements_to_page_texts — page routing, ordering, and boundary conditions."""
+
     def test_exactly_n_page_texts_returned(self):
         page_count = 3
         elements = [_make_el("NarrativeText", f"text p{i+1}", i + 1) for i in range(3)]

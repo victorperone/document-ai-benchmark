@@ -11,6 +11,11 @@ from src.parsers import liteparse_v2
 
 
 class LiteParsePreflightTests(unittest.TestCase):
+    """Tests for liteparse_v2.preflight_profile covering all check categories.
+
+    Verifies version, remote-services, image-mode, Tesseract, tessdata, and
+    SmolVLM model checks, as well as the overall result schema contract.
+    """
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #

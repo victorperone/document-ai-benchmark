@@ -15,6 +15,15 @@ QR_PAYLOAD = "DOC-AI-BENCHMARK-QR-2026"
 
 
 def _gf_mul(x: int, y: int) -> int:
+    """Multiply two elements in GF(256) using the QR-code irreducible polynomial 0x11D.
+
+    Args:
+        x: First operand.
+        y: Second operand.
+
+    Returns:
+        Product in GF(256).
+    """
     result = 0
     while y:
         if y & 1:
@@ -25,6 +34,15 @@ def _gf_mul(x: int, y: int) -> int:
 
 
 def _rs_remainder(data: list[int], degree: int) -> list[int]:
+    """Compute the Reed-Solomon error-correction remainder over GF(256).
+
+    Args:
+        data: Data codewords as a list of ints.
+        degree: Number of error-correction codewords to generate.
+
+    Returns:
+        List of ``degree`` Reed-Solomon check bytes.
+    """
     generator = [1]
     root = 1
     for _ in range(degree):
@@ -44,6 +62,16 @@ def _rs_remainder(data: list[int], degree: int) -> list[int]:
 
 
 def _qr_matrix(payload: str) -> list[list[bool]]:
+    """Build a QR Version 2-L boolean matrix for an ASCII payload.
+
+    Uses byte-mode encoding, mask pattern 0, and error-correction level L.
+
+    Args:
+        payload: ASCII string to encode (must fit in 34 data codewords).
+
+    Returns:
+        25×25 boolean matrix where ``True`` means a dark module.
+    """
     # QR version 2-L: 34 data codewords + 10 Reed-Solomon codewords.
     bits = [0, 1, 0, 0]
     raw = payload.encode("ascii")
@@ -132,6 +160,11 @@ def _qr_matrix(payload: str) -> list[list[bool]]:
 
 
 def _qr_image() -> Image.Image:
+    """Render ``QR_PAYLOAD`` as an RGB PIL image with an 8-pixel module scale and 4-module border.
+
+    Returns:
+        Pillow ``Image`` in RGB mode containing the QR code.
+    """
     matrix = _qr_matrix(QR_PAYLOAD)
     scale, border = 8, 4
     image = Image.new("RGB", ((25 + 2 * border) * scale,) * 2, "white")
@@ -146,6 +179,16 @@ def _qr_image() -> Image.Image:
 
 
 def _asset_image(path: Path, *, rotated: bool = False) -> None:
+    """Generate a synthetic raster test image (chart/text region) and save it as PNG.
+
+    The image contains a bordered rectangle, a headline, sample text,
+    a line chart, an ellipse with a label, and optionally a 90-degree rotation.
+
+    Args:
+        path: Destination PNG file path.
+        rotated: When ``True``, the headline and image content reflect a
+            rotated region and the image is rotated 90 degrees before saving.
+    """
     image = Image.new("RGB", (720, 260), "white")
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
@@ -166,15 +209,45 @@ def _asset_image(path: Path, *, rotated: bool = False) -> None:
 
 
 def _pdf_escape(text: str) -> str:
+    """Escape a string for use inside a PDF literal string ``(…)`` operator.
+
+    Args:
+        text: Raw text to escape.
+
+    Returns:
+        Text with ``\\``, ``(``, and ``)`` escaped according to the PDF specification.
+    """
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
 def _image_object(image: Image.Image) -> tuple[bytes, int, int]:
+    """Compress an image to a zlib-deflated raw RGB byte stream suitable for a PDF XObject.
+
+    Args:
+        image: Pillow image in any mode.
+
+    Returns:
+        Tuple of ``(compressed_bytes, width, height)``.
+    """
     rgb = image.convert("RGB")
     return zlib.compress(rgb.tobytes(), 9), rgb.width, rgb.height
 
 
 def _build_pdf(chart: Image.Image, rotated: Image.Image, qr: Image.Image) -> bytes:
+    """Assemble a minimal two-page PDF containing text, table, formula, chart, QR, and rotated region.
+
+    Page 1 is a portrait page with digital text, a drawn table, formula, code, the chart
+    image, and a QR code.  Page 2 carries a ``/Rotate 90`` metadata flag and embeds
+    the rotated raster region.
+
+    Args:
+        chart: PIL image used as the chart/diagram XObject.
+        rotated: PIL image used as the rotated raster region XObject.
+        qr: PIL image used as the QR-code XObject.
+
+    Returns:
+        Raw PDF bytes (PDF 1.7 with uncompressed cross-reference table).
+    """
     objects: list[bytes] = []
 
     def add(value: bytes) -> int:
@@ -258,10 +331,19 @@ def _build_pdf(chart: Image.Image, rotated: Image.Image, qr: Image.Image) -> byt
 
 
 def _sha(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file's byte content.
+
+    Args:
+        path: Path to the file.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main() -> None:
+    """Generate all deep-smoke fixture assets (PNG images, PDF, manifest) under ``DESTINATION``."""
     DESTINATION.mkdir(parents=True, exist_ok=True)
     chart_path = DESTINATION / "chart_text_stamp.png"
     rotated_path = DESTINATION / "rotated_text_region.png"

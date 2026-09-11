@@ -1,3 +1,14 @@
+"""Post-execution and resume-candidate validation for benchmark outputs.
+
+``validate_post_execution`` checks that all selected artifacts were written
+correctly after a parser run.  ``validate_resume_candidate`` checks whether a
+previously written run can be reused without re-running the parser.
+
+Both functions return a dict with a top-level ``ok`` boolean and a list of
+named ``checks``, each with a ``status`` of ``"pass"``, ``"warn"``, or
+``"fail"``.
+"""
+
 from __future__ import annotations
 
 import json
@@ -45,6 +56,16 @@ _ARTIFACT_BYTES_KEY: dict[str, str] = {
 
 
 def make_check(name: str, status: str, detail: str = "") -> dict:
+    """Build a single check record.
+
+    Args:
+        name: Short identifier for the check.
+        status: One of ``"pass"``, ``"warn"``, or ``"fail"``.
+        detail: Optional human-readable explanation appended when non-empty.
+
+    Returns:
+        Dict with keys ``name`` and ``status``, plus ``detail`` when provided.
+    """
     check: dict = {"name": name, "status": status}
     if detail:
         check["detail"] = detail
@@ -58,6 +79,18 @@ def make_result(
     document: str,
     checks: list[dict],
 ) -> dict:
+    """Build a validation result dict from a list of check records.
+
+    Args:
+        parser: Parser identifier.
+        profile: Profile identifier.
+        document: Document basename (including extension).
+        checks: List of check dicts produced by ``make_check``.
+
+    Returns:
+        Dict with ``schema_version``, ``parser``, ``profile``, ``document``,
+        ``ok`` (``True`` when no check failed), and ``checks``.
+    """
     ok = not any(c["status"] == "fail" for c in checks)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -70,10 +103,20 @@ def make_result(
 
 
 def _has_meaningful_text(content: str) -> bool:
+    """Return ``True`` when *content* contains alphanumeric text outside HTML comments."""
     return any(character.isalnum() for character in _HTML_COMMENT_RE.sub("", content))
 
 
 def _inventory_content_expectation(inventory: dict | None) -> bool:
+    """Return the content-expected boolean from a source inventory dict.
+
+    Args:
+        inventory: Parsed source-inventory JSON dict, or ``None``.
+
+    Returns:
+        ``True`` when the inventory indicates text or image content exists,
+        ``False`` when the inventory is absent or proves the PDF is empty.
+    """
     if not inventory:
         return False
     return inventory_requires_content(inventory)[0]
@@ -89,6 +132,28 @@ def validate_post_execution(
     artifact_policy: ArtifactPolicy,
     source_inventory_path: Path | None,
 ) -> dict:
+    """Validate all selected artifacts after a completed parser run.
+
+    Checks that each artifact file exists, is readable UTF-8, and (for text
+    artifacts that are expected to carry content) actually contains
+    alphanumeric text.  Also validates ``metrics.json`` structure and
+    ``document.jsonl`` record integrity.
+
+    Args:
+        output_root: Root directory of benchmark outputs.
+        parser: Parser identifier.
+        profile: Profile identifier.
+        document_path: Path to the source PDF (used for its ``stem`` and
+            ``name``).
+        expected_sha256: SHA-256 hex digest of the source PDF for provenance
+            checks.
+        artifact_policy: Which artifacts were selected for this run.
+        source_inventory_path: Path to the pre-computed source-inventory JSON,
+            or ``None`` to skip inventory checks.
+
+    Returns:
+        Validation result dict (see ``make_result``).
+    """
     checks: list[dict] = []
     paths = build_output_paths(output_root, parser, document_path.stem, profile, create=False)
     doc_name = document_path.name
@@ -211,6 +276,33 @@ def validate_resume_candidate(
     requested_artifacts: ArtifactPolicy,
     expected_fingerprint: str | None = None,
 ) -> dict:
+    """Check whether a previous run's output can be reused without re-running.
+
+    Performs a series of checks in strict order; returns early on the first
+    failure so downstream checks do not run on corrupt state.  Checks include:
+
+    * Source inventory present, complete, and matching the current SHA-256.
+    * ``metrics.json`` present, readable, and matching the current
+      parser/profile/document provenance.
+    * Saved artifact selection covers every requested artifact.
+    * Optional execution fingerprint match to detect stale cached output.
+    * Content-expected consistency between the inventory and saved metrics.
+    * Each requested artifact file exists and (where recorded) matches its
+      registered byte count and SHA-256.
+
+    Args:
+        output_root: Root directory of benchmark outputs.
+        parser: Parser identifier.
+        profile: Profile identifier.
+        document_path: Path to the source PDF.
+        expected_sha256: SHA-256 hex digest of the source PDF.
+        requested_artifacts: Artifacts required for the current run.
+        expected_fingerprint: Optional execution fingerprint to compare
+            against the saved value.  ``None`` skips fingerprint checking.
+
+    Returns:
+        Validation result dict (see ``make_result``).
+    """
     checks: list[dict] = []
     paths = build_output_paths(output_root, parser, document_path.stem, profile, create=False)
     doc_name = document_path.name
@@ -409,6 +501,18 @@ def _check_source_inventory(
     expected_sha256: str,
     checks: list[dict],
 ) -> tuple[int | None, dict | None]:
+    """Load and validate a source-inventory JSON file, appending to *checks*.
+
+    Args:
+        inv_path: Path to the inventory JSON file.
+        doc_name: Expected ``file`` field value (PDF basename).
+        expected_sha256: Expected ``sha256`` field value.
+        checks: List to which check results are appended in place.
+
+    Returns:
+        Tuple of ``(pages, inventory_dict)`` on success, or ``(None, None)``
+        / ``(None, partial_dict)`` on failure.
+    """
     check_name = "source inventory"
     if not inv_path.is_file():
         checks.append(make_check(check_name, "fail", "file not found"))
@@ -448,6 +552,21 @@ def _validate_native_dir(
     parser: str,
     profile: str,
 ) -> list[dict]:
+    """Validate the native bundle directory against its ``manifest.json``.
+
+    Checks manifest structure, bundle status, declared file sizes and
+    SHA-256 digests, and that no unlisted files exist in the bundle.
+
+    Args:
+        artifact_path: Path to the ``native/`` directory.
+        check_name: Label used in the returned check records.
+        parser: Expected ``parser`` value in the manifest.
+        profile: Expected ``profile`` value in the manifest.
+
+    Returns:
+        List of check dicts (a single ``"pass"`` entry on success, or one
+        ``"fail"`` entry describing the first violation).
+    """
     checks: list[dict] = []
     if not artifact_path.is_dir():
         checks.append(make_check(check_name, "fail", "directory not found"))
@@ -586,6 +705,27 @@ def _load_and_check_metrics(
     paths,
     checks: list[dict],
 ) -> dict | None:
+    """Load ``metrics.json``, validate its structure, and append check results.
+
+    Verifies schema version, required blocks, provenance fields, artifact
+    selection, byte-count consistency, and content-validation entries.
+
+    Args:
+        metrics_path: Path to ``metrics.json``.
+        parser: Expected parser identifier.
+        profile: Expected profile identifier.
+        doc_name: Expected document basename.
+        doc_stem: Expected document stem (without extension).
+        expected_sha256: Expected SHA-256 digest of the source PDF.
+        artifact_policy: Artifact selection for this run.
+        source_pages: Page count from the source inventory, or ``None``.
+        paths: Resolved ``BenchmarkPaths`` for this run.
+        checks: List to which check records are appended in place.
+
+    Returns:
+        Parsed metrics dict on success, or ``None`` if the file could not be
+        loaded.
+    """
     if not metrics_path.is_file():
         checks.append(make_check("artifact metrics.json", "fail", "file not found"))
         return None
@@ -755,6 +895,18 @@ def _load_and_check_metrics(
 
 
 def _check_processing(proc_block: dict, doc_block: dict, checks: list[dict]) -> None:
+    """Validate the ``processing`` block of a metrics dict.
+
+    Checks numeric type constraints, range consistency
+    (``failed_pages == pages_total - pages_processed``), and emits warnings
+    for partial processing or empty output pages.
+
+    Args:
+        proc_block: The ``metrics["processing"]`` dict.
+        doc_block: The ``metrics["document"]`` dict (used for page-count
+            cross-check).
+        checks: List to which check records are appended in place.
+    """
     pt = proc_block.get("pages_total")
     pp = proc_block.get("pages_processed")
     fp = proc_block.get("failed_pages")
@@ -817,6 +969,21 @@ def _validate_document_jsonl(
     metrics: dict | None,
     checks: list[dict],
 ) -> None:
+    """Validate the structure and provenance of ``document.jsonl``.
+
+    Checks that every line is valid JSON, the record count matches
+    ``metrics.document.pages``, page numbers form a contiguous sequence
+    starting at 1, and each record's ``source_file``, ``parser``, and
+    ``profile`` fields match the current run.
+
+    Args:
+        path: Path to the ``document.jsonl`` file.
+        parser: Expected parser identifier.
+        profile: Expected profile identifier.
+        doc_name: Expected ``source_file`` value in each record.
+        metrics: Parsed metrics dict for cross-checking, or ``None``.
+        checks: List to which check records are appended in place.
+    """
     check_name = "artifact document.jsonl"
     try:
         content = path.read_text(encoding="utf-8")
@@ -874,6 +1041,17 @@ def _validate_removed_content_jsonl(
     metrics: dict | None,
     checks: list[dict],
 ) -> None:
+    """Validate that ``removed_content.jsonl`` is well-formed JSONL.
+
+    Each non-blank line must be valid JSON.  When metrics are available, the
+    record count is cross-checked against
+    ``metrics.normalization.removed_records``.
+
+    Args:
+        path: Path to the ``removed_content.jsonl`` file.
+        metrics: Parsed metrics dict for cross-checking, or ``None``.
+        checks: List to which check records are appended in place.
+    """
     check_name = "artifact removed_content.jsonl"
     try:
         content = path.read_text(encoding="utf-8")

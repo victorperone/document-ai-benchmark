@@ -1,3 +1,4 @@
+"""Show the benchmark execution plan (input files, parser profiles, output paths) without running."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +11,7 @@ CONFIG_PATH = ROOT / "config" / "benchmark_profiles.json"
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the benchmark plan viewer."""
     parser = argparse.ArgumentParser(
         description="Show benchmark execution plan without running it."
     )
@@ -23,6 +25,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Print the benchmark execution plan for the selected suite without processing any documents."""
     args = parse_args()
 
     config = json.loads(

@@ -31,11 +31,27 @@ _SHUTDOWN_TIMEOUT = 10.0
 
 
 class VisualWorkerError(RuntimeError):
-    pass
+    """Raised when the visual enrichment worker process fails or times out."""
 
 
 class VisualWorkerClient:
-    """Single-use client: create, use, then call shutdown()."""
+    """Single-use client that manages a visual enrichment worker subprocess.
+
+    Spawns ``visual_worker.py`` as a child process, waits for it to signal
+    readiness (``{"status": "ready"}``), then serialises ``VisualRequest``
+    objects over stdin and deserialises ``VisualResponse`` objects from
+    stdout. Stdout/stderr are drained by background daemon threads to
+    prevent pipe-buffer deadlocks.
+
+    On Windows the child is assigned to a Job Object so it is terminated
+    if the parent exits unexpectedly. On POSIX a new session is created for
+    the same reason.
+
+    Usage::
+
+        with VisualWorkerClient(language="pt", smolvlm_model_path="/models/smolvlm") as client:
+            response = client.process(request)
+    """
 
     def __init__(
         self,
@@ -47,6 +63,23 @@ class VisualWorkerClient:
         det_model_dir: str | None = None,
         rec_model_dir: str | None = None,
     ) -> None:
+        """Launch the worker process and block until it is ready.
+
+        Args:
+            language: OCR language code forwarded to the worker (e.g. ``"pt"``).
+            smolvlm_model_path: Local directory path to the SmolVLM model.
+            python_executable: Python interpreter to use for the child process.
+                Defaults to ``sys.executable``.
+            resource_monitor: Optional monitor object that exposes a
+                ``register_child(pid)`` method; used to track the worker's
+                RSS alongside the parent parser.
+            det_model_dir: Optional PaddleOCR text-detection model directory.
+            rec_model_dir: Optional PaddleOCR text-recognition model directory.
+
+        Raises:
+            VisualWorkerError: If the worker process fails to start or reports
+                an ``init_error`` during model loading.
+        """
         self._language = language
         self._smolvlm_model_path = smolvlm_model_path
         self._resource_monitor = resource_monitor
@@ -110,6 +143,11 @@ class VisualWorkerClient:
             raise
 
     def _drain_stdout(self) -> None:
+        """Read all lines from the worker's stdout into ``_stdout_queue``.
+
+        Runs in a daemon thread. Puts ``None`` as a sentinel when the pipe
+        is exhausted so callers can detect that the worker has exited.
+        """
         assert self._proc is not None
         assert self._proc.stdout is not None
         try:
@@ -119,15 +157,31 @@ class VisualWorkerClient:
             self._stdout_queue.put(None)
 
     def _drain_stderr(self) -> None:
+        """Read all lines from the worker's stderr into ``_stderr_tail``.
+
+        Runs in a daemon thread. The deque is bounded to 100 lines so
+        error messages remain available for diagnostics without growing
+        unboundedly.
+        """
         assert self._proc is not None
         assert self._proc.stderr is not None
         for line in self._proc.stderr:
             self._stderr_tail.append(line.rstrip("\r\n"))
 
     def _error_tail(self) -> str:
+        """Return the last captured stderr lines as a single string."""
         return "\n".join(self._stderr_tail)
 
     def _send_line(self, line: str) -> None:
+        """Write a single line to the worker's stdin and flush.
+
+        Args:
+            line: A single JSON string without a trailing newline.
+
+        Raises:
+            VisualWorkerError: If the worker process or its stdin pipe is
+                no longer available.
+        """
         if self._proc is None or self._proc.stdin is None:
             raise VisualWorkerError("worker process not running")
         self._proc.stdin.write(line + "\n")
@@ -138,6 +192,23 @@ class VisualWorkerClient:
         timeout: float | None,
         operation: str,
     ) -> str:
+        """Read one response line from the worker's stdout queue.
+
+        Args:
+            timeout: Seconds to wait before raising ``VisualWorkerError``.
+                Pass ``None`` to block indefinitely (used during startup and
+                request processing where the worker is expected to reply
+                eventually).
+            operation: Human-readable label for the current operation,
+                included in error messages.
+
+        Returns:
+            The stripped response line.
+
+        Raises:
+            VisualWorkerError: If the queue times out, the worker process is
+                gone, or the stdout pipe has been closed.
+        """
         if self._proc is None:
             raise VisualWorkerError("worker process not running")
         try:
@@ -162,6 +233,18 @@ class VisualWorkerClient:
         return line.strip()
 
     def _wait_for_ready(self) -> None:
+        """Block until the worker signals ``{"status": "ready"}``.
+
+        Intermediate status lines such as ``"loading_ocr"`` and
+        ``"loading_vlm"`` are silently consumed. Non-JSON lines are
+        skipped. Raises on ``"init_error"`` or if the worker exits
+        prematurely.
+
+        Raises:
+            VisualWorkerError: If the worker reports an initialisation
+                failure or the stdout pipe closes before ``"ready"`` is
+                received.
+        """
         while True:
             try:
                 raw = self._read_line(
@@ -191,6 +274,29 @@ class VisualWorkerClient:
                 )
 
     def process(self, request: VisualRequest) -> VisualResponse:
+        """Send a visual enrichment request and return the response.
+
+        Serialises the request to JSON, writes it to the worker's stdin,
+        then reads and deserialises the response from stdout. The
+        ``image_base64`` field is cleared from the local ``VisualRequest``
+        copy immediately after the payload is written to minimise the
+        time sensitive image data stays in memory.
+
+        This method is thread-safe: concurrent callers are serialised by
+        an internal lock because the worker processes one request at a time.
+
+        Args:
+            request: The enrichment request to send.
+
+        Returns:
+            A ``VisualResponse`` populated from the worker's JSON reply.
+            On JSON parse failure the response carries ``status="error"``
+            and a description of the malformed payload.
+
+        Raises:
+            VisualWorkerError: If the worker process has stopped responding
+                or its stdout pipe has closed.
+        """
         with self._lock:
             payload = {
                 "request_id": request.request_id,
@@ -245,6 +351,15 @@ class VisualWorkerClient:
             )
 
     def shutdown(self) -> None:
+        """Terminate the worker process and release all resources.
+
+        Closes the worker's stdin pipe to signal EOF, waits up to
+        ``_SHUTDOWN_TIMEOUT`` seconds for a clean exit, and forcefully
+        terminates the process tree if the timeout expires. The Windows
+        Job Object (if any) is always closed before returning.
+
+        Safe to call multiple times; subsequent calls are no-ops.
+        """
         if self._proc is None:
             return
         try:
@@ -266,7 +381,9 @@ class VisualWorkerClient:
             self._proc = None
 
     def __enter__(self) -> "VisualWorkerClient":
+        """Return self to support use as a context manager."""
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Call ``shutdown()`` when exiting the context manager."""
         self.shutdown()

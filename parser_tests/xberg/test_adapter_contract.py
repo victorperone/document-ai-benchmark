@@ -44,6 +44,10 @@ def _make_inventory(pages: int = 1) -> dict:
 
 
 class TestAdapterContract(unittest.TestCase):
+    """End-to-end adapter contract test: verifies that xberg_v2.main() calls the resource
+    monitor, finalize_artifacts, and metrics writer as expected.
+    """
+
     def _run_main(self, tmp_path: Path, profile: str = "native_markdown"):
         import hashlib
         import importlib
@@ -197,6 +201,8 @@ class TestAdapterContract(unittest.TestCase):
 
 
 class TestXbergExtractInput(unittest.TestCase):
+    """Verifies that _extract constructs an ExtractInput with kind='uri' for local PDF paths."""
+
     def test_local_pdf_uses_uri_contract(self) -> None:
         fake_result = object()
         fake_extract = AsyncMock(return_value=fake_result)

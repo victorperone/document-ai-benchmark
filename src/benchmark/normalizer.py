@@ -1,3 +1,17 @@
+"""Markdown normalisation: header/footer removal and whitespace cleanup.
+
+Implements two modes:
+
+* **per-page** (``normalize_pages``): detects repeated header and footer lines
+  across pages and removes them, then joins the cleaned pages.
+* **global** (``normalize_global_markdown``): applies only whitespace
+  normalisation to a single Markdown stream when the parser cannot supply
+  page-level boundaries.
+
+Results are stored in ``metrics.json`` under ``normalization`` and the removed
+lines are written to ``removed_content.jsonl``.
+"""
+
 from __future__ import annotations
 
 import math
@@ -32,6 +46,18 @@ PAGE_OF_RE = re.compile(
 
 @dataclass
 class NormalizationResult:
+    """Output of the normaliser for a single document.
+
+    Attributes:
+        raw_markdown: The un-normalised source pages joined into one string,
+            used as the content of ``raw.md``.
+        clean_markdown: The normalised content written to ``document.md``.
+        clean_page_texts: Per-page strings after normalisation (same length
+            as the input page list).
+        removed_records: Audit trail of every line removed, written to
+            ``removed_content.jsonl``.
+    """
+
     raw_markdown: str
     clean_markdown: str
     clean_page_texts: list[str]
@@ -43,6 +69,16 @@ class NormalizationResult:
 def _normalize_text(
     value: str,
 ) -> str:
+    """Apply NFKC Unicode normalisation, strip, collapse whitespace, and casefold.
+
+    Used to produce canonical comparison keys for header/footer detection.
+
+    Args:
+        value: Raw text string.
+
+    Returns:
+        Normalised comparison key.
+    """
     value = unicodedata.normalize(
         "NFKC",
         value,
@@ -58,6 +94,19 @@ def _candidate_key(
     *,
     normalize_page_numbers: bool,
 ) -> str:
+    """Return the comparison key for a potential header/footer candidate line.
+
+    When *normalize_page_numbers* is ``True``, bare page numbers and
+    ``N of M`` patterns are mapped to the placeholder
+    ``"<page-number>"`` so they are treated as equivalent across pages.
+
+    Args:
+        line: A single line from a page.
+        normalize_page_numbers: Whether to collapse page-number patterns.
+
+    Returns:
+        Normalised key string, or an empty string for blank lines.
+    """
     normalized = _normalize_text(
         line
     )
@@ -82,6 +131,14 @@ def _candidate_key(
 def _non_empty_line_indexes(
     lines: list[str],
 ) -> list[int]:
+    """Return the indices of non-blank lines in *lines*.
+
+    Args:
+        lines: List of text lines (may contain whitespace-only entries).
+
+    Returns:
+        List of zero-based indices where ``lines[i].strip()`` is truthy.
+    """
     return [
         index
         for index, line in enumerate(
@@ -117,6 +174,29 @@ def normalize_pages(
     page_texts: list[str],
     config: dict[str, Any],
 ) -> NormalizationResult:
+    """Normalise per-page Markdown by removing repeated header/footer lines.
+
+    Analyses the first *header_candidate_lines* and last
+    *footer_candidate_lines* non-blank lines of each page.  Lines that appear
+    on at least the required number of pages (controlled by
+    *minimum_repeated_page_fraction* and *minimum_repeated_page_count*) are
+    removed.  The cleaned pages are joined and returned alongside an audit
+    trail.
+
+    Args:
+        page_texts: Ordered list of per-page Markdown strings.
+        config: Normalisation config dict (from ``get_normalization_config``).
+            Recognised keys: ``header_footer_cleanup`` (bool),
+            ``header_candidate_lines`` (int), ``footer_candidate_lines``
+            (int), ``minimum_repeated_page_fraction`` (float),
+            ``minimum_repeated_page_count`` (int),
+            ``normalize_page_numbers`` (bool),
+            ``trim_page_outer_whitespace`` (bool).
+
+    Returns:
+        ``NormalizationResult`` with raw and clean Markdown, per-page clean
+        texts, and the list of removed-line records.
+    """
     cleanup_enabled = bool(
         config.get(
             "header_footer_cleanup",

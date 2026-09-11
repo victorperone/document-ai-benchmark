@@ -1,3 +1,9 @@
+"""Atomic file-writing utilities for benchmark output files.
+
+All writes go through ``atomic_write_text`` which guarantees that a reader
+will never see a partial file, even if the process is interrupted mid-write.
+"""
+
 from __future__ import annotations
 
 import json
@@ -36,6 +42,13 @@ def write_json(
     path: Path,
     data: Any,
 ) -> None:
+    """Serialise *data* to pretty-printed JSON and write it atomically.
+
+    Args:
+        path: Destination file path.  Parent directories are created if
+            absent.
+        data: JSON-serialisable Python object.
+    """
     path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -50,6 +63,16 @@ def write_jsonl(
     path: Path,
     records: Iterable[dict[str, Any]],
 ) -> None:
+    """Write *records* as newline-delimited JSON and flush atomically.
+
+    Each record is serialised to a single line.  An empty iterable produces
+    an empty file (zero bytes).
+
+    Args:
+        path: Destination file path.  Parent directories are created if
+            absent.
+        records: Iterable of JSON-serialisable dicts.
+    """
     path.parent.mkdir(
         parents=True,
         exist_ok=True,

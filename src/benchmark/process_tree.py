@@ -1,3 +1,12 @@
+"""Cross-platform subprocess runner with full process-tree supervision.
+
+``run_process_tree`` launches a command and guarantees that the entire
+descendant process tree is terminated if a timeout occurs—using Windows Job
+Objects on Windows and POSIX process groups on Linux/macOS.  An optional
+*tee_log* file receives stdout/stderr in real time while the output is
+simultaneously captured and returned.
+"""
+
 from __future__ import annotations
 
 import io
@@ -128,6 +137,16 @@ def _windows_job_object() -> object | None:
 
 
 def _assign_windows_job(job: object | None, process: subprocess.Popen[str]) -> bool:
+    """Assign *process* to the Windows Job Object in *job*.
+
+    Args:
+        job: Opaque ``(kernel32, handle)`` pair from ``_windows_job_object``,
+            or ``None``.
+        process: The freshly launched subprocess.
+
+    Returns:
+        ``True`` when assignment succeeded, ``False`` otherwise.
+    """
     if job is None:
         return False
     try:
@@ -198,6 +217,12 @@ def terminate_process_tree(
 
 
 def close_windows_job(windows_job: object | None) -> None:
+    """Release the Windows Job Object handle if one was created.
+
+    Args:
+        windows_job: Opaque ``(kernel32, handle)`` pair from
+            ``_windows_job_object``, or ``None``.
+    """
     if windows_job is None:
         return
     try:

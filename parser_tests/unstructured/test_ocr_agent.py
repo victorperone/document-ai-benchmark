@@ -12,6 +12,8 @@ _OCR_PROFILES = ("auto_ocr", "hi_res_tables", "full_cpu_local", "auto_general", 
 
 
 class TestOcrAgentKeys(unittest.TestCase):
+    """Verifies that OCR profiles specify ocr_agent and table_ocr_agent as tesseract."""
+
     def _p(self, name: str) -> dict:
         return get_profile(PARSER_NAME, name)
 
@@ -36,6 +38,8 @@ class TestOcrAgentKeys(unittest.TestCase):
 
 
 class TestAutoProfiles(unittest.TestCase):
+    """Verifies key/value contracts for the auto_general and auto_quality profiles."""
+
     def _p(self, name: str) -> dict:
         return get_profile(PARSER_NAME, name)
 

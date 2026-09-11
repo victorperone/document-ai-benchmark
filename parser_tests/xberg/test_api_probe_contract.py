@@ -8,6 +8,8 @@ XBERG_REQUIRED_VERSION = "1.0.14"
 
 
 class TestXbergImport(unittest.TestCase):
+    """Verifies that the installed xberg package exposes the required version and top-level API."""
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -47,6 +49,8 @@ class TestXbergImport(unittest.TestCase):
 
 
 class TestXbergConfigClasses(unittest.TestCase):
+    """Verifies that required configuration dataclasses (OcrConfig, TesseractConfig) are exported."""
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -72,6 +76,8 @@ class TestXbergConfigClasses(unittest.TestCase):
 
 
 class TestXbergResultTypes(unittest.TestCase):
+    """Verifies that at least one extraction-result type is exported from the xberg package."""
+
     @classmethod
     def setUpClass(cls):
         try:

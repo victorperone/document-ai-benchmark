@@ -1,3 +1,4 @@
+"""Runtime validation campaign runner: execute preflight, parse, and resume-check phases."""
 from __future__ import annotations
 
 import argparse
@@ -19,10 +20,12 @@ VALID_STATUSES = {"PASS", "EXPECTED_BLOCK", "ENVIRONMENT_BLOCK", "IMPLEMENTATION
 
 
 def load_campaign() -> dict:
+    """Load and return the runtime campaign configuration from ``CAMPAIGN_CONFIG_PATH``."""
     return json.loads(CAMPAIGN_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
 def load_benchmark_config() -> dict:
+    """Load and return the benchmark profiles configuration from ``BENCHMARK_CONFIG_PATH``."""
     return json.loads(BENCHMARK_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
@@ -50,6 +53,11 @@ def build_run_batch_cmd(phase: dict, step: str) -> list[str]:
 
 
 def print_plan(phases: list[dict]) -> None:
+    """Print a human-readable execution plan table for the given campaign phases.
+
+    Args:
+        phases: List of phase dicts from the campaign configuration.
+    """
     print()
     print("RUNTIME VALIDATION CAMPAIGN — PLAN")
     print("=" * 72)
@@ -63,6 +71,22 @@ def print_plan(phases: list[dict]) -> None:
 
 
 def run_phase(phase: dict, input_dir: str | None) -> dict:
+    """Execute a single campaign phase: preflight → execute → resume-check.
+
+    Stops early if preflight or execution fails and returns a result dict
+    reflecting the stopping point.
+
+    Args:
+        phase: Phase configuration dict with ``name``, ``suite``, ``output_root``,
+            and optional ``limit`` keys.
+        input_dir: Optional override for the PDF input directory, or ``None`` to
+            use the benchmark configuration default.
+
+    Returns:
+        Dict with ``phase``, ``suite``, ``limit``, ``preflight_exit_code``,
+        ``execution_exit_code``, ``resume_exit_code``, ``status``, ``output_root``,
+        ``started_at``, and ``elapsed_seconds`` fields.
+    """
     name = phase["name"]
     started_at = datetime.now().isoformat()
     t0 = time.monotonic()
@@ -140,6 +164,12 @@ def run_phase(phase: dict, input_dir: str | None) -> dict:
 
 
 def write_report(results: list[dict], ts: str) -> None:
+    """Write a JSON and Markdown campaign report to the logs directory.
+
+    Args:
+        results: List of phase result dicts returned by ``run_phase``.
+        ts: Timestamp string (``YYYYMMDD_HHMMSS``) used in the output file names.
+    """
     LOGS_DIR.mkdir(exist_ok=True)
     json_path = LOGS_DIR / f"runtime_campaign_{ts}.json"
     md_path = LOGS_DIR / f"runtime_campaign_{ts}.md"
@@ -173,6 +203,7 @@ def write_report(results: list[dict], ts: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the runtime campaign runner."""
     p = argparse.ArgumentParser(
         description="Runtime validation campaign runner. Safe by default: prints plan only."
     )
@@ -201,6 +232,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Entry point: load campaign, execute selected phases, and write the report."""
     args = parse_args()
     campaign = load_campaign()
     benchmark_config = load_benchmark_config()

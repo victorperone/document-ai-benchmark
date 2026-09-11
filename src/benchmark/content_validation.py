@@ -1,3 +1,10 @@
+"""Source-inventory content-expectation helper.
+
+Determines, from the objective PDF source inventory, whether a parser is
+expected to produce non-empty text output.  This drives the
+``content_expected`` flag used in artifact content validation.
+"""
+
 from __future__ import annotations
 
 from typing import Any

@@ -73,6 +73,13 @@ class PictureItem:
 class DoclingPictureDescriptionTests(
     unittest.TestCase,
 ):
+    """Tests for Docling picture-description configuration, preflight, and serialization.
+
+    Covers the ocr_auto_visual profile contract, _configure_picture_description
+    validation, preset/prompt/threshold rejection rules, preflight checks, and
+    _serialize_item_for_page output for picture items.
+    """
+
     def setUp(self) -> None:
         self.profile = copy.deepcopy(
             get_profile(

@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def _run_discover(
     start_dir: str,
 ) -> int:
+    """Invoke ``python -m unittest discover`` on ``start_dir`` and return the exit code."""
     return subprocess.run(
         [
             sys.executable,
@@ -53,6 +54,11 @@ def _run_discover(
 
 
 def main() -> int:
+    """Compile all source directories and run the common unit test suite.
+
+    Returns:
+        ``0`` on success, ``1`` on any compile or test failure.
+    """
     print("=" * 60)
     print("STEP 1 - Compile")
     print("=" * 60)

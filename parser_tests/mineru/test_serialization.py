@@ -58,6 +58,8 @@ def _minimal_metrics() -> dict:
 
 
 class TestMetricsJsonSerializable(unittest.TestCase):
+    """Verifies that the MinerU metrics dict is always JSON-serializable and byte-free."""
+
     def test_minimal_metrics_serializable(self):
         metrics = _minimal_metrics()
         try:
@@ -84,6 +86,8 @@ class TestMetricsJsonSerializable(unittest.TestCase):
 
 
 class TestResolvedConfigBlock(unittest.TestCase):
+    """Verifies that the resolved_config sub-block is present with required keys."""
+
     def test_resolved_config_present(self):
         metrics = _minimal_metrics()
         self.assertIn("resolved_config", metrics["run"])
@@ -106,6 +110,8 @@ class TestResolvedConfigBlock(unittest.TestCase):
 
 
 class TestMineruNativeBlock(unittest.TestCase):
+    """Verifies presence and content of the mineru_native sub-block in metrics output."""
+
     def test_mineru_native_block_present(self):
         metrics = _minimal_metrics()
         self.assertIn("mineru_native", metrics)

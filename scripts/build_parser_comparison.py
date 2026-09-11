@@ -1,3 +1,4 @@
+"""Build a PyMuPDF-vs-Docling comparison table for the native (OCR-disabled) profile."""
 from __future__ import annotations
 
 import argparse
@@ -22,6 +23,7 @@ DOCLING_PROFILE = "native"
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the PyMuPDF-vs-Docling comparison builder."""
     p = argparse.ArgumentParser(
         description=(
             "Build PyMuPDF vs Docling comparison "
@@ -49,6 +51,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Load PyMuPDF and Docling metrics and write comparison CSV and Markdown."""
     args = parse_args()
 
     try:

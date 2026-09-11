@@ -27,6 +27,26 @@ def _load_paddleocr(
     det_model_dir: str | None = None,
     rec_model_dir: str | None = None,
 ) -> Any:
+    """Instantiate and return a PaddleOCR engine.
+
+    When both model directories are supplied, the ``lang`` parameter is
+    omitted so that the explicit paths are authoritative. When either
+    directory is absent the language code is passed as a model-selection
+    shortcut.
+
+    Args:
+        language: ISO 639-2/BCP-47 language code forwarded to PaddleOCR
+            when explicit model paths are not fully specified (e.g. ``"pt"``).
+        det_model_dir: Optional local directory containing the text-detection
+            model. Must be paired with ``rec_model_dir`` to suppress the
+            ``lang`` shortcut.
+        rec_model_dir: Optional local directory containing the
+            text-recognition model. Must be paired with ``det_model_dir``
+            to suppress the ``lang`` shortcut.
+
+    Returns:
+        An initialised ``PaddleOCR`` instance ready for inference.
+    """
     from paddleocr import PaddleOCR  # type: ignore[import]
     kwargs: dict[str, Any] = {
         "use_doc_orientation_classify": False,
@@ -46,6 +66,20 @@ def _load_paddleocr(
 
 
 def _load_smolvlm(model_path: str) -> tuple[Any, Any]:
+    """Load a SmolVLM vision-language model from a local directory.
+
+    The model and processor are loaded in CPU-only, inference mode.
+    ``local_files_only=True`` prevents any download attempts.
+
+    Args:
+        model_path: Local filesystem path to the pre-downloaded SmolVLM
+            model directory (must contain ``config.json`` and weight files).
+
+    Returns:
+        A ``(processor, model)`` tuple where ``processor`` is the
+        ``AutoProcessor`` and ``model`` is the ``AutoModelForImageTextToText``
+        instance set to ``eval()`` mode on CPU.
+    """
     from transformers import AutoProcessor, AutoModelForImageTextToText  # type: ignore[import]
     import torch  # type: ignore[import]
 
@@ -64,6 +98,21 @@ def _load_smolvlm(model_path: str) -> tuple[Any, Any]:
 
 
 def _run_ocr(ocr_engine: Any, image_bytes: bytes, language: str) -> str:
+    """Run PaddleOCR on raw image bytes and return the extracted text.
+
+    Converts the image to RGB before inference and walks multiple possible
+    result shapes that PaddleOCR may return depending on version.
+
+    Args:
+        ocr_engine: An initialised ``PaddleOCR`` instance.
+        image_bytes: Raw PNG (or other PIL-readable) image data.
+        language: Language code used for logging/context; not forwarded
+            to the engine at inference time.
+
+    Returns:
+        Recognised text lines joined by newlines. Empty string if no text
+        is detected.
+    """
     from PIL import Image  # type: ignore[import]
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     result = ocr_engine.predict(img)
@@ -99,6 +148,26 @@ def _run_description(
     prompt: str,
     model_path: str,
 ) -> str:
+    """Generate a textual description of an image using SmolVLM.
+
+    Applies the chat template, runs greedy decoding on CPU, and strips
+    the input tokens from the output before decoding.
+
+    Args:
+        processor: ``AutoProcessor`` instance for SmolVLM.
+        model: ``AutoModelForImageTextToText`` instance in eval mode.
+        image_bytes: Raw image data to describe.
+        prompt: Instruction text forwarded to the model.
+        model_path: Model path string used only in the ``RuntimeError``
+            message when the model returns an empty response.
+
+    Returns:
+        The generated description string (stripped of leading/trailing
+        whitespace).
+
+    Raises:
+        RuntimeError: If the model returns an empty decoded string.
+    """
     from PIL import Image  # type: ignore[import]
     import torch  # type: ignore[import]
 
@@ -151,6 +220,28 @@ def _process_request(
     smolvlm_model_path: str,
     language: str,
 ) -> dict:
+    """Process a single enrichment request dict and return a response dict.
+
+    Runs OCR first; if OCR produces text, appends it to the prompt before
+    calling the VLM so the model focuses on additional visual information
+    rather than re-transcribing known text. Either step may fail
+    independently — the response status is ``"error"`` only when both
+    ``ocr_text`` and ``description`` remain empty after all attempts.
+
+    Args:
+        req: Decoded JSON object from stdin. Expected keys: ``request_id``,
+            ``image_base64``, and optionally ``prompt``.
+        ocr_engine: Initialised PaddleOCR instance.
+        smolvlm_processor: SmolVLM processor.
+        smolvlm_model: SmolVLM model in eval mode.
+        smolvlm_model_path: Model directory path, included in the response
+            for traceability.
+        language: Language code forwarded to ``_run_ocr``.
+
+    Returns:
+        Dict matching the ``VisualResponse`` field layout, suitable for
+        JSON serialisation and writing to stdout.
+    """
     request_id = req.get("request_id", "")
     image_b64 = req.get("image_base64", "")
     prompt = req.get("prompt", "Descreva o conteúdo desta imagem de forma objetiva.")
@@ -215,6 +306,22 @@ def _process_request(
 
 
 def main() -> None:
+    """Entry point for the visual enrichment worker child process.
+
+    Reads a JSON configuration object from the first stdin line, loads
+    PaddleOCR and SmolVLM, signals readiness by writing
+    ``{"status": "ready"}`` to stdout, then processes JSON-Lines requests
+    in a loop until stdin is closed.
+
+    Configuration keys (first stdin line):
+        language: OCR language code (default ``"pt"``).
+        smolvlm_model_path: Local path to the SmolVLM model directory.
+        det_model_dir: Optional PaddleOCR detection model directory.
+        rec_model_dir: Optional PaddleOCR recognition model directory.
+
+    Exits with code 1 on configuration parse errors or model load failures,
+    writing an ``{"status": "init_error", ...}`` JSON line to stdout first.
+    """
     # Config arrives via first stdin line as JSON
     try:
         config_line = sys.stdin.readline()

@@ -10,6 +10,8 @@ PARSER_NAME = "pymupdf"
 
 
 class TestApiKwargsSet(unittest.TestCase):
+    """Verifies the _TO_MARKDOWN_ARGS frozenset contains exactly the expected kwargs."""
+
     def test_to_markdown_args_is_frozenset(self):
         self.assertIsInstance(_TO_MARKDOWN_ARGS, frozenset)
 
@@ -33,6 +35,8 @@ class TestApiKwargsSet(unittest.TestCase):
 
 
 class TestMutualExclusionConstraints(unittest.TestCase):
+    """Verifies that no profile sets both write_images and embed_images to True simultaneously."""
+
     def test_full_cpu_local_no_dual_image_embedding(self):
         p = get_profile(PARSER_NAME, "full_cpu_local")
         self.assertFalse(
@@ -53,6 +57,8 @@ class TestMutualExclusionConstraints(unittest.TestCase):
 
 
 class TestProfileKeysCoverage(unittest.TestCase):
+    """Verifies that every profile key that maps to a to_markdown kwarg is properly declared."""
+
     def test_profile_keys_align_with_to_markdown_args(self):
         # Keys that map from profile → to_markdown (excluding layout_module which is handled separately)
         profile_to_kwarg_map = {

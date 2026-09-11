@@ -54,6 +54,8 @@ def _minimal_metrics() -> dict:
 
 
 class TestMetricsJsonSerializable(unittest.TestCase):
+    """Verifies that the PaddleOCR metrics dict is always JSON-serializable and byte-free."""
+
     def test_minimal_metrics_serializable(self):
         metrics = _minimal_metrics()
         try:
@@ -80,6 +82,8 @@ class TestMetricsJsonSerializable(unittest.TestCase):
 
 
 class TestPaddleocrNativeBlock(unittest.TestCase):
+    """Verifies presence and content of the paddleocr_native sub-block in metrics output."""
+
     def test_paddleocr_native_present(self):
         metrics = _minimal_metrics()
         self.assertIn("paddleocr_native", metrics)

@@ -1,3 +1,10 @@
+"""Runtime path resolution for outputs, data, models, and virtual environments.
+
+Centralises all path logic so that adapters and the orchestrator can switch
+between ``"docker"`` and ``"host"`` runtimes by changing a single string, and
+never need to hard-code filesystem roots.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -44,10 +51,27 @@ _PARSER_MODEL_COMPONENT: dict[str, str] = {
 
 
 def project_root() -> Path:
+    """Return the absolute path to the repository root.
+
+    Returns:
+        Resolved ``Path`` two levels above this module's ``src/benchmark``
+        directory.
+    """
     return _PROJECT_ROOT
 
 
 def resolve_output_root(runtime: str) -> Path:
+    """Return the root directory where benchmark outputs are written.
+
+    Args:
+        runtime: Either ``"docker"`` or ``"host"``.
+
+    Returns:
+        Absolute path to the output root for the given runtime.
+
+    Raises:
+        ValueError: If *runtime* is not a recognised value.
+    """
     if runtime == RUNTIME_DOCKER:
         return _DOCKER_OUTPUT_ROOT
     if runtime == RUNTIME_HOST:
@@ -58,6 +82,17 @@ def resolve_output_root(runtime: str) -> Path:
 
 
 def resolve_data_root(runtime: str) -> Path:
+    """Return the root directory where source PDF documents are stored.
+
+    Args:
+        runtime: Either ``"docker"`` or ``"host"``.
+
+    Returns:
+        Absolute path to the data root for the given runtime.
+
+    Raises:
+        ValueError: If *runtime* is not a recognised value.
+    """
     if runtime == RUNTIME_DOCKER:
         return _DOCKER_DATA_ROOT
     if runtime == RUNTIME_HOST:
@@ -94,6 +129,15 @@ def resolve_model_root(runtime: str, parser_name: str) -> Path:
 
 
 def resolve_venv_python(parser_name: str) -> Path:
+    """Return the path to the Python interpreter inside a parser's venv.
+
+    Args:
+        parser_name: Parser identifier used as the venv directory name.
+
+    Returns:
+        Path to ``python.exe`` (Windows) or ``python`` (Unix) inside
+        ``.venvs/<parser_name>``.
+    """
     if sys.platform == "win32":
         return (
             _PROJECT_ROOT
@@ -113,6 +157,14 @@ def resolve_venv_python(parser_name: str) -> Path:
 
 
 def resolve_venv_bin_dir(parser_name: str) -> Path:
+    """Return the ``bin`` (or ``Scripts`` on Windows) directory of a venv.
+
+    Args:
+        parser_name: Parser identifier used as the venv directory name.
+
+    Returns:
+        Path to the venv's binary directory.
+    """
     if sys.platform == "win32":
         return _PROJECT_ROOT / ".venvs" / parser_name / "Scripts"
     return _PROJECT_ROOT / ".venvs" / parser_name / "bin"

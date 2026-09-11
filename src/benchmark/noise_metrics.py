@@ -1,3 +1,11 @@
+"""Text noise and quality heuristics for Markdown content.
+
+Computes character-level ratios (whitespace, non-alphanumeric, replacement
+characters, control characters), duplicate line statistics, short-line ratios,
+and—when per-page texts are provided—repeated cross-page margin line
+detection.  Results are stored in ``metrics.json`` under ``heuristics``.
+"""
+
 from __future__ import annotations
 
 import math
@@ -13,6 +21,14 @@ LINE_END_HYPHEN_RE = re.compile(
 def _normalize_line(
     line: str,
 ) -> str:
+    """Collapse internal whitespace and casefold a single line for comparison.
+
+    Args:
+        line: A single text line (may have leading/trailing whitespace).
+
+    Returns:
+        Lowercased string with all whitespace runs collapsed to a single space.
+    """
     return " ".join(
         line.strip().split()
     ).casefold()
@@ -21,6 +37,14 @@ def _normalize_line(
 def _contains_meaningful_text(
     text: str,
 ) -> bool:
+    """Return ``True`` if *text* contains at least one alphanumeric character.
+
+    Args:
+        text: Any string.
+
+    Returns:
+        ``True`` when the text has content beyond whitespace and punctuation.
+    """
     return any(
         character.isalnum()
         for character in text
@@ -35,6 +59,35 @@ def analyze_noise(
     minimum_repeated_page_fraction: float = 0.30,
     minimum_repeated_page_count: int = 3,
 ) -> dict[str, object]:
+    """Compute noise and quality heuristics for a Markdown text string.
+
+    When *page_texts* is supplied, cross-page repeated-line detection is also
+    performed: lines that appear on at least *minimum_repeated_page_count*
+    pages (or the fraction threshold, whichever is larger) are counted as
+    repeated margin text.
+
+    Args:
+        text: Full document text to analyse.
+        page_texts: Per-page text strings used for the repeated-line
+            analysis.  ``None`` disables that analysis.
+        short_line_threshold: A non-empty line shorter than this many
+            characters counts as a "short line".
+        minimum_repeated_page_fraction: Minimum fraction of pages a line
+            must appear on to qualify as a repeated margin line.
+        minimum_repeated_page_count: Absolute minimum page count for the
+            repeated-line threshold (takes precedence over the fraction when
+            it is larger).
+
+    Returns:
+        Dict with keys ``total_characters``, ``total_lines``,
+        ``non_empty_lines``, ``whitespace_ratio``,
+        ``non_alphanumeric_ratio``, ``empty_lines``, ``empty_pages``,
+        ``replacement_character_ratio``, ``control_character_ratio``,
+        ``duplicate_line_ratio``, ``repeated_line_ratio``,
+        ``repeated_unique_lines``, ``short_line_ratio``,
+        ``short_line_character_threshold``, and
+        ``line_end_hyphenation_count``.
+    """
     total_characters = len(text)
 
     if total_characters == 0:

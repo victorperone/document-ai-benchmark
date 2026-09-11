@@ -59,6 +59,8 @@ def _build_minimal_metrics() -> dict:
 
 
 class TestMetricsSerialization(unittest.TestCase):
+    """Verifies that the Xberg metrics dict is always JSON-serializable and byte-free."""
+
     def test_metrics_json_serializable(self):
         metrics = _build_minimal_metrics()
         try:
@@ -109,6 +111,8 @@ class TestMetricsSerialization(unittest.TestCase):
 
 
 class TestEnumSerialization(unittest.TestCase):
+    """Verifies that enum values and recursive structures are handled by _to_json_safe."""
+
     def test_no_enum_objects_in_output(self):
         from enum import Enum
 
@@ -139,6 +143,8 @@ class TestEnumSerialization(unittest.TestCase):
 
 
 class TestNativeImageBundle(unittest.TestCase):
+    """Tests for persist_xberg_native_bundle — image indexing, hashing, and manifest output."""
+
     def test_official_image_bytes_are_indexed_and_hashed(self):
         image = MagicMock()
         image.data = [137, 80, 78, 71]

@@ -1,3 +1,10 @@
+"""Xberg benchmark adapter v2.
+
+Wraps the Xberg 1.0.14 async extraction API for the document AI benchmark.
+Translates benchmark profile dicts into Xberg ExtractionConfig TypedDict
+instances, runs extraction via asyncio.run, and collects per-page Markdown,
+QR code derived content, native image bundles, and benchmark artifact files.
+"""
 from __future__ import annotations
 
 import argparse
@@ -88,6 +95,14 @@ class XbergConfigurationError(ValueError):
 # ---------------------------------------------------------------------------
 
 def _package_version(name: str) -> str | None:
+    """Return the installed version of a package, or None if not found.
+
+    Args:
+        name: The importlib.metadata package name.
+
+    Returns:
+        Version string, or None if the package is not installed.
+    """
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -95,6 +110,11 @@ def _package_version(name: str) -> str | None:
 
 
 def _get_tesseract_version() -> str | None:
+    """Return the first line of ``tesseract --version`` output, or None on failure.
+
+    Returns:
+        Version string such as ``"tesseract 5.3.1"`` or None if unavailable.
+    """
     try:
         r = run_process_tree(
             ["tesseract", "--version"],
@@ -110,6 +130,11 @@ from src.benchmark.tessdata import _TESSDATA_CANDIDATES
 
 
 def _find_tessdata_prefix() -> str | None:
+    """Find the Tesseract tessdata directory from env or known candidate paths.
+
+    Returns:
+        Absolute path string to a valid tessdata directory, or None if not found.
+    """
     import os
     prefix = os.environ.get("TESSDATA_PREFIX")
     if prefix and Path(prefix).is_dir():
@@ -379,6 +404,21 @@ def _build_xberg_config(
 
 
 async def _extract(input_path: Path, cfg: Any) -> Any:
+    """Invoke xberg.extract asynchronously for a single PDF input.
+
+    Args:
+        input_path: Resolved path to the input PDF.
+        cfg: Xberg ExtractionConfig dict built by _build_xberg_config().
+
+    Returns:
+        Xberg ExtractionResult envelope.
+
+    Raises:
+        BenchmarkConfigurationError: If xberg.extract or xberg.ExtractInput are
+            not found in the installed package.
+        XbergConfigurationError: If ExtractInput construction fails due to API
+            changes.
+    """
     import xberg
 
     extract_fn = getattr(xberg, "extract", None)
@@ -460,6 +500,18 @@ def _unwrap_extraction_result(envelope: Any) -> tuple[Any, Any]:
 
 
 def _get_pages(document: Any) -> list[Any]:
+    """Return the list of page objects from an Xberg ExtractedDocument.
+
+    Args:
+        document: An unwrapped Xberg ExtractedDocument.
+
+    Returns:
+        List of page objects, or empty list if the document has no pages
+        attribute.
+
+    Raises:
+        XbergConfigurationError: If the pages attribute is not a sequence.
+    """
     pages = getattr(document, "pages", None)
 
     if pages is None:
@@ -483,6 +535,15 @@ def _page_text(page_obj: Any) -> str:
 
 
 def _page_number(page_obj: Any, fallback: int) -> int:
+    """Extract the page number from a page object, falling back to the provided default.
+
+    Args:
+        page_obj: An Xberg page result object.
+        fallback: Value to return when page_number is absent or not an int.
+
+    Returns:
+        Integer page number.
+    """
     value = getattr(page_obj, "page_number", None)
     if isinstance(value, int):
         return value
@@ -490,6 +551,16 @@ def _page_number(page_obj: Any, fallback: int) -> int:
 
 
 def _page_tables(page_obj: Any) -> list[Any]:
+    """Return the list of table objects from an Xberg page result.
+
+    Tries ``tables``, ``table_list``, then ``extracted_tables`` in order.
+
+    Args:
+        page_obj: An Xberg page result object.
+
+    Returns:
+        List of table objects, or empty list if none found.
+    """
     for attr in ("tables", "table_list", "extracted_tables"):
         val = getattr(page_obj, attr, None)
         if isinstance(val, list):
@@ -559,6 +630,15 @@ def _to_json_safe_complex(v: Any, depth: int, ancestors: set[int]) -> Any:
 
 
 def _table_to_native(table_obj: Any) -> dict[str, Any]:
+    """Serialise an Xberg table object to a JSON-safe dict for native retention.
+
+    Args:
+        table_obj: An Xberg table result object.
+
+    Returns:
+        Dict containing the table type and any available table attributes
+        (data, rows, cells, html, text, markdown, counts, confidence, bbox).
+    """
     record: dict[str, Any] = {
         "table_type": type(table_obj).__name__,
     }
@@ -586,6 +666,17 @@ def _page_native(page_obj: Any) -> dict[str, Any]:
 
 
 def _xberg_image_bytes(image: Any) -> bytes:
+    """Extract raw image bytes from an Xberg image object.
+
+    Tries the ``data`` attribute (bytes, bytearray, or int list), then
+    ``data_base64``. Returns empty bytes if neither is available.
+
+    Args:
+        image: An Xberg image object.
+
+    Returns:
+        Raw image bytes, or empty bytes if the image carries no data.
+    """
     data = getattr(image, "data", None)
     if isinstance(data, bytes):
         return data
@@ -859,6 +950,20 @@ def _count_elements_from_result(
     document: Any,
     page_texts: dict[int, str] | list[str],
 ) -> dict[str, Any]:
+    """Aggregate element-level counts from an Xberg ExtractedDocument.
+
+    Counts total tables across all pages and non-empty pages as a proxy for
+    text blocks. Other element categories are not tracked by the Xberg public
+    API at this time.
+
+    Args:
+        document: An unwrapped Xberg ExtractedDocument.
+        page_texts: Page texts as a dict or list (used to count non-empty pages).
+
+    Returns:
+        Dict of element counts suitable for the benchmark ``parser_output``
+        section; keys without data are set to None.
+    """
     pages = _get_pages(document)
     total_tables = sum(len(_page_tables(pg)) for pg in pages)
     if isinstance(page_texts, dict):
@@ -888,6 +993,19 @@ def _count_elements_from_result(
 # ---------------------------------------------------------------------------
 
 def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any]:
+    """Load and validate the pre-computed Source Inventory for an input PDF.
+
+    Args:
+        input_path: Path to the input PDF.
+        output_root: Root output directory containing ``_source_inventory/``.
+
+    Returns:
+        Source Inventory dict.
+
+    Raises:
+        BenchmarkConfigurationError: If the inventory is missing or its SHA-256
+            does not match the input file.
+    """
     import hashlib
     import json
 
@@ -908,6 +1026,14 @@ def _load_cached_inventory(input_path: Path, output_root: Path) -> dict[str, Any
 
 
 def _sha256_file(path: Path) -> str:
+    """Compute the SHA-256 hex digest of a file, reading in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex string of the SHA-256 digest.
+    """
     import hashlib
     digest = hashlib.sha256()
     with path.open("rb") as fh:
@@ -942,6 +1068,32 @@ def _build_metrics(
     native_bundle_manifest: dict[str, Any] | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
+    """Assemble the complete benchmark metrics dict for the Xberg adapter.
+
+    Args:
+        input_path: Resolved path to the input PDF.
+        profile: Active profile dict.
+        profile_name: Name of the active profile.
+        inventory: Source Inventory dict.
+        document: Unwrapped Xberg ExtractedDocument.
+        extraction_summary: Xberg ExtractionSummary object.
+        artifact_result: Result dict from finalize_artifacts().
+        element_counts: Aggregate element counts from _count_elements_from_result().
+        initialization_seconds: Time to import xberg and build config.
+        extraction_seconds: Time for asyncio.run(_extract()) to complete.
+        pipeline_seconds: Total wall-clock time including artifact writes.
+        resources: Resource metrics dict from ResourceMonitor.stop().
+        tokenizer_name: Name of the reference tokenizer.
+        artifact_selected_list: List of artifact names selected by policy.
+        run_log_path: Path to run.log if selected, else None.
+        metrics_json_path: Path to metrics.json if selected, else None.
+        qr_results: List of QR code result records, or None.
+        native_bundle_manifest: Native bundle manifest dict, or None.
+        verbose: Whether verbose mode was enabled.
+
+    Returns:
+        Complete metrics dict ready for JSON serialisation.
+    """
     source_summary = {k: v for k, v in inventory.items() if k != "per_page"}
     input_bytes = input_path.stat().st_size
     clean_bytes = artifact_result.get("output", {}).get("clean_markdown_bytes")
@@ -1075,6 +1227,20 @@ def preflight_profile(
     *,
     model_root_override: Path | None = None,
 ) -> dict[str, Any]:
+    """Run all preflight checks for an Xberg profile before a benchmark run.
+
+    Validates profile configuration, key contract, network isolation, Xberg
+    version, Python version, OCR prerequisites (Tesseract, tessdata, osd for
+    auto_rotate), Xberg package import, async extract function, required API
+    classes, and the config builder against the profile.
+
+    Args:
+        profile_name: Name of the profile to validate.
+        model_root_override: Override for the model artifacts directory.
+
+    Returns:
+        Preflight result dict as produced by make_result().
+    """
     checks: list[dict[str, Any]] = []
 
     # Profile exists
@@ -1203,6 +1369,12 @@ def preflight_profile(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for the Xberg v2 adapter.
+
+    Returns:
+        Parsed namespace with input, output_root, profile, model_root, and the
+        resolved ArtifactPolicy as ``artifact_policy``.
+    """
     parser = argparse.ArgumentParser(description="Xberg benchmark adapter v2.")
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output-root", type=Path, default=Path("/outputs"))
@@ -1225,6 +1397,17 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    """Run the Xberg v2 benchmark pipeline end-to-end.
+
+    Builds the Xberg ExtractionConfig, runs extraction via asyncio, collects
+    per-page results and optional QR code derived content, persists the native
+    image bundle, and writes all benchmark artifacts.
+
+    Raises:
+        SystemExit: If the input file does not exist.
+        XbergConfigurationError: For API contract violations in the Xberg result.
+        BenchmarkConfigurationError: For invalid Source Inventory.
+    """
     from src.benchmark.artifact_contract import ParserArtifactInput, join_page_texts
     from src.benchmark.artifacts import finalize_artifacts
     from src.benchmark.metrics_writer import write_json

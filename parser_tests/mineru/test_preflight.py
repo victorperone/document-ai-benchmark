@@ -89,6 +89,8 @@ class _PreflightHelper(unittest.TestCase):
 
 
 class TestPreflightCliCheck(_PreflightHelper):
+    """Tests for the mineru CLI binary check in preflight_profile."""
+
     def test_mineru_on_path_passes(self):
         result = self._run_preflight("auto")
         cli_check = self._find_check(result, "mineru CLI")
@@ -107,6 +109,8 @@ class TestPreflightCliCheck(_PreflightHelper):
 
 
 class TestPreflightModelSource(_PreflightHelper):
+    """Tests for the MINERU_MODEL_SOURCE environment-variable check in preflight_profile."""
+
     def test_model_source_local_passes(self):
         result = self._run_preflight("auto", model_source="local")
         check = self._find_check(result, "MINERU_MODEL_SOURCE")
@@ -123,6 +127,8 @@ class TestPreflightModelSource(_PreflightHelper):
 
 
 class TestPreflightConfigJson(_PreflightHelper):
+    """Tests for the MINERU_TOOLS_CONFIG_JSON and pipeline-directory checks in preflight_profile."""
+
     def test_config_absent_fails(self):
         result = self._run_preflight("auto", config_json_present=False)
         self.assertFalse(result["ok"])
@@ -139,6 +145,8 @@ class TestPreflightConfigJson(_PreflightHelper):
 
 
 class TestPreflightFullCpuLocal(_PreflightHelper):
+    """End-to-end preflight smoke for the full_cpu_local profile."""
+
     def test_full_cpu_local_passes(self):
         result = self._run_preflight("full_cpu_local")
         self.assertTrue(result["ok"], result)

@@ -1,3 +1,4 @@
+"""Compare PyMuPDF OCR quality and wall-clock runtime across multiple DPI profiles."""
 from __future__ import annotations
 
 import argparse
@@ -54,6 +55,7 @@ DEFAULT_PROFILES = (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the DPI OCR evaluation script."""
     parser = argparse.ArgumentParser(
         description=(
             "Compare PyMuPDF OCR quality and runtime "
@@ -100,6 +102,19 @@ def require(
     key: str,
     context: str,
 ) -> Any:
+    """Return ``mapping[key]``, raising ``RuntimeError`` with context if the key is absent.
+
+    Args:
+        mapping: Dict to look up.
+        key: Key to retrieve.
+        context: Dotted path used in the error message (e.g. ``"ground_truth.page"``).
+
+    Returns:
+        The value at ``mapping[key]``.
+
+    Raises:
+        RuntimeError: If ``key`` is not present in ``mapping``.
+    """
     if key not in mapping:
         raise RuntimeError(
             f"Required field "
@@ -114,6 +129,17 @@ def require(
 def load_json(
     path: Path,
 ) -> dict[str, Any]:
+    """Read and parse a JSON file, raising ``FileNotFoundError`` if absent.
+
+    Args:
+        path: Path to the JSON file.
+
+    Returns:
+        Parsed JSON object.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise FileNotFoundError(
             f"Required file not found: {path}"
@@ -129,6 +155,17 @@ def load_json(
 def load_jsonl(
     path: Path,
 ) -> list[dict[str, Any]]:
+    """Read and parse a JSONL file, returning one dict per non-empty line.
+
+    Args:
+        path: Path to the JSONL file.
+
+    Returns:
+        List of parsed JSON objects, one per non-empty line.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise FileNotFoundError(
             f"Required file not found: {path}"
@@ -147,6 +184,19 @@ def build_reference_pages(
     ground_truth: dict[str, Any],
     fixture_name: str,
 ) -> dict[int, str]:
+    """Extract per-page reference text from the ground-truth JSON for a given fixture.
+
+    Args:
+        ground_truth: Parsed ground-truth JSON object.
+        fixture_name: Key identifying the fixture (e.g. ``"scan_quality_3.pdf"``).
+
+    Returns:
+        Dict mapping 1-based page number to the joined expected text for that page.
+
+    Raises:
+        RuntimeError: If ``fixture_name`` is not present in the ground truth,
+            or if required fields are missing or malformed.
+    """
     fixtures = require(
         ground_truth,
         "fixtures",
@@ -215,6 +265,18 @@ def build_hypothesis_pages(
         dict[str, Any]
     ],
 ) -> dict[int, str]:
+    """Build a page-number-to-text mapping from ``document.jsonl`` records.
+
+    Args:
+        records: Parsed records from a ``document.jsonl`` file, each containing
+            ``page_number`` and ``raw_markdown`` fields.
+
+    Returns:
+        Dict mapping 1-based page number to raw Markdown text.
+
+    Raises:
+        RuntimeError: If a record is missing required fields or if a page number appears twice.
+    """
     result: dict[
         int,
         str
@@ -253,6 +315,14 @@ def build_hypothesis_pages(
 def combine_pages(
     pages: dict[int, str],
 ) -> str:
+    """Concatenate page texts in ascending page-number order, separated by newlines.
+
+    Args:
+        pages: Dict mapping page number to text.
+
+    Returns:
+        Single string with all pages joined by ``"\\n"``.
+    """
     return "\n".join(
         pages[
             page_number
@@ -267,6 +337,14 @@ def combine_pages(
 def percent(
     value: float | None,
 ) -> str:
+    """Format a ratio as a percentage string, or ``"N/A"`` when the value is ``None``.
+
+    Args:
+        value: Ratio in the range ``[0, 1]``, or ``None``.
+
+    Returns:
+        String like ``"12.34%"``, or ``"N/A"``.
+    """
     if value is None:
         return "N/A"
 
@@ -276,6 +354,7 @@ def percent(
 
 
 def main() -> None:
+    """Evaluate OCR quality at each DPI profile and print a comparison table."""
     args = parse_args()
 
     ground_truth = load_json(

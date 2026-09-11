@@ -19,6 +19,8 @@ _ALL_PROFILES = [
 
 
 class TestProfilesExist(unittest.TestCase):
+    """Verifies that all PaddleOCR profiles are loadable and pass schema validation."""
+
     def test_all_profiles_loadable(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):
@@ -62,6 +64,8 @@ class TestProfilesExist(unittest.TestCase):
 
 
 class TestFullCpuLocalProfile(unittest.TestCase):
+    """Spot-checks enabled features and key types for the full_cpu_local PaddleOCR profile."""
+
     def _p(self):
         return get_profile(PARSER_NAME, "full_cpu_local")
 
@@ -102,6 +106,8 @@ class TestFullCpuLocalProfile(unittest.TestCase):
 
 
 class TestOcrEnabledInvariant(unittest.TestCase):
+    """Verifies that ocr_enabled is True for every PaddleOCR profile (PPStructureV3 requires it)."""
+
     def test_all_profiles_have_ocr_enabled_true(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):

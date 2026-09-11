@@ -1,3 +1,4 @@
+"""Validate repeated header/footer cleanup against ground-truth data from an OCR regression fixture."""
 from __future__ import annotations
 
 import argparse
@@ -17,6 +18,7 @@ PROJECT_ROOT = (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the header/footer regression validator."""
     parser = argparse.ArgumentParser(
         description=(
             "Validate repeated header/footer cleanup "
@@ -51,6 +53,17 @@ def parse_args() -> argparse.Namespace:
 def load_json(
     path: Path,
 ) -> dict[str, Any]:
+    """Read and parse a JSON file, raising ``RuntimeError`` when the file is missing.
+
+    Args:
+        path: Path to the JSON file.
+
+    Returns:
+        Parsed JSON object as a dict.
+
+    Raises:
+        RuntimeError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise RuntimeError(
             f"Required file not found: {path}"
@@ -66,6 +79,17 @@ def load_json(
 def load_jsonl(
     path: Path,
 ) -> list[dict[str, Any]]:
+    """Read and parse a JSONL file, raising ``RuntimeError`` when the file is missing.
+
+    Args:
+        path: Path to the JSONL file.
+
+    Returns:
+        List of parsed JSON objects, one per non-empty line.
+
+    Raises:
+        RuntimeError: If ``path`` does not exist.
+    """
     if not path.is_file():
         raise RuntimeError(
             f"Required file not found: {path}"
@@ -85,6 +109,19 @@ def require(
     key: str,
     context: str,
 ) -> Any:
+    """Return ``mapping[key]``, raising ``RuntimeError`` with context when the key is absent.
+
+    Args:
+        mapping: Dict to look up.
+        key: Required key name.
+        context: Human-readable path prefix used in the error message (e.g. ``"ground_truth.page"``).
+
+    Returns:
+        The value at ``mapping[key]``.
+
+    Raises:
+        RuntimeError: If ``key`` is not present in ``mapping``.
+    """
     if key not in mapping:
         raise RuntimeError(
             f"Missing {context}.{key}. "
@@ -98,6 +135,17 @@ def require(
 def normalize_line(
     text: str,
 ) -> str:
+    """Normalise a text line for fuzzy comparison: NFKC + casefolding + whitespace collapse.
+
+    Markdown decoration characters (``*``, ``_``, ``#``, etc.) are replaced
+    with spaces before collapsing runs of whitespace.
+
+    Args:
+        text: Raw text line to normalise.
+
+    Returns:
+        Normalised, stripped string.
+    """
     value = unicodedata.normalize(
         "NFKC",
         text,
@@ -124,6 +172,15 @@ def levenshtein(
     left: str,
     right: str,
 ) -> int:
+    """Compute the Levenshtein (edit) distance between two strings.
+
+    Args:
+        left: First string.
+        right: Second string.
+
+    Returns:
+        Minimum number of single-character edits required to transform ``left`` into ``right``.
+    """
     if len(left) < len(right):
         left, right = (
             right,
@@ -177,6 +234,19 @@ def similarity(
     left: str,
     right: str,
 ) -> float:
+    """Return the normalised similarity score (0.0–1.0) between two text lines.
+
+    Both strings are normalised via ``normalize_line`` before comparison.
+    The score is ``1 - levenshtein(left, right) / max(len(left), len(right))``.
+    Returns ``1.0`` when both strings are empty.
+
+    Args:
+        left: First text line.
+        right: Second text line.
+
+    Returns:
+        Float in ``[0.0, 1.0]`` where ``1.0`` means identical.
+    """
     left = normalize_line(
         left
     )
@@ -206,6 +276,7 @@ def similarity(
 def nonempty_lines(
     text: str,
 ) -> list[str]:
+    """Return a list of stripped, non-empty lines from ``text``."""
     return [
         line.strip()
         for line in text.splitlines()
@@ -223,6 +294,21 @@ def best_edge_match(
     float,
     str | None,
 ]:
+    """Return the best similarity score and candidate line from the header or footer edge of ``text``.
+
+    Scans the first or last ``candidate_lines`` non-empty lines of ``text`` and
+    picks the one most similar to ``expected``.
+
+    Args:
+        text: Full page text to search within.
+        expected: Target header or footer string to match against.
+        from_start: ``True`` to scan from the top (header), ``False`` for the bottom (footer).
+        candidate_lines: Number of edge lines to consider.
+
+    Returns:
+        Tuple of ``(best_score, best_line)`` where ``best_line`` is ``None``
+        when ``text`` contains no non-empty lines.
+    """
     lines = nonempty_lines(
         text
     )
@@ -261,6 +347,7 @@ def best_edge_match(
 
 
 def main() -> None:
+    """Entry point: compare parser output against ground-truth headers/footers and report results."""
     args = parse_args()
 
     ground_truth = load_json(

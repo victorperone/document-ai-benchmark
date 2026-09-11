@@ -11,6 +11,7 @@ _ALL_PROFILES = ("native", "ocr_auto_tesseract", "ocr_auto_visual")
 
 
 class LiteParseProfileContractTests(unittest.TestCase):
+    """Tests for LiteParse profile key/value contracts across all defined profiles."""
 
     # ── native ────────────────────────────────────────────────────────────
 

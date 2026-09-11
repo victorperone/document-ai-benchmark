@@ -32,6 +32,8 @@ _VALID_TABLE_ENGINES = frozenset({"tableformer_v1", "tableformer_v2"})
 
 
 class TestHeadingHierarchyKeys(unittest.TestCase):
+    """Verifies that all Docling profiles expose the required heading-hierarchy configuration keys."""
+
     def test_all_profiles_have_heading_keys(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):
@@ -62,6 +64,8 @@ class TestHeadingHierarchyKeys(unittest.TestCase):
 
 
 class TestTableEngineKeys(unittest.TestCase):
+    """Verifies that all Docling profiles specify a valid TableFormer engine version."""
+
     def test_all_profiles_have_table_engine(self):
         for name in _ALL_PROFILES:
             with self.subTest(profile=name):

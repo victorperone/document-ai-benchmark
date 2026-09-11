@@ -1,3 +1,10 @@
+"""Token-count metrics for the three canonical Markdown representations.
+
+Uses tiktoken to count tokens in the raw, source-page, normalised, and
+optionally enriched text.  Results are stored in ``metrics.json`` under
+``tokens.reference``.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -6,10 +13,22 @@ import tiktoken
 
 
 class TokenCounter:
+    """Thin wrapper around a tiktoken encoder for repeated token counting.
+
+    Attributes:
+        encoding_name: The tiktoken encoding name passed at construction.
+        encoding: The underlying ``tiktoken.Encoding`` instance.
+    """
+
     def __init__(
         self,
         encoding_name: str,
     ) -> None:
+        """Initialise the counter with a named tiktoken encoding.
+
+        Args:
+            encoding_name: tiktoken encoding name, e.g. ``"cl100k_base"``.
+        """
         self.encoding_name = encoding_name
 
         self.encoding = (
@@ -22,6 +41,17 @@ class TokenCounter:
         self,
         text: str,
     ) -> int:
+        """Return the number of tokens in *text*.
+
+        All special tokens are treated as ordinary text to avoid encoding
+        errors on arbitrary document content.
+
+        Args:
+            text: Text to tokenise.
+
+        Returns:
+            Token count as an integer.
+        """
         return len(
             self.encoding.encode(
                 text,

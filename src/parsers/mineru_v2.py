@@ -1,3 +1,17 @@
+"""MinerU v2 benchmark adapter.
+
+Wraps the ``mineru`` CLI as a subprocess to produce benchmark outputs
+compatible with the document-AI benchmark framework. Outputs the MinerU
+native Markdown, structured content list, and full benchmark metrics.
+
+Execution flow:
+1. Load profile and Source Inventory
+2. Run ``mineru -p <pdf> -o <tmpdir>`` via ``run_mineru_native``
+3. Parse the content list into per-page texts and element summaries
+4. Write benchmark artifacts and ``metrics.json``
+
+Entry point: ``main()``
+"""
 from __future__ import annotations
 
 import argparse
@@ -41,6 +55,14 @@ PARSER_DISPLAY_NAME = "MinerU"
 def _calculate_sha256(
     path: Path,
 ) -> str:
+    """Compute the SHA-256 hex digest of a file using 1 MiB streaming chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -59,6 +81,25 @@ def _load_cached_inventory(
     input_path: Path,
     output_root: Path,
 ) -> dict[str, Any]:
+    """Load the pre-computed Source Inventory for the given input PDF.
+
+    Reads the JSON inventory from
+    ``<output_root>/_source_inventory/<stem>.json`` and verifies that the
+    stored filename and SHA-256 digest match the current input file.
+
+    Args:
+        input_path: Absolute path to the PDF input file.
+        output_root: Root output directory for this benchmark run.
+
+    Returns:
+        Parsed inventory dict (keys include ``"sha256"``, ``"pages"``, etc.).
+
+    Raises:
+        FileNotFoundError: If the inventory JSON file does not exist.
+        TypeError: If the inventory is not a JSON object.
+        ValueError: If the filename or SHA-256 in the inventory does not
+            match the current input file.
+    """
     inventory_path = (
         output_root
         / "_source_inventory"
@@ -116,6 +157,14 @@ def _load_cached_inventory(
 def _package_version(
     package_name: str,
 ) -> str | None:
+    """Return the installed version string for a package, or None if not found.
+
+    Args:
+        package_name: PyPI distribution name to look up.
+
+    Returns:
+        Version string, or None when the package is not installed.
+    """
     try:
         return metadata.version(
             package_name
@@ -125,6 +174,16 @@ def _package_version(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse and validate command-line arguments for the MinerU v2 adapter.
+
+    Returns:
+        Parsed argument namespace. The ``artifact_policy`` attribute is
+        populated from ``--artifacts`` via ``ArtifactPolicy.from_cli``.
+
+    Raises:
+        SystemExit: If required arguments are missing or the artifact
+            selection string is invalid.
+    """
     parser = argparse.ArgumentParser(
         description="MinerU benchmark adapter v2.",
     )
@@ -186,9 +245,24 @@ _MINERU_VALID_METHODS: frozenset[str] = frozenset(
 def preflight_profile(
     profile_name: str,
 ) -> dict[str, Any]:
+    """Run preflight checks for a MinerU profile and return a structured result.
+
+    Validates profile configuration, MinerU method coherence with OCR flags,
+    MinerU CLI availability, installed package versions, and required
+    environment variables (``MINERU_MODEL_SOURCE``,
+    ``MINERU_TOOLS_CONFIG_JSON``, ``HF_HOME``).
+
+    Args:
+        profile_name: Name of the MinerU profile to validate.
+
+    Returns:
+        A structured preflight result dict (see ``make_result``) with a list
+        of per-check pass/fail/warn entries.
+    """
     checks: list[dict[str, Any]] = []
 
     def _pkg(name: str) -> str | None:
+        """Return installed package version or None."""
         try:
             return metadata.version(name)
         except metadata.PackageNotFoundError:
@@ -382,6 +456,12 @@ def preflight_profile(
 
 
 def main() -> None:
+    """Entry point for the MinerU v2 benchmark adapter.
+
+    Parses arguments, loads the profile and Source Inventory, runs MinerU
+    via ``run_mineru_native``, builds the output contract from the content
+    list, and writes benchmark artifacts and metrics to the output directory.
+    """
     args = parse_args()
 
     input_path = args.input.resolve()
@@ -1168,6 +1248,18 @@ def main() -> None:
 
 
 def _text_list(value: Any) -> list[str]:
+    """Convert a MinerU multi-text field value to a list of non-empty stripped strings.
+
+    MinerU caption and footnote fields may be lists of strings or None.
+    This helper normalises them to a clean list.
+
+    Args:
+        value: Raw value from a MinerU content item field.
+
+    Returns:
+        List of non-empty stripped strings, or an empty list if ``value`` is
+        not a list or contains only blank items.
+    """
     if not isinstance(value, list):
         return []
 
@@ -1181,6 +1273,20 @@ def _text_list(value: Any) -> list[str]:
 def render_mineru_item(
     item: dict[str, Any],
 ) -> str:
+    """Render a single MinerU content list item to a Markdown string.
+
+    Handles types ``"text"``, ``"header"``, ``"footer"``, ``"page_number"``,
+    ``"equation"``, ``"image"``, ``"code"``, and ``"table"``. Unknown types
+    are handled by a safe fallback that returns the ``"text"`` field if it
+    exists, or an empty string.
+
+    Args:
+        item: A single dict from MinerU's ``content_list``.
+
+    Returns:
+        Rendered Markdown string, possibly empty for items with no textual
+        content (e.g. images without captions).
+    """
     item_type = str(
         item.get("type", "unknown")
     )
@@ -1277,6 +1383,26 @@ def build_mineru_page_contract(
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
+    """Build per-page text, element summaries, and native page dicts from MinerU output.
+
+    Groups content list items by their 0-based ``page_idx``, renders each
+    item to Markdown via ``render_mineru_item``, and assembles the benchmark
+    output contract.
+
+    Args:
+        content_list: List of content item dicts from
+            ``<document>_content_list.json``.
+        page_count: Total number of pages (from ``get_mineru_page_count``).
+
+    Returns:
+        A ``(page_texts, parser_page_elements, parser_native_pages)`` tuple,
+        each with one entry per page in 0-based index order.
+
+    Raises:
+        ValueError: If ``page_count < 1``, or if any item's ``page_idx`` is
+            missing or out of range.
+        TypeError: If any item is not a dict or ``page_idx`` is not an int.
+    """
     if page_count < 1:
         raise ValueError(
             "MinerU page_count must be >= 1."
@@ -1380,6 +1506,19 @@ def find_mineru_output(
     root: Path,
     exact_name: str,
 ) -> Path:
+    """Locate a MinerU output file by exact name under a directory tree.
+
+    Args:
+        root: Root directory to search recursively.
+        exact_name: Exact filename to find (e.g. ``"document.md"``).
+
+    Returns:
+        Absolute path to the matching file.
+
+    Raises:
+        FileNotFoundError: If no file with that name is found under ``root``.
+        RuntimeError: If more than one file with that name is found.
+    """
     matches = list(
         root.rglob(exact_name)
     )
@@ -1403,6 +1542,23 @@ def get_mineru_page_count(
     middle: dict[str, Any],
     content_list: list[dict[str, Any]],
 ) -> int:
+    """Determine the page count from MinerU's intermediate JSON or content list.
+
+    Prefers ``middle["pdf_info"]`` (a list with one entry per page). Falls
+    back to inferring the count from the maximum ``page_idx`` in the content
+    list when ``pdf_info`` is absent or empty.
+
+    Args:
+        middle: Parsed ``<document>_middle.json`` dict.
+        content_list: Parsed ``<document>_content_list.json`` list.
+
+    Returns:
+        Total number of pages as an integer >= 1.
+
+    Raises:
+        ValueError: If neither ``pdf_info`` nor ``page_idx`` values provide
+            a usable page count.
+    """
     pdf_info = middle.get("pdf_info")
 
     if isinstance(pdf_info, list) and pdf_info:
@@ -1508,6 +1664,41 @@ def run_mineru_native(
     profile_name: str = "",
     timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
+    """Run the MinerU CLI on a PDF and return the parsed native outputs.
+
+    Executes ``mineru -p <pdf> -o <tmpdir>`` as a subprocess inside a
+    temporary directory. Parses the resulting Markdown, content list JSON,
+    and middle JSON. Optionally copies the bundle to ``native_bundle_destination``
+    and rewrites local image links via ``prefix_local_markdown_links``.
+
+    Args:
+        input_path: Absolute path to the input PDF.
+        method: MinerU extraction method: ``"txt"``, ``"auto"``, or ``"ocr"``.
+        backend: MinerU backend name (default ``"pipeline"``).
+        formula_enabled: Whether to enable formula extraction.
+        table_enabled: Whether to enable table extraction.
+        table_merge_enabled: Whether to enable table merging.
+        threads: Optional thread count injected via ``MINERU_INTRA_OP_NUM_THREADS``,
+            ``OMP_NUM_THREADS``, and ``MKL_NUM_THREADS`` environment variables.
+        verbose: If True, print the MinerU subprocess output to stdout.
+        native_bundle_destination: If provided, copy the native bundle to this
+            directory and rewrite relative image links.
+        parser_name: Parser name string written into the bundle manifest.
+        profile_name: Profile name string written into the bundle manifest.
+        timeout_seconds: Optional subprocess timeout in seconds.
+
+    Returns:
+        A dict with keys: ``"command"``, ``"returncode"``,
+        ``"native_markdown"``, ``"content_list"``, ``"middle"``,
+        ``"log_text"``, ``"native_bundle_manifest"``,
+        ``"raw_origin_kind"``, ``"raw_origin_details"``.
+
+    Raises:
+        ValueError: If ``method`` is not one of the supported values.
+        RuntimeError: If MinerU exits with a non-zero return code, exceeds
+            the timeout, or produces a non-UTF-8 Markdown file.
+        TypeError: If the parsed content list or middle JSON has the wrong type.
+    """
     if method not in {
         "txt",
         "auto",

@@ -1,3 +1,10 @@
+"""Structural Markdown content metrics.
+
+Counts headings, list items, tables, code blocks, and image references in a
+Markdown string using lightweight regex heuristics.  Results are stored in
+``metrics.json`` under ``content_elements``.
+"""
+
 from __future__ import annotations
 
 import re
@@ -42,6 +49,20 @@ HTML_IMAGE_PLACEHOLDER_RE = re.compile(
 def analyze_markdown_content(
     markdown: str,
 ) -> dict[str, int]:
+    """Count structural Markdown elements in *markdown*.
+
+    Each counter uses a simple line-level regex and does not implement a full
+    Markdown parser, so counts are heuristic.  Fenced code blocks are counted
+    in pairs (open + close markers ÷ 2).
+
+    Args:
+        markdown: Markdown text to analyse.
+
+    Returns:
+        Dict with integer keys ``tables``, ``image_references``,
+        ``image_placeholders``, ``headings``, ``list_items``, and
+        ``code_blocks``.
+    """
     lines = markdown.splitlines()
 
     headings = 0

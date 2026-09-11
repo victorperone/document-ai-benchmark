@@ -1,3 +1,4 @@
+"""Build per-profile benchmark summary CSV and Markdown for the PyMuPDF4LLM parser."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +21,7 @@ PARSER_NAME = "pymupdf"
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the PyMuPDF4LLM summary builder."""
     p = argparse.ArgumentParser(
         description="Build PyMuPDF4LLM per-profile benchmark summary."
     )
@@ -54,6 +56,18 @@ def load_results(
     output_root: Path,
     profile: str,
 ) -> list[dict]:
+    """Load per-document PyMuPDF4LLM metrics and return a flat list of result dicts.
+
+    Args:
+        output_root: Root directory that contains parser output trees.
+        profile: Parser profile name (e.g. ``"native"``).
+
+    Returns:
+        List of dicts, one per document, sorted by page count then filename.
+
+    Raises:
+        SummaryInputError: If the metrics directory cannot be read.
+    """
     raw = load_metrics_by_document(
         output_root,
         PARSER_NAME,
@@ -116,6 +130,12 @@ def write_csv(
     results: list[dict],
     csv_path: Path,
 ) -> None:
+    """Write results to a CSV file using all keys from the first result dict as headers.
+
+    Args:
+        results: Non-empty list of result dicts (all must share the same keys).
+        csv_path: Destination CSV file path.
+    """
     with csv_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
@@ -130,6 +150,13 @@ def write_markdown(
     profile: str,
     markdown_path: Path,
 ) -> None:
+    """Write results as a Markdown table to ``markdown_path``.
+
+    Args:
+        results: Non-empty list of result dicts.
+        profile: Profile name displayed in the summary header.
+        markdown_path: Destination ``.md`` file path.
+    """
     lines = [
         "# PyMuPDF4LLM Benchmark Summary",
         "",
@@ -163,6 +190,7 @@ def write_markdown(
 
 
 def main() -> None:
+    """Load PyMuPDF4LLM metrics, then write summary CSV and Markdown to the metrics root."""
     args = parse_args()
 
     try:

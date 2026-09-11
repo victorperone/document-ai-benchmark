@@ -1,3 +1,4 @@
+"""Generate deterministic, image-only OCR regression fixtures as synthetic PDFs."""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +27,7 @@ FOOTER = (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the OCR regression fixture generator."""
     parser = argparse.ArgumentParser(
         description=(
             "Generate deterministic semantic OCR regression "
@@ -60,6 +62,14 @@ def parse_args() -> argparse.Namespace:
 def sha256_file(
     path: Path,
 ) -> str:
+    """Return the SHA-256 hex digest of a file, reading it in 1 MB chunks.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex-encoded SHA-256 digest string.
+    """
     digest = hashlib.sha256()
 
     with path.open(
@@ -84,6 +94,14 @@ def page_size(
     *,
     landscape: bool,
 ) -> tuple[float, float]:
+    """Return the A4 page dimensions in points, swapping width and height for landscape.
+
+    Args:
+        landscape: When ``True``, return landscape (wider than tall) dimensions.
+
+    Returns:
+        ``(width, height)`` in PDF points.
+    """
     a4 = pymupdf.paper_rect(
         "a4"
     )
@@ -103,6 +121,17 @@ def page_size(
 def common_body_lines(
     page_number: int,
 ) -> list[str]:
+    """Return the standard body-text lines for a synthetic OCR fixture page.
+
+    Lines contain Portuguese accented characters, unique numeric identifiers,
+    and financial values that exercise OCR accuracy under each profile.
+
+    Args:
+        page_number: 1-based page number used to vary numeric values per page.
+
+    Returns:
+        List of body-text strings.
+    """
     return [
         (
             "Este documento sintético valida extração OCR "
@@ -165,6 +194,28 @@ def draw_standard_page(
     pymupdf.Page,
     dict[str, Any],
 ]:
+    """Draw a synthetic source page with header, body text, a small table, and footer.
+
+    The page is added to ``document`` and native text is verified before rasterization.
+
+    Args:
+        document: Open ``pymupdf.Document`` to which the new page is appended.
+        page_number: 1-based page number rendered in the title and footer.
+        total_pages: Total page count shown in the title (e.g. ``"3/8"``).
+        landscape: When ``True``, the page uses landscape A4 dimensions.
+        quality_page: When ``True``, appends extra small-text lines to the body.
+        compact_orientation: When ``True``, uses a shorter body suitable for
+            single-page orientation fixtures.
+
+    Returns:
+        Tuple of ``(page, truth_dict)`` where ``truth_dict`` contains the expected
+        ``page_number``, ``expected_lines``, ``expected_header``, ``expected_footer``,
+        and ``expected_page_number`` fields for ground-truth comparison.
+
+    Raises:
+        RuntimeError: If the body text does not fit on the page, or if required
+            source-text terms are missing from the native PDF layer.
+    """
     width, height = page_size(
         landscape=landscape
     )
@@ -535,6 +586,22 @@ def rasterize_document(
     pixel_rotation: int = 0,
     page_rotation_metadata: int = 0,
 ) -> None:
+    """Rasterize every page in ``source`` and save an image-only PDF to ``destination``.
+
+    Each page is rendered to a grayscale pixmap at ``source_dpi``, inserted as
+    the sole image on a new PDF page whose physical size matches the render
+    resolution.  An optional pixel rotation is applied during rendering, and an
+    optional PDF page-rotation metadata field can be set independently.
+
+    Args:
+        source: Source ``pymupdf.Document`` with native text content.
+        destination: Output path for the image-only PDF.
+        source_dpi: Raster resolution in DPI (e.g. ``300``).
+        pixel_rotation: Clockwise rotation in degrees applied to the pixmap
+            before insertion (``0``, ``90``, ``180``, or ``270``).
+        page_rotation_metadata: Value written to the PDF ``/Rotate`` key
+            (``0``, ``90``, ``180``, or ``270``).
+    """
     if destination.exists():
         destination.unlink()
 
@@ -657,6 +724,18 @@ def create_multi_page_fixture(
     quality: bool = False,
     landscape: bool = False,
 ) -> list[dict[str, Any]]:
+    """Create a multi-page image-only fixture PDF and return its ground-truth records.
+
+    Args:
+        destination: Output path for the rasterized PDF.
+        pages: Number of pages to generate.
+        source_dpi: Render resolution in DPI.
+        quality: When ``True``, enables extra small-text lines on each page.
+        landscape: When ``True``, each source page uses landscape A4 dimensions.
+
+    Returns:
+        List of truth dicts, one per page, each produced by ``draw_standard_page``.
+    """
     source = pymupdf.open()
 
     truth: list[
@@ -704,6 +783,23 @@ def create_orientation_fixture(
     page_rotation_metadata: int = 0,
     landscape: bool = False,
 ) -> list[dict[str, Any]]:
+    """Create a single-page orientation-variant fixture and return its ground-truth record.
+
+    Generates one compact page, rasterizes it with an optional pixel rotation
+    and optional PDF rotation metadata, and augments the truth dict with the
+    rotation parameters used.
+
+    Args:
+        destination: Output path for the rasterized PDF.
+        source_dpi: Render resolution in DPI.
+        pixel_rotation: Clockwise rotation applied to the rendered pixels
+            (``0``, ``90``, ``180``, or ``270``).
+        page_rotation_metadata: Value written to the PDF ``/Rotate`` key.
+        landscape: When ``True``, the source page uses landscape A4 dimensions.
+
+    Returns:
+        Single-element list containing the truth dict for the generated page.
+    """
     source = pymupdf.open()
 
     try:
@@ -755,6 +851,23 @@ def validate_image_only_pdf(
     *,
     expected_pages: int,
 ) -> dict[str, Any]:
+    """Verify that a PDF is a valid image-only fixture and return structural metadata.
+
+    Checks that the page count matches, that no page contains native text,
+    and that every page has at least one embedded image.
+
+    Args:
+        path: Path to the PDF to validate.
+        expected_pages: Expected number of pages.
+
+    Returns:
+        Dict with keys ``pages``, ``pages_with_native_text``, ``pages_with_images``,
+        ``image_occurrences``, ``page_rotations``, and ``page_sizes``.
+
+    Raises:
+        RuntimeError: If the page count, native-text presence, or image coverage
+            does not meet expectations.
+    """
     document = pymupdf.open(
         path
     )
@@ -852,6 +965,7 @@ def validate_image_only_pdf(
 
 
 def main() -> None:
+    """Generate all OCR regression fixture PDFs and write a ground-truth JSON manifest."""
     args = parse_args()
 
     if args.source_dpi <= 0:

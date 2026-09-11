@@ -1,3 +1,11 @@
+"""Preflight check utilities for parser adapter self-tests.
+
+Provides helpers for constructing and validating the standardised preflight
+result dicts that parser adapters return before a benchmark run.  A preflight
+result is a dict with ``schema_version``, ``parser``, ``profile``, ``ok``, and
+a list of ``checks``.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,6 +25,20 @@ def make_check(
     status: str,
     detail: str | None = None,
 ) -> dict[str, Any]:
+    """Build a single preflight check record.
+
+    Args:
+        name: Short identifier for the check.
+        status: Must be one of ``"pass"``, ``"warn"``, or ``"fail"``.
+        detail: Optional human-readable explanation included when not
+            ``None``.
+
+    Returns:
+        Dict with ``name`` and ``status``, plus ``detail`` when provided.
+
+    Raises:
+        ValueError: If *status* is not a valid value.
+    """
     if status not in VALID_STATUSES:
         raise ValueError(
             f"Invalid preflight status: {status!r}. "
@@ -39,6 +61,17 @@ def make_result(
     profile: str,
     checks: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Build a preflight result dict from a list of check records.
+
+    Args:
+        parser: Parser identifier.
+        profile: Profile identifier.
+        checks: List of check dicts produced by ``make_check``.
+
+    Returns:
+        Dict with ``schema_version`` (1), ``parser``, ``profile``, ``ok``
+        (``True`` when no check has status ``"fail"``), and ``checks``.
+    """
     ok = not any(
         c["status"] == "fail"
         for c in checks
@@ -54,6 +87,20 @@ def make_result(
 
 
 def validate_result(result: Any) -> None:
+    """Assert that *result* is a structurally valid preflight result dict.
+
+    Validates the presence of required fields, correct types, schema version,
+    individual check structure, and that ``ok`` is consistent with the checks.
+
+    Args:
+        result: Object to validate (expected to be a ``dict``).
+
+    Raises:
+        TypeError: If *result* or any of its fields have an unexpected type.
+        ValueError: If any required field is missing, the schema version is
+            not 1, a check has an invalid status, or ``ok`` is inconsistent
+            with the check list.
+    """
     if not isinstance(result, dict):
         raise TypeError(
             "Preflight result must be a dict."
